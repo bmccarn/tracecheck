@@ -15,7 +15,7 @@ test('MCP v2 stdio handshake, schemas, preview and stale-snapshot rejection', as
   t.after(() => client.close());
   await client.connect(transport);
   const { tools } = await client.listTools();
-  assert.deepEqual(tools.map(tool => tool.name).sort(), ['tracecheck_assess', 'tracecheck_preview', 'tracecheck_review']);
+  assert.deepEqual(tools.map(tool => tool.name).sort(), ['tracecheck_assess', 'tracecheck_preview', 'tracecheck_review', 'tracecheck_verify']);
   assert.ok(tools.every(tool => tool.outputSchema));
   const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
   assert.ok(!preview.isError);

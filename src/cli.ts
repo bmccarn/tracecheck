@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { verify } from './verify.js';
 import { parseArgs } from 'node:util';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
@@ -22,6 +23,7 @@ async function main() {
 
   tracecheck preview --repo PATH [--base HEAD] [--include-untracked] [--json]
   tracecheck review  --repo PATH [--base HEAD] [--json] [--out report.json]
+  tracecheck verify  --input evidence.json [--repo PATH] [--out result.json]
   tracecheck assess  --input context.json [--previous evaluation.json] [--out evaluation.json]
   tracecheck compare --previous old.json --current current.json
   tracecheck mcp     --repo PATH
@@ -44,6 +46,21 @@ Use --task and --context to supply requirements and repository facts.`);
     const previous = reportSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
     const current = reportSchema.parse(JSON.parse(await readFile(values.current, 'utf8')));
     console.log(JSON.stringify(compare(previous, current), null, 2));
+    return;
+  }
+  if (command === 'verify') {
+    if (!values.input) throw new Error('verify requires --input evidence.json');
+    const controller = new AbortController();
+    process.once('SIGINT', () => controller.abort());
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
+    const input = JSON.parse(await readFile(values.input, 'utf8'));
+    const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal }), signal);
+    if (values.out) {
+      await mkdir(dirname(resolve(values.out)), { recursive: true });
+      await writeFile(values.out, JSON.stringify(output, null, 2) + '\n', { mode: 0o600 });
+    }
+    console.log(JSON.stringify(output, null, 2));
+    process.exitCode = output.report.status === 'needs_attention' ? 1 : output.report.status === 'inconclusive' ? 3 : 0;
     return;
   }
   if (command === 'assess') {

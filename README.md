@@ -2,9 +2,9 @@
 
 # Tracecheck
 
-**Continuous code review for AI coding agents, powered by Jev.**
+**Independent evidence checks for coding agents, powered by Jev.**
 
-Review 19 quality dimensions, investigate findings at their source, and compare changes as you build.
+Your agent investigates the code. Tracecheck checks its hypotheses against the evidence.
 
 [![Powered by Jev](https://img.shields.io/badge/Powered_by-Jev-6D5EF5?style=for-the-badge)](https://typesafe.ai)
 [![MCP stdio](https://img.shields.io/badge/MCP-stdio-111827?style=for-the-badge)](#mcp-and-agent-setup)
@@ -14,7 +14,7 @@ Review 19 quality dimensions, investigate findings at their source, and compare 
 
 </div>
 
-Tracecheck gives your coding agent structured feedback at implementation checkpoints. It combines a broad assessment of software quality with focused findings tied to exact files, symbols, and lines. Your agent makes the changes; Tracecheck evaluates the supplied evidence and tracks what changed between reviews.
+Tracecheck helps your coding agent challenge suspected defects against source evidence. The agent discovers concerns, follows callers, checks contracts and counterevidence, and decides what to fix. Tracecheck validates references and asks Jev for typed support, impact, and missing-evidence judgments. Optional broad assessments cover 19 quality dimensions and local checkpoint comparisons.
 
 Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context to TypeSafe using your API key. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
 
@@ -25,11 +25,11 @@ Run it as a **local MCP server** or use the **CLI** directly. Live assessments s
 | Capability | What it provides |
 | --- | --- |
 | **19 independent quality dimensions** | Separate relevance and evidence sufficiency, 1–10 scores, confidence, selected concerns, and suggested next steps. No blended overall grade. |
-| **Findings tied to source** | Parser-derived locations and code excerpts, with separate support and impact judgments. |
+| **Agent-selected hypothesis verification** | Any language; exact source quotes, optional local-file validation, and independent support/impact judgments. |
 | **Repository context** | Git changes and baseline source, bounded JS/TS and Python import discovery, callers, and related tests. |
 | **Checkpoint comparisons** | Eligible quality deltas and finding history, without treating a missing finding as a verified fix. |
 | **Explicit uncertainty** | Missing context, uncertain judgments, and omitted files remain visible. |
-| **Agent and CLI workflows** | Three MCP tools, a continuous-review skill, readable terminal output, and JSON reports. |
+| **Agent and CLI workflows** | Four MCP tools, a continuous-review skill, readable terminal output, and JSON reports. |
 | **Bounded requests** | Context budgets, provider deadlines and retries, usage accounting, and a short-lived MCP review cache. |
 
 ## Why Jev
@@ -98,23 +98,22 @@ By default, collection compares **HEAD with the working tree**, including staged
 
 ```mermaid
 flowchart TD
-    A[Agent implements a change] --> B[Local Git collection and preview]
-    B --> C[Bounded source context and parser candidates]
-    D[Caller-supplied task, diff, and files] --> E[Jev quality assessment]
-    C --> E
-    C --> F[Jev source-finding assessment]
-    E --> G[Validated scores, concerns, uncertainty, and usage]
-    F --> G
-    G --> H[Local checkpoint comparison]
-    H --> I[Agent investigates, improves, and runs project checks]
-    I --> A
+    A[Agent inspects change and contracts] --> B[Agent records hypothesis and provisional verdict]
+    B --> C[Agent gathers supporting and contradicting evidence]
+    C --> D[Tracecheck validates references and freshness]
+    D --> E[Jev judges support, impact, and missing evidence]
+    E --> F[Agent investigates disagreement or uncertainty]
+    F --> C
+    F --> G[Agent decides, repairs, and runs project checks]
+    G --> H[Final findings and remaining uncertainty]
 ```
 
-1. **Collect or supply context.** Use the repository workflow or provide a focused task, diff, files, and relevant project facts directly.
-2. **Assess two complementary layers.** The broad layer considers all 19 dimensions. The source layer evaluates specific parser-derived hypotheses where supported.
-3. **Validate and qualify the result.** Responses are checked against their expected types. Scores and findings retain confidence, applicability, and coverage limitations.
-4. **Compare locally.** Previous assessments are used for comparison, not sent to Jev as evidence about the current implementation.
-5. **Act on supported concerns.** Investigate findings, make justified changes, run normal project checks, and review another checkpoint. Avoid changing code solely to raise a score.
+1. **Investigate as the agent.** Discover concrete concerns, record a provisional verdict, and gather relevant implementation, contracts, callers, tests, and counterevidence.
+2. **Verify a hypothesis.** Use `tracecheck_verify` with exact source excerpts and original line references. Optional local source validation rejects stale or fabricated excerpts. Jev returns an independent judgment, not a patch or proof.
+3. **Optionally assess broader quality.** The broad layer considers all 19 dimensions. The source layer evaluates specific parser-derived hypotheses where supported.
+4. **Validate and qualify the result.** Responses are checked against their expected types. Scores and findings retain confidence, applicability, and coverage limitations.
+5. **Compare locally.** Previous assessments are used for comparison, not sent to Jev as evidence about the current implementation.
+6. **Investigate disagreement and act.** Investigate findings, make justified changes, run normal project checks, and review another checkpoint. Avoid changing code solely to raise a score.
 
 For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. Repository reviews also recollect after inference and reject changes made during the request. CLI `review` collects its own current context and does not require a prior preview token.
 
@@ -152,6 +151,17 @@ Four additional dimensions depend on the problem's context:
 Insufficient evidence can leave a dimension unscored; uncertainty is not a failing grade. Each dimension has a selected concern, and up to five actionable concerns are prioritized. A high score does not hide an independently actionable concern. These broad signals are distinct from findings with exact source locations.
 
 ## Review workflows
+
+### Verify a specific concern
+
+The primary agent workflow is documented with a complete JSON example in [tool usage](skills/tracecheck/references/tool-usage.md#focused-hypothesis-verification-primary-path). Save the agent-selected hypothesis, contract, evidence, and target quote in `evidence.json`, then run:
+
+```sh
+node dist/plugin.mjs verify --input evidence.json --repo /path/to/project \
+  --out .tracecheck/verification.json
+```
+
+The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
 
 ### Compare implementation checkpoints
 
@@ -246,10 +256,11 @@ Select the Tracecheck marketplace in the Plugins directory and install Tracechec
 
 ## MCP and agent setup
 
-Tracecheck uses the **MCP v2 SDK over stdio** and exposes three tools:
+Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 
 | Tool | Input and behavior |
 | --- | --- |
+| `tracecheck_verify` | Verify an agent-selected hypothesis, contract, and source evidence; return uncertainty and a missing-evidence category. |
 | `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, and snapshot token. |
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. |
@@ -268,7 +279,7 @@ The package includes portable plugin manifests, Codex and Claude compatibility a
 
 A useful first instruction to your agent:
 
-> Use Tracecheck after each coherent implementation change. Supply the requirements and relevant contracts, investigate actionable concerns, run the project's checks, and compare the next checkpoint. Report uncertainty and missing coverage. Do not refactor solely to improve scores.
+> Use Tracecheck after meaningful implementation checkpoints. Investigate the code, identify concrete concerns, and collect supporting and contradicting evidence. Verify each material hypothesis, investigate disagreements, and run the project's checks. Report your final judgment and remaining uncertainty.
 
 MCP protocol and packaging have been validated; installation in every native client has not. The standalone bundle needs Node.js, but no separate runtime dependency installation.
 
@@ -359,7 +370,7 @@ Live commands require credentials and consume API usage. The [validation record]
 
 The unreleased evidence milestone adds a real-project benchmark, separate relevance/evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. These changes are in the source branch; npm v0.2.0 remains the previous release.
 
-The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. Next steps are automatic Python candidates, labeled retrieval evaluation, more independent bug/fix families, and threshold calibration on a fresh holdout.
+The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
 
 Later work includes broader source checks, incremental reassessment, isolated reproductions and fix verification, and CI/SARIF exports. These are planned capabilities, not current features.
 
@@ -376,7 +387,7 @@ Run `npm ci` and `npm run validate` before submitting implementation changes. A 
 | [`src/mcp.ts`](src/mcp.ts) and [`src/cli.ts`](src/cli.ts) | MCP tools and command-line entry points. |
 | [`test/`](test/) and [`examples/`](examples/) | Regression tests, demos, and live smoke checks. |
 
-Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Capability coverage](docs/parity.md)
+Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Agent evaluation](docs/agent-evaluation.md) · [Capability coverage](docs/parity.md)
 
 ## License
 

@@ -41,7 +41,7 @@ try {
   assert.match(help.stdout, /tracecheck assess/);
   await client.connect(new StdioClientTransport({ command: npm, args: [...args, 'mcp'], cwd: temporary, env, stderr: 'pipe' }));
   const listed = await client.listTools();
-  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), ['tracecheck_assess', 'tracecheck_preview', 'tracecheck_review']);
+  assert.deepEqual(listed.tools.map(tool => tool.name).sort(), ['tracecheck_assess', 'tracecheck_preview', 'tracecheck_review', 'tracecheck_verify']);
   const invalid = await client.callTool({ name: 'tracecheck_assess', arguments: {} });
   assert.equal(invalid.isError, true);
   await client.close();
@@ -65,7 +65,7 @@ try {
   });
   const marketplaceArchive = join(release, `tracecheck-marketplace-${pkg.version}.tgz`);
   await run('tar', ['-czf', marketplaceArchive, '-C', temporary, 'tracecheck-marketplace']);
-  console.log(`Package verified: ${archive}\nMarketplace bundle: ${marketplaceArchive}\n${files.size} files; ${(pack.size / 1024).toFixed(1)} KiB compressed.\nOffline npm exec: CLI and all three MCP tools passed. No Jev request made.`);
+  console.log(`Package verified: ${archive}\nMarketplace bundle: ${marketplaceArchive}\n${files.size} files; ${(pack.size / 1024).toFixed(1)} KiB compressed.\nOffline npm exec: CLI and all four MCP tools passed. No Jev request made.`);
 } finally {
   await client.close().catch(() => {});
   await rm(temporary, { recursive: true, force: true });

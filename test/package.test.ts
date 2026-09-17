@@ -14,8 +14,9 @@ test('standalone plugin serves MCP outside its checkout without node_modules', a
   t.after(() => client.close());
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [join(directory, 'plugin.mjs'), 'mcp'], cwd: directory, stderr: 'pipe' }));
   const { tools } = await client.listTools();
-  assert.equal(tools.length, 3);
+  assert.equal(tools.length, 4);
   assert.ok(tools.find(tool => tool.name === 'tracecheck_assess')!.outputSchema);
+  assert.ok(tools.find(tool => tool.name === 'tracecheck_verify')!.outputSchema);
   const invalid = await client.callTool({ name: 'tracecheck_assess', arguments: {} });
   assert.equal(invalid.isError, true);
   const missingRepo = await client.callTool({ name: 'tracecheck_preview', arguments: {} });

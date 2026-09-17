@@ -52,8 +52,8 @@ Live output retains decisions, distributions, request hashes, resolved model, th
 
 ## Next accuracy gates
 
-1. Add automatic Python candidates and measure discovery separately from concern verification.
-2. Evaluate production retrieval against required contracts, callers, guards, and tests; count missing evidence explicitly.
+1. Measure agent-led discovery separately from Jev concern verification using the [paired evaluation protocol](agent-evaluation.md).
+2. Evaluate agent-selected evidence against required contracts, callers, guards, and tests; count missing evidence explicitly.
 3. Expand independent historical bug/fix families and introduce a fresh holdout before tuning thresholds.
 4. Calibrate relevance, evidence sufficiency, and support separately. Jev confidence is not empirical accuracy.
 5. Repeat runs to measure verdict stability, adversarial-comment sensitivity, latency, and cost before changing defaults.

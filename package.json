@@ -21,7 +21,8 @@
     "prepublishOnly": "npm run release:check",
     "package:check": "npm run build && node scripts/package-release.mjs",
     "release:check": "npm run validate && npm run package:check && node scripts/release-metadata.mjs",
-    "accuracy": "tsx benchmarks/run.ts"
+    "accuracy": "tsx benchmarks/run.ts",
+    "accuracy:paired": "tsx benchmarks/paired.ts"
   },
   "engines": {
     "node": ">=22.18.0"

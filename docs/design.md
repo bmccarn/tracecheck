@@ -2,6 +2,14 @@
 
 Tracecheck has a broad quality layer and a source-finding layer. Jev supplies typed judgments; local code owns context collection, evidence locations, validation, policy, transport, and reporting.
 
+## Agent-first verification
+
+The agent owns hypothesis discovery, evidence selection, counterevidence search, and fix verification. `tracecheck_verify` is the primary integration: one agent-selected hypothesis, an explicit contract, exact evidence excerpts with original line references, and declared missing context. Code validates quote alignment and budgets. Optional local repository binding checks excerpts before inference and full source freshness afterward; supplied-only inputs are labeled as such.
+
+Jev receives three independent Choice questions: support, impact, and the most useful missing-evidence category. No broad quality request or parser discovery is required. The agent interprets disagreements and can expand evidence within a bounded investigation loop. TypeSafe's [citation-checking cookbook](https://docs.typesafe.ai/cookbooks/citation_check) illustrates the separation between deterministic reference checks and semantic judgment.
+
+The collector and three JS/TS patterns remain optional compatibility conveniences. Additional language-specific discovery rules are not the main development direction. The [paired evaluation protocol](agent-evaluation.md) measures assistance rather than treating a verifier benchmark as discovery accuracy.
+
 ## Execution
 
 `tracecheck_assess` accepts explicit task, diff, files, and repository facts. It asks 76 questions in one request: relevance (Noul), evidence sufficiency (Noul), quality level (Score), and primary concern (Choice) for each of 19 dimensions. The concern catalog and suggestions are independently authored. Input is language-agnostic and does not cause filesystem access.

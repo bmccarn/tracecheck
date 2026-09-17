@@ -1,5 +1,11 @@
 # Validation
 
+## Agent-first verification milestone
+
+- 41 tests cover the new language-independent verification path, quote and source validation, stale evidence rejection, bound-repository MCP behavior, and paired benchmark scoring.
+- A live RapidRegs verification through the new CLI rejected a known repaired concern with locally checked evidence. This is an integration check, not a fresh accuracy estimate; see [agent evaluation](agent-evaluation.md).
+- The standalone runtime now exposes four MCP tools. Published v0.2.0 still exposes the earlier three-tool interface.
+
 ## Unreleased evidence milestone — September 17, 2026
 
 - `npm run validate`: 35 tests pass, including bounded collection, original-line anchors, root isolation, cancellation, provider response limits, manual-context secret screening, split evidence gating, cache comparison reuse, and mid-review edit rejection.

@@ -1,3 +1,4 @@
+import { verify, verificationInputSchema, verificationOutputSchema } from './verify.js';
 import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
@@ -20,6 +21,16 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     if (!repo && !requested) throw new Error('Supply repo or launch the server with --repo.');
     return repo ?? requested!;
   };
+  server.registerTool('tracecheck_verify', {
+    description: 'Verify one agent-discovered defect hypothesis against agent-selected source, contract, and counterevidence in any language. Validates exact target quotes; optional repo checks every excerpt against local files before and after inference. Returns support, impact, uncertainty, and a missing-evidence category. Does not discover concerns, execute code, or prove a fix.',
+    inputSchema: verificationInputSchema, outputSchema: verificationOutputSchema,
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
+  }, async (args, ctx) => {
+    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(90_000)]);
+    const selected = repo || args.repo ? await target(args.repo) : undefined;
+    const output = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal }), signal);
+    return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
+  });
   server.registerTool('tracecheck_assess', {
     description: 'Review caller-supplied task, diff, files, and repository context across 19 independent quality dimensions with Jev. Language-agnostic; no filesystem reads. Optional previousEvaluation is compared locally. Returns scores, confidence, prioritized concerns, and changes.',
     inputSchema: qualityInputSchema, outputSchema: qualityEvaluationSchema,
