@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Update CI and release workflows to SHA-pinned Node 24 actions, including supported setup-node cache controls, and pin runners to Ubuntu 24.04.
+
 ## 0.3.0-rc.2 — 2026-09-17
 
 - Fix the release workflow's npm archive path: an explicit `./release/` prefix prevents npm 11.5.1 from interpreting the archive as a GitHub repository.
