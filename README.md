@@ -69,7 +69,7 @@ export TYPESAFE_API_KEY="your-key"
 # JEV_API_KEY is also supported and takes precedence if both are set.
 ```
 
-The built `dist/plugin.mjs` includes its runtime dependencies and can run without `node_modules`. Distribution is currently from source. The npm and plugin release artifacts can be built locally; see [distribution](#distribution) for their publication status.
+The built `dist/plugin.mjs` includes its runtime dependencies and can run without `node_modules`. You can also use the npm CLI or install the plugin directly from GitHub; see [distribution](#distribution).
 
 Try the scripted example without an API call:
 
@@ -282,7 +282,7 @@ npm run package:check
 
 This builds and verifies an npm tarball and a marketplace bundle for both clients in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
 
-After npm publication, the intended command is `npx --yes @bmccarn/tracecheck@0.2.0 mcp` (or `preview`, `review`, and `assess`). **The package is not published yet.** An `npx` MCP configuration exposes tools; install the plugin to register the associated skill as well.
+Run `npx --yes @bmccarn/tracecheck@0.2.0 mcp` (or `preview`, `review`, and `assess`) to use the versioned npm runtime. An `npx` MCP configuration exposes tools; install the plugin to register the associated skill as well.
 
 See the [publishing guide](docs/publishing.md) for local artifact testing, Claude/Codex installation, registry publication, and version updates.
 

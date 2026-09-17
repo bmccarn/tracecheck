@@ -49,7 +49,7 @@ tracecheck-marketplace/
 
 ## npm and npx
 
-After `@bmccarn/tracecheck@0.2.0` is actually published, users can run:
+The versioned npm interface is:
 
 ```sh
 npx --yes @bmccarn/tracecheck@0.2.0 --help
@@ -58,7 +58,7 @@ npx --yes @bmccarn/tracecheck@0.2.0 review --repo /path/to/project --task 'Descr
 npx --yes @bmccarn/tracecheck@0.2.0 mcp
 ```
 
-These registry commands are examples of the intended release interface, not a claim that the package is already live. Replace the package spec if a scoped name is chosen. Pin a version for reproducibility; update deliberately after reviewing changes.
+The npm package is scoped to `bmccarn`; the CLI binary remains `tracecheck`. Pin a version for reproducibility; update deliberately after reviewing changes.
 
 Before publication, exercise the tarball directly from a directory outside the checkout:
 
