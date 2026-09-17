@@ -1,0 +1,150 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: release-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Publish verified release
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify tagged commit is on main
+        run: |
+          git fetch origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 22.18.0
+          package-manager-cache: false
+
+      - name: Install required npm
+        run: |
+          npm install --global npm@11.5.1
+          node --input-type=module -e "const [major = 0, minor = 0, patch = 0] = (await import('node:child_process')).execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim().split('.').map(Number); if (major < 11 || major === 11 && (minor < 5 || minor === 5 && patch < 1)) throw new Error('npm 11.5.1 or newer is required.');"
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      - name: Verify release metadata and artifacts
+        run: npm run release:check
+
+      - name: Classify release channel
+        id: release
+        run: node scripts/release-gates.mjs "$GITHUB_REF_NAME" >> "$GITHUB_OUTPUT"
+
+      - name: Preflight publication credentials
+        env:
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+          MARKETPLACE_REPOSITORY: ${{ vars.MARKETPLACE_REPOSITORY }}
+          MARKETPLACE_DEPLOY_KEY: ${{ secrets.MARKETPLACE_DEPLOY_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$RELEASE_CHANNEL" == "latest" ]]; then
+            [[ "$MARKETPLACE_REPOSITORY" == "bmccarn/tracecheck-plugins" ]] || { echo 'MARKETPLACE_REPOSITORY must name the generated marketplace repository.' >&2; exit 1; }
+            [[ -n "$MARKETPLACE_DEPLOY_KEY" ]] || { echo 'MARKETPLACE_DEPLOY_KEY is required for stable releases.' >&2; exit 1; }
+            umask 077
+            key="$RUNNER_TEMP/marketplace-preflight-key"
+            known_hosts="$RUNNER_TEMP/marketplace-known-hosts"
+            printf '%s\n' "$MARKETPLACE_DEPLOY_KEY" > "$key"
+            trap 'rm -f "$key" "$known_hosts"' EXIT
+            gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
+            [[ -s "$known_hosts" ]] || { echo 'GitHub did not provide SSH host keys.' >&2; exit 1; }
+            GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes" git ls-remote "git@github.com:${MARKETPLACE_REPOSITORY}.git" HEAD >/dev/null
+          fi
+
+      - name: Retain verified release artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: tracecheck-${{ steps.release.outputs.version }}
+          path: release/
+          retention-days: 90
+          if-no-files-found: error
+
+      - name: Publish verified npm package
+        env:
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+        run: |
+          set -euo pipefail
+          unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
+          archive="$(node --input-type=module -e "import manifest from './release/release-manifest.json' with { type: 'json' }; if (manifest.version !== process.env.RELEASE_VERSION || !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$/.test(manifest.npmArchive)) process.exit(1); process.stdout.write(manifest.npmArchive);")"
+          npm publish "release/$archive" --ignore-scripts --provenance --tag "$RELEASE_CHANNEL"
+
+      - name: Create GitHub prerelease
+        if: steps.release.outputs.channel == 'next'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes --prerelease
+
+      - name: Create GitHub release
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes
+
+      - name: Publish stable marketplace payload
+        if: steps.release.outputs.channel == 'latest'
+        env:
+          MARKETPLACE_REPOSITORY: ${{ vars.MARKETPLACE_REPOSITORY }}
+          MARKETPLACE_DEPLOY_KEY: ${{ secrets.MARKETPLACE_DEPLOY_KEY }}
+          RELEASE_VERSION: ${{ steps.release.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          umask 077
+          key="$RUNNER_TEMP/marketplace-deploy-key"
+          known_hosts="$RUNNER_TEMP/marketplace-known-hosts"
+          printf '%s\n' "$MARKETPLACE_DEPLOY_KEY" > "$key"
+          trap 'rm -f "$key" "$known_hosts"' EXIT
+          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
+          [[ -s "$known_hosts" ]] || { echo 'GitHub did not provide SSH host keys.' >&2; exit 1; }
+          export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
+
+          marketplace="$RUNNER_TEMP/marketplace"
+          git clone "git@github.com:${MARKETPLACE_REPOSITORY}.git" "$marketplace"
+          if git -C "$marketplace" show-ref --verify --quiet refs/remotes/origin/main; then
+            git -C "$marketplace" checkout main 2>/dev/null || git -C "$marketplace" checkout --track -b main origin/main
+          else
+            [[ -z "$(git -C "$marketplace" ls-tree -r --name-only HEAD 2>/dev/null || true)" ]] || { echo 'Marketplace repository has content but no main branch.' >&2; exit 1; }
+            git -C "$marketplace" checkout --orphan main
+          fi
+
+          archive="$(node --input-type=module -e "import manifest from './release/release-manifest.json' with { type: 'json' }; if (manifest.version !== process.env.RELEASE_VERSION || !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$/.test(manifest.marketplaceArchive)) process.exit(1); process.stdout.write(manifest.marketplaceArchive);")"
+          staging="$RUNNER_TEMP/tracecheck-marketplace"
+          mkdir -p "$staging"
+          tar -xzf "release/$archive" -C "$staging"
+          source="$staging/tracecheck-marketplace"
+          [[ -f "$source/.agents/plugins/marketplace.json" && -f "$source/.claude-plugin/marketplace.json" && -f "$source/plugins/tracecheck/plugin.json" ]] || { echo 'Verified marketplace archive is incomplete.' >&2; exit 1; }
+
+          mkdir -p "$marketplace/.agents/plugins" "$marketplace/.claude-plugin" "$marketplace/plugins"
+          rm -rf "$marketplace/plugins/tracecheck"
+          cp -R "$source/plugins/tracecheck" "$marketplace/plugins/"
+          cp "$source/.agents/plugins/marketplace.json" "$marketplace/.agents/plugins/marketplace.json"
+          cp "$source/.claude-plugin/marketplace.json" "$marketplace/.claude-plugin/marketplace.json"
+
+          git -C "$marketplace" add -Af -- .agents/plugins/marketplace.json .claude-plugin/marketplace.json plugins/tracecheck
+          if git -C "$marketplace" diff --cached --quiet; then exit 0; fi
+          git -C "$marketplace" config user.name 'tracecheck release'
+          git -C "$marketplace" config user.email 'tracecheck-release@users.noreply.github.com'
+          git -C "$marketplace" commit -m "Publish Tracecheck $RELEASE_VERSION"
+          git -C "$marketplace" push origin HEAD:main

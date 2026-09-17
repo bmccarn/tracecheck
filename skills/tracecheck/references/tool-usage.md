@@ -32,9 +32,9 @@ CLI equivalent: `tracecheck verify --input evidence.json --repo /path/to/project
 ## Git repository review
 
 1. Choose an absolute `repo` and a baseline commit that remains fixed across checkpoints. `HEAD` covers staged and unstaged tracked edits, not changes already committed relative to HEAD. Opt in with `includeUntracked: true` when new source files belong to the task.
-2. Call `tracecheck_preview` with `repo`, `base`, `task`, and optional `repositoryContext`. Inspect `limitations` and the file manifest before review.
-3. Call `tracecheck_review` with exactly the same collection arguments plus its returned `snapshot`. A mismatch requires another preview, not a retry using the stale token.
-4. Read the result's `report`. For a later checkpoint, pass `report.quality` as `previousEvaluation`; do not pass the full report into that field. `cached: true` means this result reuses the original assessment and timestamp.
+2. Call `tracecheck_preview` with `repo`, `base`, `task`, and optional `repositoryContext` and `collection`. Inspect packet membership, `limitations`, and the file manifest before review. More packets require more provider calls.
+3. Call `tracecheck_review` in the same server process with exactly the same collection arguments plus its returned `snapshot`. A mismatched, expired, or evicted token requires another preview. Preview scopes are retained for up to five minutes and pin deadline-limited discovery across review and freshness checks. `collection` can set `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; review accepts `reviewTimeoutMs` separately. Raising discovery budgets does not enlarge model packets.
+4. Read every packet's assessment and the combined `report.decisions`. Single-packet reviews return `report.quality`; multiple packets return `report.packetQualities` with their changed paths. Preserve those scopes instead of averaging scores. Only a single-packet `report.quality` can be passed as `previousEvaluation`; the full report and packet array are not valid prior evaluations. `cached: true` means this result reuses the original assessment and timestamp.
 
 Example preview arguments (replace the path, baseline, and requirement):
 
@@ -57,6 +57,7 @@ This route reads no additional files. Include callers or tests yourself where th
 
 - Missing credentials: explain which launching environment needs `TYPESAFE_API_KEY` or `JEV_API_KEY`. Never request the key in chat or write it to project files.
 - Unavailable tools: report that Tracecheck is not connected. Use its installed CLI if available, or continue the project's ordinary checks and disclose that no Jev assessment ran.
+- Cursor setup or connection failure: inspect Cursor's **Output** panel → **MCP Logs**, then recheck the `mcp.json` stdio entry, the credential variable in Cursor's launching environment, and the complete `tracecheck` skill directory.
 - Budget or coverage gaps: reduce unrelated context while retaining contracts and dependencies. Explicitly list any scope left unreviewed.
 - Provider errors: surface the failure after built-in retries; do not loop indefinitely or substitute invented assessment results.
 - Uncertainty: seek specific missing evidence. If unavailable, retain uncertainty in the final report.

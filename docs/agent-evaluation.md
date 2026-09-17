@@ -38,3 +38,22 @@ The scorer rejects duplicate IDs and post-verification baseline timestamps. It c
 The scorer and verification workflow have deterministic regression tests. A live check of the repaired RapidRegs S3 existence function through the new CLI returned `not_supported` for the old AccessDenied-swallowing concern, with local source validation, Jev `jev-1.13.0`, confidence 0.96, selected probability 0.97, 1,686 input tokens, 175 output tokens, and a 376 ms review stage. The missing-evidence category remained `unspecified`.
 
 That check used a known, previously inspected case. It proves the new path runs; it does not establish incremental accuracy. **No fresh, blinded agent-only versus agent-assisted study has been completed.**
+
+## Isolated RapidRegs loop — September 17, 2026
+
+An isolated agent investigated `src/rapidregs_ingest/jobs/daily.py::render_issues_csv` in disposable `git clone --no-hardlinks` copies pinned to `b3d8ac8054dd1dc8c5c99ef4b2dbdcf345a28ef5`. This was a fresh case outside the exposed benchmark families. The original checkout remained unchanged, and both temporary clones were removed.
+
+The agent's initial hypothesis was conditional CSV formula injection. Its pre-Jev judgment was not to report a defect without establishing spreadsheet consumption and input reachability. It selected the renderer, issue boundary, callers, documentation, and test evidence; the actual compiled `verify` CLI checked those excerpts against local files.
+
+| Checkpoint | Jev result | Confidence | Input/output tokens | Jev stage | CLI wall time |
+| --- | --- | --- | --- | --- | --- |
+| Initial evidence | `needs_context` | 0.68 | 1,982 / 171 | 789 ms | 0.89 s |
+| Expanded evidence and counterevidence | `uncertain` | 0.23 | 2,368 / 174 | 382 ms | 0.46 s |
+
+The agent followed up by tracing issue construction and the documented JSONL retry workflow, adding that workflow as counterevidence and explicitly retaining the missing spreadsheet-consumption contract. Both successful checkpoints reported `local_files_checked` provenance. There were two provider requests; agent investigation time was not separately instrumented.
+
+There was real workflow friction: an intermediate CLI attempt rejected a README excerpt because the agent had appended a closing Markdown fence that was not present at that location. The rejection occurred before inference, in 0.08 seconds. The agent re-read the range, corrected the excerpt, and successfully repeated verification. This demonstrates mechanical evidence validation rather than code making the semantic judgment.
+
+For behavior proof, the agent AST-extracted the exact renderer function and its field-list literal, then executed the unmodified function body with its standard-library globals and a boundary object implementing `model_dump(mode="json")`. A supplied `publication_title` of `=1+1` remained unchanged in the emitted CSV. This exercises the isolated real function, not the entire application or a spreadsheet. A direct application-level attempt was blocked by dependencies unavailable under the offline/no-network constraint.
+
+The final agent conclusion remained **unresolved conditional risk**, not a confirmed vulnerability: the probe establishes formatter behavior, but the evidence does not establish a formula-evaluating consumer or production reachability. Jev highlighted missing context; it did not establish or refute the defect, and it did not change the agent's cautious initial reporting decision. This validates the agent → Jev → agent refinement loop, not incremental accuracy or a blinded benchmark.

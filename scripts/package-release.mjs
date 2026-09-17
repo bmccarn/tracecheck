@@ -3,29 +3,41 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdir, readFile, writeFile, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { resolve, join } from 'node:path';
+import { resolve, join, basename } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
 const exec = promisify(execFile);
 const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const run = (command, args, options = {}) => exec(command, args, { timeout: 60_000, maxBuffer: 8 * 1024 * 1024, ...options });
-const pkg = JSON.parse(await readFile('package.json', 'utf8'));
+function parseJson(content, description) {
+  try {
+    return JSON.parse(content);
+  } catch (error) {
+    throw new Error(`Cannot parse ${description} as JSON.`, { cause: error });
+  }
+}
+
+async function readJson(path) {
+  return parseJson(await readFile(path, 'utf8'), path);
+}
+
+const pkg = await readJson('package.json');
 const release = resolve('release');
 await mkdir(release, { recursive: true });
 // Lifecycle scripts already ran in package:check. Pack exactly the distribution allowlist.
 const { stdout } = await run(npm, ['pack', '--ignore-scripts', '--json', '--pack-destination', release]);
-const [pack] = JSON.parse(stdout);
+const [pack] = parseJson(stdout, 'npm pack output');
 const files = new Set(pack.files.map(file => file.path));
 for (const path of ['dist/plugin.mjs', 'plugin.json', 'mcp.json', '.mcp.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json', 'skills/tracecheck/SKILL.md', 'skills/tracecheck/references/tool-usage.md', 'README.md']) {
   assert.ok(files.has(path), `Missing distribution file: ${path}`);
 }
 for (const path of files) {
-  assert.ok(!/(^|\/)(?:\.env(?:\..*)?|\.tracecheck|node_modules|release|test|examples|src)(?:\/|$)/.test(path), `Unexpected distribution file: ${path}`);
+  assert.ok(!/(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.tracecheck|\.git|node_modules|release|test|examples|src|[^/]+\.(?:key|pem|p12|pfx)|id_(?:rsa|ed25519))(?:\/|$)/.test(path), `Unexpected distribution file: ${path}`);
 }
 assert.equal(Object.keys(pkg.dependencies ?? {}).length, 0, 'Runtime must be bundled; avoid duplicate dependency installation.');
 for (const path of ['plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json']) {
-  const manifest = JSON.parse(await readFile(path, 'utf8'));
+  const manifest = await readJson(path);
   assert.equal(manifest.version, pkg.version, `Version mismatch: ${path}`);
   assert.equal(manifest.name, 'tracecheck');
 }
@@ -40,6 +52,7 @@ try {
   assert.match(help.stdout, /Tracecheck/);
   assert.match(help.stdout, /tracecheck assess/);
   await client.connect(new StdioClientTransport({ command: npm, args: [...args, 'mcp'], cwd: temporary, env, stderr: 'pipe' }));
+  assert.equal(client.getServerVersion()?.version, pkg.version, 'MCP server version must match package.json.');
   const listed = await client.listTools();
   assert.deepEqual(listed.tools.map(tool => tool.name).sort(), ['tracecheck_assess', 'tracecheck_preview', 'tracecheck_review', 'tracecheck_verify']);
   const invalid = await client.callTool({ name: 'tracecheck_assess', arguments: {} });
@@ -65,6 +78,11 @@ try {
   });
   const marketplaceArchive = join(release, `tracecheck-marketplace-${pkg.version}.tgz`);
   await run('tar', ['-czf', marketplaceArchive, '-C', temporary, 'tracecheck-marketplace']);
+  await writeJson(join(release, 'release-manifest.json'), {
+    version: pkg.version,
+    npmArchive: basename(archive),
+    marketplaceArchive: basename(marketplaceArchive),
+  });
   console.log(`Package verified: ${archive}\nMarketplace bundle: ${marketplaceArchive}\n${files.size} files; ${(pack.size / 1024).toFixed(1)} KiB compressed.\nOffline npm exec: CLI and all four MCP tools passed. No Jev request made.`);
 } finally {
   await client.close().catch(() => {});

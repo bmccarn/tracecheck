@@ -40,8 +40,12 @@ test('bad anchors, duplicates, oversized evidence and secrets fail before infere
 test('local evidence rejects stale quotes, traversal, and mid-request edits', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   const packet = { ...input(), repo: repo.root };
-  await writeFile(join(repo.root, 'decode.py'), packet.evidence[0]!.content);
+  packet.evidence.push({ id: 'contract', path: 'decode.py', startLine: 4, role: 'contract', content: '# Malformed JSON must return None.' });
+  await writeFile(join(repo.root, 'decode.py'), `${packet.evidence[0]!.content}\n${packet.evidence[1]!.content}`);
   assert.equal((await verify(packet, evaluator)).provenance, 'local_files_checked');
+  const staleContract = structuredClone(packet);
+  staleContract.evidence[1]!.content = '# Malformed JSON must throw.';
+  await assert.rejects(verify(staleContract, evaluator), /differs from local source/);
   const traversal = structuredClone(packet); traversal.evidence[0]!.path = '../decode.py';
   await assert.rejects(verify(traversal, evaluator), /repository-relative/);
   await assert.rejects(verify(packet, { async evaluate(_state, questions) {

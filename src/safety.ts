@@ -28,7 +28,7 @@ export async function readSource(root: string, path: string, signal?: AbortSigna
   try {
     const before = await file.stat();
     if (!before.isFile() || before.size > maxBytes) throw new Error('Nonregular or oversized file');
-    const buffer = Buffer.alloc(maxBytes + 1);
+    const buffer = Buffer.alloc(before.size + 1);
     let size = 0;
     while (size < buffer.length) {
       signal?.throwIfAborted();
@@ -37,10 +37,11 @@ export async function readSource(root: string, path: string, signal?: AbortSigna
       size += read.bytesRead;
     }
     const after = await file.stat();
-    if (size > maxBytes || before.size !== after.size || before.mtimeMs !== after.mtimeMs
+    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs
       || await realpath(absolute) !== physical) throw new Error('File changed during collection');
     const current = await lstat(physical);
-    if (current.ino !== after.ino || current.dev !== after.dev) throw new Error('File changed during collection');
+    if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size
+      || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error('File changed during collection');
     return buffer.subarray(0, size).toString('utf8');
   } finally { await file.close(); }
 }

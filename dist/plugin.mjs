@@ -4511,7 +4511,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve4) {
+function isRecursive(inst, stack, resolve5) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -4521,7 +4521,7 @@ function isRecursive(inst, stack, resolve4) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer2 = isRecursive(child, stack, resolve4);
+      const answer2 = isRecursive(child, stack, resolve5);
       if (answer2 > result)
         result = answer2;
     }
@@ -4532,7 +4532,7 @@ function isRecursive(inst, stack, resolve4) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve4) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE;
       if (child > answer2)
         answer2 = child;
     }
@@ -4596,7 +4596,7 @@ function isRecursive(inst, stack, resolve4) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve4 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -15432,12 +15432,12 @@ function describe(description) {
   return ch;
 }
 // @__NO_SIDE_EFFECTS__
-function meta(metadata) {
+function meta(metadata2) {
   const ch = new $ZodCheck({ check: "meta" });
   ch._zod.onattach = [
     (inst) => {
       const existing = globalRegistry.get(inst) ?? {};
-      globalRegistry.add(inst, { ...existing, ...metadata });
+      globalRegistry.add(inst, { ...existing, ...metadata2 });
     }
   ];
   ch._zod.check = () => {
@@ -20738,6 +20738,7 @@ var init_schema = __esm({
       })),
       limitations: external_exports.array(external_exports.string()),
       quality: qualityEvaluationSchema.optional(),
+      packetQualities: external_exports.array(external_exports.object({ packetId: external_exports.string(), changedPaths: external_exports.array(external_exports.string()), evaluation: qualityEvaluationSchema })).optional(),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
     });
   }
@@ -20769,41 +20770,167 @@ function questionsFor(candidate) {
     }
   };
 }
-async function review(plan, evaluator, signal) {
-  const started = Date.now();
-  const decisions = [];
-  const models = /* @__PURE__ */ new Set();
-  const usage = { inputTokens: 0, outputTokens: 0, requests: 0, elapsedMs: 0 };
-  for (let offset = 0; offset < plan.candidates.length; offset += 10) {
-    signal?.throwIfAborted();
-    const batch = plan.candidates.slice(offset, offset + 10);
-    const questions = Object.assign({}, ...batch.map(questionsFor));
-    const response = await evaluator.evaluate({ sources: plan.sources, candidates: batch, limitations: plan.limitations, task: plan.task, repositoryContext: plan.repositoryContext }, questions);
-    models.add(response.model);
-    usage.inputTokens += response.usage.input_tokens;
-    usage.outputTokens += response.usage.output_tokens;
-    usage.requests++;
-    for (const candidate of batch) {
-      const assessment = response.answers[`${candidate.id}_assessment`];
-      const impact = response.answers[`${candidate.id}_impact`];
-      if (!assessment || !impact) throw new Error("Missing Jev decision; review is incomplete.");
-      const probability = assessment.probabilities[assessment.choice] ?? 0;
-      const certain = assessment.confidence >= 0.6 && probability >= 0.8;
-      const status2 = assessment.choice === "needs_context" ? "needs_context" : !certain ? "uncertain" : assessment.choice === "supported" ? "supported" : "not_supported";
-      decisions.push({
-        ...candidate,
-        status: status2,
-        confidence: assessment.confidence,
-        probability,
-        impact: impact.confidence >= 0.6 ? impact.choice : "unknown",
-        impactConfidence: impact.confidence,
-        raw: { assessment, impact }
-      });
+function unique(values) {
+  return [...new Set(values)];
+}
+function packetLimitations(packet) {
+  return packet.candidateIds.length ? [...packet.limitations] : [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+}
+function assertUnique(values, description) {
+  if (new Set(values).size !== values.length) throw new Error(`Invalid review plan: duplicate ${description}.`);
+}
+function resolvePacketEvidence(plan) {
+  if (!plan.packets.length) throw new Error("Invalid review plan: at least one packet is required.");
+  assertUnique(plan.packets.map((packet) => packet.id), "packet id");
+  assertUnique(plan.sources.map((source) => source.path), "source path");
+  assertUnique(plan.candidates.map((candidate) => candidate.id), "candidate id");
+  const sources = new Map(plan.sources.map((source) => [source.path, source]));
+  const candidates = new Map(plan.candidates.map((candidate) => [candidate.id, candidate]));
+  const assignedCandidates = /* @__PURE__ */ new Set();
+  const primaryChangedPaths = /* @__PURE__ */ new Set();
+  const evidence = plan.packets.map((packet) => {
+    assertUnique(packet.changedPaths, `changed path in packet ${packet.id}`);
+    assertUnique(packet.sourcePaths, `source path in packet ${packet.id}`);
+    assertUnique(packet.candidateIds, `candidate id in packet ${packet.id}`);
+    const packetSources = packet.sourcePaths.map((path) => {
+      const source = sources.get(path);
+      if (!source) throw new Error(`Invalid review plan: packet ${packet.id} references missing source ${path}.`);
+      return source;
+    });
+    for (const path of packet.changedPaths) {
+      const source = sources.get(path);
+      if (!source) throw new Error(`Invalid review plan: packet ${packet.id} marks missing source ${path} as changed.`);
+      if (!packet.sourcePaths.includes(path)) throw new Error(`Invalid review plan: changed source ${path} is absent from packet ${packet.id} evidence.`);
+      if (source.role !== "changed") throw new Error(`Invalid review plan: packet ${packet.id} marks non-changed source ${path} as changed.`);
+      if (primaryChangedPaths.has(path)) throw new Error(`Invalid review plan: changed source ${path} has more than one primary packet.`);
+      primaryChangedPaths.add(path);
+    }
+    const packetCandidates = packet.candidateIds.map((id) => {
+      const candidate = candidates.get(id);
+      if (!candidate) throw new Error(`Invalid review plan: packet ${packet.id} references missing candidate ${id}.`);
+      if (!packet.sourcePaths.includes(candidate.path)) {
+        throw new Error(`Invalid review plan: candidate ${id} is missing its source ${candidate.path} in packet ${packet.id}.`);
+      }
+      if (assignedCandidates.has(id)) throw new Error(`Invalid review plan: candidate ${id} appears in more than one packet.`);
+      assignedCandidates.add(id);
+      return candidate;
+    });
+    return { packet, sources: packetSources, candidates: packetCandidates, limitations: packetLimitations(packet) };
+  });
+  for (const source of plan.sources) {
+    if (source.role === "changed" && !primaryChangedPaths.has(source.path)) {
+      throw new Error(`Invalid review plan: changed source ${source.path} has no primary packet.`);
     }
   }
-  const limitations = [...plan.limitations];
-  if (!plan.candidates.length) limitations.push("No supported check candidates were found; no semantic review was performed.");
-  const status = decisions.some((item) => item.status === "supported") ? "needs_attention" : limitations.length || decisions.some((item) => item.status !== "not_supported") ? "inconclusive" : "no_findings";
+  for (const candidate of plan.candidates) {
+    if (!assignedCandidates.has(candidate.id)) throw new Error(`Invalid review plan: candidate ${candidate.id} is not assigned to a packet.`);
+  }
+  return evidence;
+}
+function requestBytes(state, questions) {
+  return Buffer.byteLength(JSON.stringify({ state, questions }));
+}
+function assertRequestFits(state, questions) {
+  const bytes = requestBytes(state, questions);
+  if (bytes > MAX_PROVIDER_REQUEST_BYTES) {
+    throw new Error(`Review request is ${bytes} bytes and exceeds the ${MAX_PROVIDER_REQUEST_BYTES}-byte safe provider limit; the supplied packet context cannot be evaluated without dropping evidence.`);
+  }
+}
+function hasSourceEvidence(evidence) {
+  return evidence.sources.some((source) => nonWhitespace.test(source.content) || nonWhitespace.test(source.before ?? ""));
+}
+function withEvidenceLimitations(evidence) {
+  if (hasSourceEvidence(evidence)) return evidence;
+  return { ...evidence, limitations: unique([
+    ...evidence.limitations,
+    `Packet ${evidence.packet.id} has no source evidence; no provider review was performed.`
+  ]) };
+}
+function requestState(plan, evidence, candidates) {
+  return {
+    sources: evidence.sources,
+    candidates,
+    limitations: evidence.limitations,
+    packetId: evidence.packet.id,
+    task: plan.task,
+    repositoryContext: plan.repositoryContext
+  };
+}
+function candidateQuestions(candidates) {
+  return Object.assign({}, ...candidates.map(questionsFor));
+}
+function planCandidateRequests(plan, evidence, firstQuestions = {}) {
+  const requests = [];
+  for (let offset = 0; offset < evidence.candidates.length; ) {
+    let end = Math.min(offset + 10, evidence.candidates.length);
+    let admitted = false;
+    while (end > offset) {
+      const candidates = evidence.candidates.slice(offset, end);
+      const questions = { ...offset === 0 ? firstQuestions : {}, ...candidateQuestions(candidates) };
+      const state = requestState(plan, evidence, candidates);
+      if (requestBytes(state, questions) <= MAX_PROVIDER_REQUEST_BYTES) {
+        requests.push({ evidence, state, candidates, questions });
+        offset = end;
+        admitted = true;
+        break;
+      }
+      end--;
+    }
+    if (!admitted) {
+      const candidate = evidence.candidates[offset];
+      const questions = { ...offset === 0 ? firstQuestions : {}, ...candidateQuestions([candidate]) };
+      assertRequestFits(requestState(plan, evidence, [candidate]), questions);
+    }
+  }
+  return requests;
+}
+function planBroadRequests(plan, evidence, questions) {
+  const entries = Object.entries(questions);
+  const requests = [];
+  for (let offset = 0; offset < entries.length; ) {
+    let end = entries.length;
+    let admitted = false;
+    while (end > offset) {
+      const selected = Object.fromEntries(entries.slice(offset, end));
+      const state = requestState(plan, evidence, []);
+      if (requestBytes(state, selected) <= MAX_PROVIDER_REQUEST_BYTES) {
+        requests.push({ evidence, state, candidates: [], questions: selected, broadKeys: Object.keys(selected) });
+        offset = end;
+        admitted = true;
+        break;
+      }
+      end--;
+    }
+    if (!admitted) {
+      const selected = Object.fromEntries(entries.slice(offset, offset + 1));
+      assertRequestFits(requestState(plan, evidence, []), selected);
+    }
+  }
+  return requests;
+}
+function reportStatus(decisions, limitations) {
+  return decisions.some((item) => item.status === "supported") ? "needs_attention" : limitations.length || decisions.some((item) => item.status !== "not_supported") ? "inconclusive" : "no_findings";
+}
+function decisionsFrom(response, candidates) {
+  return candidates.map((candidate) => {
+    const assessment = response.answers[`${candidate.id}_assessment`];
+    const impact = response.answers[`${candidate.id}_impact`];
+    if (!assessment || !impact) throw new Error("Missing Jev decision; review is incomplete.");
+    const probability = assessment.probabilities[assessment.choice] ?? 0;
+    const certain = assessment.confidence >= 0.6 && probability >= 0.8;
+    const status = assessment.choice === "needs_context" ? "needs_context" : !certain ? "uncertain" : assessment.choice === "supported" ? "supported" : "not_supported";
+    return {
+      ...candidate,
+      status,
+      confidence: assessment.confidence,
+      probability,
+      impact: impact.confidence >= 0.6 ? impact.choice : "unknown",
+      impactConfidence: impact.confidence,
+      raw: { assessment, impact }
+    };
+  });
+}
+function reportFor(plan, started, decisions, models, limitations, usage) {
   usage.elapsedMs = Date.now() - started;
   return {
     schemaVersion: 1,
@@ -20816,66 +20943,163 @@ async function review(plan, evaluator, signal) {
     checkVersion: CHECK_VERSION,
     policyVersion: POLICY_VERSION,
     models: [...models],
-    status,
+    status: reportStatus(decisions, limitations),
     decisions,
     limitations,
     usage
   };
 }
+async function review(plan, evaluator, signal) {
+  const started = Date.now();
+  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
+  const requests = packets.filter(hasSourceEvidence).flatMap((evidence) => planCandidateRequests(plan, evidence));
+  for (const request of requests) assertRequestFits(request.state, request.questions);
+  const decisions = [];
+  const models = /* @__PURE__ */ new Set();
+  const usage = { inputTokens: 0, outputTokens: 0, requests: 0, elapsedMs: 0 };
+  for (const request of requests) {
+    signal?.throwIfAborted();
+    const response = await evaluator.evaluate(request.state, request.questions);
+    models.add(response.model);
+    usage.inputTokens += response.usage.input_tokens;
+    usage.outputTokens += response.usage.output_tokens;
+    usage.requests++;
+    decisions.push(...decisionsFrom(response, request.candidates));
+  }
+  return reportFor(plan, started, decisions, models, unique([...plan.limitations, ...packets.flatMap((packet) => packet.limitations)]), usage);
+}
 async function reviewAll(plan, evaluator, options = {}) {
   const started = Date.now();
-  const responses = [];
+  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
   const broadQuestions = qualityQuestions();
-  const bridge = {
-    async evaluate(state, questions) {
-      const first = responses.length === 0;
-      const response = await evaluator.evaluate(
-        { ...state, task: plan.task, repositoryContext: plan.repositoryContext },
-        first ? { ...broadQuestions, ...questions } : questions
-      );
-      responses.push(response);
+  const broadKeys = Object.keys(broadQuestions);
+  const requests = [];
+  for (const evidence of packets) {
+    if (!hasSourceEvidence(evidence)) continue;
+    const first = evidence.candidates[0];
+    const sharedState = first && requestState(plan, evidence, [first]);
+    if (sharedState && requestBytes(sharedState, { ...broadQuestions, ...candidateQuestions([first]) }) <= MAX_PROVIDER_REQUEST_BYTES) {
+      requests.push(...planCandidateRequests(plan, evidence, broadQuestions).map((request, index) => ({ ...request, broadKeys: index === 0 ? broadKeys : [] })));
+    } else {
+      requests.push(...planCandidateRequests(plan, evidence).map((request) => ({ ...request, broadKeys: [] })));
+      requests.push(...planBroadRequests(plan, evidence, broadQuestions));
+    }
+  }
+  for (const request of requests) assertRequestFits(request.state, request.questions);
+  for (const evidence of packets.filter(hasSourceEvidence)) {
+    const planned = requests.filter((request) => request.evidence.packet.id === evidence.packet.id).flatMap((request) => request.broadKeys);
+    assertUnique(planned, `broad quality question in packet ${evidence.packet.id}`);
+    if (planned.length !== broadKeys.length || planned.some((key) => !broadQuestions[key])) {
+      throw new Error(`Internal review planning omitted a broad quality question for packet ${evidence.packet.id}.`);
+    }
+  }
+  const decisions = [];
+  const models = /* @__PURE__ */ new Set();
+  const usage = { inputTokens: 0, outputTokens: 0, requests: 0, elapsedMs: 0 };
+  const broadResponses = /* @__PURE__ */ new Map();
+  for (const request of requests) {
+    options.signal?.throwIfAborted();
+    const response = await evaluator.evaluate(request.state, request.questions);
+    models.add(response.model);
+    usage.inputTokens += response.usage.input_tokens;
+    usage.outputTokens += response.usage.output_tokens;
+    usage.requests++;
+    if (request.candidates.length) {
       const answers = {};
-      for (const key of Object.keys(questions)) {
+      for (const key of Object.keys(candidateQuestions(request.candidates))) {
         const answer2 = response.answers[key];
         if (answer2?.type !== "choice") throw new Error(`Missing source-check decision: ${key}`);
         answers[key] = answer2;
       }
-      return { ...response, answers };
+      decisions.push(...decisionsFrom({ answers }, request.candidates));
     }
-  };
-  const report = await review(plan, bridge, options.signal);
-  if (!responses.length) {
-    options.signal?.throwIfAborted();
-    const response = await evaluator.evaluate({ sources: plan.sources, task: plan.task, repositoryContext: plan.repositoryContext, limitations: plan.limitations }, broadQuestions);
-    responses.push(response);
-    report.models = [response.model];
-    report.usage.inputTokens = response.usage.input_tokens;
-    report.usage.outputTokens = response.usage.output_tokens;
-    report.usage.requests = 1;
-    report.limitations = report.limitations.map((value) => value === "No supported check candidates were found; no semantic review was performed." ? "No source-anchored check candidates were found; only the broad quality review was performed." : value);
+    if (request.broadKeys.length) {
+      const previous = broadResponses.get(request.evidence.packet.id);
+      if (previous && previous.model !== response.model) {
+        throw new Error(`Broad quality requests for packet ${request.evidence.packet.id} used different models; quality results cannot be merged.`);
+      }
+      const answers = previous?.answers ?? {};
+      for (const key of request.broadKeys) {
+        const answer2 = response.answers[key];
+        if (!answer2) throw new Error(`Missing typed quality decision: ${key}`);
+        answers[key] = answer2;
+      }
+      broadResponses.set(request.evidence.packet.id, {
+        model: response.model,
+        answers,
+        inputTokens: (previous?.inputTokens ?? 0) + response.usage.input_tokens,
+        outputTokens: (previous?.outputTokens ?? 0) + response.usage.output_tokens,
+        requests: (previous?.requests ?? 0) + 1
+      });
+    }
   }
-  const quality = transformQuality(responses[0], hash2([plan.root, plan.base]), plan.snapshot, options.previousEvaluation);
-  quality.usage.elapsedMs = Date.now() - started;
-  report.quality = quality;
+  const limitations = unique([...plan.limitations, ...packets.flatMap((packet) => packet.limitations)]).map((value) => {
+    const match = /^No supported check candidates were found in packet (.+); no semantic review was performed\.$/.exec(value);
+    if (!match || !broadResponses.has(match[1])) return value;
+    return `No source-anchored check candidates were found in packet ${match[1]}; only the broad quality review was performed.`;
+  });
+  const report = reportFor(plan, started, decisions, models, limitations, usage);
+  const packetQualities = packets.flatMap(({ packet }) => {
+    const broad = broadResponses.get(packet.id);
+    if (!broad) return [];
+    const evaluation = transformQuality(
+      {
+        model: broad.model,
+        answers: broad.answers,
+        usage: { input_tokens: broad.inputTokens, output_tokens: broad.outputTokens }
+      },
+      packets.length === 1 ? hash2([plan.root, plan.base]) : hash2([plan.root, plan.base, packet.changedPaths]),
+      plan.snapshot,
+      packets.length === 1 ? options.previousEvaluation : void 0
+    );
+    evaluation.usage.requests = broad.requests;
+    evaluation.usage.elapsedMs = Date.now() - started;
+    return [{ packetId: packet.id, changedPaths: [...packet.changedPaths], evaluation }];
+  });
+  if (packets.length === 1 && packetQualities.length) report.quality = packetQualities[0].evaluation;
+  else if (packetQualities.length) {
+    report.packetQualities = packetQualities;
+    if (options.previousEvaluation) report.limitations = unique([
+      ...report.limitations,
+      "Previous broad quality evaluation was not compared because this review has multiple packet scopes."
+    ]);
+  }
+  report.status = reportStatus(report.decisions, report.limitations);
+  if (packetQualities.some(({ evaluation }) => evaluation.priorities.length)) report.status = "needs_attention";
+  else if (report.status === "no_findings" && packetQualities.some(({ evaluation }) => Object.values(evaluation.metrics).some((metric) => ["uncertain", "insufficient_context"].includes(metric.status)))) report.status = "inconclusive";
   report.usage.elapsedMs = Date.now() - started;
-  if (quality.priorities.length) report.status = "needs_attention";
-  else if (report.status === "no_findings" && Object.values(quality.metrics).some((metric) => ["uncertain", "insufficient_context"].includes(metric.status))) report.status = "inconclusive";
-  report.id = hash2([report.id, quality]).slice(0, 24);
+  report.id = hash2([report.id, report.quality ?? report.packetQualities]).slice(0, 24);
   return report;
 }
 function render(report) {
   const findings = report.decisions.filter((item) => item.status !== "not_supported");
+  const packetCount = report.packetQualities?.length ?? (report.quality ? 1 : void 0);
+  const packetSummary = packetCount === void 0 ? "" : ` \xB7 ${packetCount} packet${packetCount === 1 ? "" : "s"}`;
   const lines = [
     `# Tracecheck`,
     "",
-    `**${report.status.replaceAll("_", " ")}** \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
+    `**${report.status.replaceAll("_", " ")}**${packetSummary} \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
     "",
     `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.join(", ") || "not called"}`,
     "",
-    `${report.quality ? "Broad review: all 19 quality dimensions. " : ""}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`,
+    `${report.quality || report.packetQualities ? "Broad review: all 19 quality dimensions per packet. " : ""}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`,
     ""
   ];
   if (report.quality) lines.push(renderQuality(report.quality), "", "## Source-anchored findings", "");
+  if (report.packetQualities) {
+    lines.push("## Packet broad reviews", "");
+    for (const packet of report.packetQualities) {
+      lines.push(
+        `### Packet ${packet.packetId}`,
+        "",
+        `Changed paths: ${packet.changedPaths.join(", ") || "none recorded"}`,
+        "",
+        renderQuality(packet.evaluation),
+        ""
+      );
+    }
+    lines.push("## Source-anchored findings", "");
+  }
   for (const finding of findings) {
     lines.push(
       `## ${finding.check} \u2014 ${finding.status}`,
@@ -20898,11 +21122,14 @@ function render(report) {
   if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${item}`), "");
   return lines.join("\n");
 }
+var MAX_PROVIDER_REQUEST_BYTES, nonWhitespace;
 var init_review = __esm({
   "src/review.ts"() {
     "use strict";
     init_domain();
     init_quality();
+    MAX_PROVIDER_REQUEST_BYTES = 16e4;
+    nonWhitespace = /\S/u;
   }
 });
 
@@ -20925,13 +21152,13 @@ async function readSource(root, path, signal, maxBytes = 256e3) {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   const physical = await realpath(absolute);
-  const inside = relative(root, physical);
-  if (inside === ".." || inside.startsWith("../") || inside.startsWith("..\\") || isAbsolute(inside) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
+  const inside2 = relative(root, physical);
+  if (inside2 === ".." || inside2.startsWith("../") || inside2.startsWith("..\\") || isAbsolute(inside2) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
   const file3 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file3.stat();
     if (!before.isFile() || before.size > maxBytes) throw new Error("Nonregular or oversized file");
-    const buffer = Buffer.alloc(maxBytes + 1);
+    const buffer = Buffer.alloc(before.size + 1);
     let size = 0;
     while (size < buffer.length) {
       signal?.throwIfAborted();
@@ -20940,9 +21167,9 @@ async function readSource(root, path, signal, maxBytes = 256e3) {
       size += read.bytesRead;
     }
     const after = await file3.stat();
-    if (size > maxBytes || before.size !== after.size || before.mtimeMs !== after.mtimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
+    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
     const current = await lstat(physical);
-    if (current.ino !== after.ino || current.dev !== after.dev) throw new Error("File changed during collection");
+    if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error("File changed during collection");
     return buffer.subarray(0, size).toString("utf8");
   } finally {
     await file3.close();
@@ -20979,6 +21206,15 @@ async function verify(raw, evaluator, signal) {
     if (excerpt !== item.content) throw new Error("Evidence differs from local source. Re-read the referenced lines.");
   }
   const snapshot = hash2({ ...input2, repo: root, digests: [...captured].map(([path, content]) => [path, hash2(content)]) });
+  const excerpts = /* @__PURE__ */ new Map();
+  for (const item of input2.evidence) {
+    const parts = excerpts.get(item.path) ?? [];
+    parts.push(`[Evidence ${item.id}; role ${item.role}; original start line ${item.startLine}]
+${item.content}`);
+    excerpts.set(item.path, parts);
+  }
+  const sourcePaths = [...excerpts.keys()];
+  const candidateId = hash2(input2.hypothesis).slice(0, 16);
   let missing;
   const report = await review({
     schemaVersion: 1,
@@ -20988,10 +21224,16 @@ async function verify(raw, evaluator, signal) {
     snapshot,
     task: input2.contract,
     limitations: input2.missingContext,
-    sources: input2.evidence.map((item) => ({ path: item.path, role: "changed", content: `[Evidence ${item.id}; role ${item.role}; original start line ${item.startLine}]
-${item.content}` })),
+    sources: [...excerpts].map(([path, parts]) => ({ path, role: "changed", content: parts.join("\n\n") })),
+    packets: [{
+      id: hash2([sourcePaths, candidateId]),
+      changedPaths: sourcePaths,
+      sourcePaths,
+      candidateIds: [candidateId],
+      limitations: input2.missingContext
+    }],
     candidates: [{
-      id: hash2(input2.hypothesis).slice(0, 16),
+      id: candidateId,
       check: "agent-hypothesis",
       path: target.path,
       symbol: "agent-selected",
@@ -42796,13 +43038,6 @@ function findCandidates(path, content, changed) {
   visit2(file3, []);
   return candidates;
 }
-function changedRanges(diff) {
-  return [...diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map((match) => {
-    const start = Math.max(1, Number(match[1]));
-    const count = match[2] === void 0 ? 1 : Number(match[2]);
-    return { start, end: start + Math.max(1, count) - 1 };
-  });
-}
 var checks;
 var init_checks3 = __esm({
   "src/checks.ts"() {
@@ -42824,6 +43059,257 @@ var init_checks3 = __esm({
         verification: "Pass malformed JSON through the public caller and assert its documented failure response."
       }
     };
+  }
+});
+
+// src/collection-options.ts
+var collectionOptionsSchema, reviewTimeoutSchema;
+var init_collection_options = __esm({
+  "src/collection-options.ts"() {
+    "use strict";
+    init_zod();
+    collectionOptionsSchema = external_exports.object({
+      maxIndexFiles: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+      maxIndexBytes: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
+      indexTimeoutMs: external_exports.number().int().positive().max(36e5).default(2e4),
+      collectionTimeoutMs: external_exports.number().int().positive().max(36e5).default(12e4)
+    }).strict();
+    reviewTimeoutSchema = external_exports.number().int().positive().max(36e5).default(3e5);
+  }
+});
+
+// src/git-context.ts
+import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+function patchRange(start, count) {
+  const first = Math.max(1, Number(start));
+  return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
+}
+function pathBatches(paths) {
+  const batches = [];
+  let batch = [];
+  let argumentBytes = 0;
+  for (const path of paths) {
+    const nextBytes = argumentBytes + Buffer.byteLength(path) + 1;
+    if (batch.length && (batch.length >= 512 || nextBytes > 6e4)) {
+      batches.push(batch);
+      batch = [];
+      argumentBytes = 0;
+    }
+    batch.push(path);
+    argumentBytes += Buffer.byteLength(path) + 1;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+async function streamGit(root, args, signal, onData, input2) {
+  signal.throwIfAborted();
+  await new Promise((resolve5, reject) => {
+    const child = spawn("git", ["--literal-pathspecs", "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    let settled = false;
+    let output2 = Promise.resolve();
+    const finish = (error62) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      if (error62) {
+        child.kill();
+        reject(error62);
+      } else resolve5();
+    };
+    const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
+    signal.addEventListener("abort", abort, { once: true });
+    child.once("error", () => finish(new Error("Git context command failed")));
+    child.stdout.once("error", () => finish(new Error("Git context command failed")));
+    child.stderr.once("error", () => finish(new Error("Git context command failed")));
+    child.stdout.on("data", (chunk) => {
+      child.stdout.pause();
+      output2 = output2.then(() => onData(chunk)).then(() => {
+        child.stdout.resume();
+      }).catch(() => {
+        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : new Error("Git context command failed"));
+      });
+    });
+    child.stderr.resume();
+    child.once("close", (code2) => {
+      void output2.then(() => finish(code2 === 0 ? void 0 : new Error("Git context command failed"))).catch(() => finish(new Error("Git context command failed")));
+    });
+    child.stdin.once("error", () => finish(new Error("Git context command failed")));
+    child.stdin.end(input2);
+  });
+}
+async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
+  const context = new Map([...new Set(paths)].map((path) => [path, { ranges: [], beforeRanges: [] }]));
+  const requested = new Set(context.keys());
+  if (!requested.size) return context;
+  const pathsByBlob = /* @__PURE__ */ new Map();
+  let treeBuffer = Buffer.alloc(0);
+  for (const batch of pathBatches(paths)) await streamGit(root, ["ls-tree", "-rlz", base, "--", ...batch], signal, (chunk) => {
+    treeBuffer = Buffer.concat([treeBuffer, chunk]);
+    for (; ; ) {
+      const end = treeBuffer.indexOf(0);
+      if (end < 0) break;
+      const record2 = treeBuffer.subarray(0, end);
+      treeBuffer = treeBuffer.subarray(end + 1);
+      const tab = record2.indexOf(9);
+      if (tab < 0) continue;
+      const fields = record2.subarray(0, tab).toString("ascii").trim().split(/\s+/);
+      const type = fields[1];
+      const blob = fields[2];
+      const size = Number(fields[3]);
+      const path = record2.subarray(tab + 1).toString("utf8");
+      if (type !== "blob" || !blob || !requested.has(path)) continue;
+      if (!Number.isSafeInteger(size) || size < 0) {
+        context.get(path).error = "Base version unavailable";
+        continue;
+      }
+      if (size > MAX_BASELINE_BYTES) {
+        context.get(path).error = "Oversized base version";
+        continue;
+      }
+      const entries = pathsByBlob.get(blob) ?? [];
+      entries.push(path);
+      pathsByBlob.set(blob, entries);
+    }
+  });
+  if (treeBuffer.length) throw new Error("Git context command failed");
+  const pathsForDiff = paths.filter((path) => !context.get(path)?.error);
+  for (const batch of pathBatches(pathsForDiff)) {
+    const rawChanges = [];
+    let rawBuffer = Buffer.alloc(0);
+    let rawStatus;
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--raw", "-z", "--no-renames", base, "--", ...batch], signal, (chunk) => {
+      rawBuffer = Buffer.concat([rawBuffer, chunk]);
+      for (; ; ) {
+        const end = rawBuffer.indexOf(0);
+        if (end < 0) break;
+        const record2 = rawBuffer.subarray(0, end);
+        rawBuffer = rawBuffer.subarray(end + 1);
+        if (record2[0] === 58) {
+          rawStatus = record2.toString("ascii").trim().split(/\s+/).at(-1);
+        } else if (rawStatus) {
+          rawChanges.push({ path: record2.toString("utf8"), status: rawStatus });
+          rawStatus = void 0;
+        } else throw new Error("Git context command failed");
+      }
+    });
+    if (rawBuffer.length || rawStatus) throw new Error("Git context command failed");
+    let diffBuffer = "";
+    const decoder = new StringDecoder("utf8");
+    let rawOffset = 0;
+    let lastRaw;
+    let reusedTypeChange = false;
+    let activePath;
+    let inHunk = false;
+    const processDiffLine = (line) => {
+      if (line.startsWith("diff --git ")) {
+        let raw = rawChanges[rawOffset];
+        if (raw) {
+          rawOffset++;
+          lastRaw = raw;
+          reusedTypeChange = false;
+        } else if (lastRaw?.status.startsWith("T") && !reusedTypeChange) {
+          raw = lastRaw;
+          reusedTypeChange = true;
+        } else throw new Error("Git context command failed");
+        if (!requested.has(raw.path)) throw new Error("Git context command failed");
+        activePath = raw.path;
+        inHunk = false;
+        return;
+      }
+      if (inHunk && (!activePath || !line.startsWith("@@ "))) return;
+      const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (!hunk) return;
+      inHunk = true;
+      if (!activePath) return;
+      const entry = context.get(activePath);
+      entry.beforeRanges.push(patchRange(hunk[1], hunk[2]));
+      entry.ranges.push(patchRange(hunk[3], hunk[4]));
+    };
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--unified=0", "--src-prefix=a/", "--dst-prefix=b/", base, "--", ...batch], signal, (chunk) => {
+      diffBuffer += decoder.write(chunk);
+      for (; ; ) {
+        const newline = diffBuffer.indexOf("\n");
+        if (newline < 0) break;
+        processDiffLine(diffBuffer.slice(0, newline));
+        diffBuffer = diffBuffer.slice(newline + 1);
+      }
+    });
+    diffBuffer += decoder.end();
+    if (diffBuffer) processDiffLine(diffBuffer);
+    if (rawOffset !== rawChanges.length) throw new Error("Git context command failed");
+  }
+  const delivered = /* @__PURE__ */ new Set();
+  const deliver = async (path, before) => {
+    delivered.add(path);
+    if (onBaseline) await onBaseline(path, context.get(path), before);
+  };
+  if (pathsByBlob.size) {
+    let blobBuffer = Buffer.alloc(0);
+    let pending;
+    const finishBlob = async (item) => {
+      const blobPaths = pathsByBlob.get(item.blob) ?? [];
+      if (item.oversized) {
+        for (const path of blobPaths) context.get(path).error = "Oversized base version";
+        for (const path of blobPaths) await deliver(path);
+        return;
+      }
+      const before = Buffer.concat(item.chunks, item.size).toString("utf8");
+      if (before.includes("\0")) for (const path of blobPaths) context.get(path).error = "Binary base version";
+      for (const path of blobPaths) await deliver(path, before.includes("\0") ? void 0 : before);
+    };
+    const consumeBlobs = async () => {
+      for (; ; ) {
+        if (!pending) {
+          const newline = blobBuffer.indexOf(10);
+          if (newline < 0) return;
+          const headerText = blobBuffer.subarray(0, newline).toString("ascii");
+          blobBuffer = blobBuffer.subarray(newline + 1);
+          const header = headerText.match(/^([0-9a-f]+) blob (\d+)$/);
+          if (!header) {
+            const missing = headerText.match(/^([0-9a-f]+) missing$/);
+            if (!missing) throw new Error("Git context command failed");
+            const missingPaths = pathsByBlob.get(missing[1]) ?? [];
+            for (const path of missingPaths) context.get(path).error = "Base version unavailable";
+            for (const path of missingPaths) await deliver(path);
+            continue;
+          }
+          const size = Number(header[2]);
+          if (!Number.isSafeInteger(size) || size < 0) throw new Error("Git context command failed");
+          pending = { blob: header[1], size, remaining: size, chunks: [], oversized: size > MAX_BASELINE_BYTES };
+        }
+        if (pending.remaining) {
+          const available = Math.min(pending.remaining, blobBuffer.length);
+          if (!available) return;
+          if (!pending.oversized) pending.chunks.push(blobBuffer.subarray(0, available));
+          pending.remaining -= available;
+          blobBuffer = blobBuffer.subarray(available);
+          if (pending.remaining) return;
+        }
+        if (!blobBuffer.length) return;
+        if (blobBuffer[0] !== 10) throw new Error("Git context command failed");
+        blobBuffer = blobBuffer.subarray(1);
+        await finishBlob(pending);
+        pending = void 0;
+      }
+    };
+    const input2 = Buffer.from([...pathsByBlob.keys()].map((blob) => `${blob}
+`).join(""));
+    await streamGit(root, ["cat-file", "--batch"], signal, async (chunk) => {
+      blobBuffer = blobBuffer.length ? Buffer.concat([blobBuffer, chunk]) : Buffer.from(chunk);
+      await consumeBlobs();
+    }, input2);
+    await consumeBlobs();
+    if (pending || blobBuffer.length) throw new Error("Git context command failed");
+  }
+  for (const path of context.keys()) if (!delivered.has(path)) await deliver(path);
+  return context;
+}
+var MAX_BASELINE_BYTES;
+var init_git_context = __esm({
+  "src/git-context.ts"() {
+    "use strict";
+    MAX_BASELINE_BYTES = 8 * 1024 * 1024;
   }
 });
 
@@ -42931,166 +43417,570 @@ var init_evidence = __esm({
   }
 });
 
+// src/import-index.ts
+import { lstat as lstat2, realpath as realpath3 } from "node:fs/promises";
+import { isAbsolute as isAbsolute3, relative as relative2, resolve as resolve2 } from "node:path";
+import { posix as posix2 } from "node:path";
+function fingerprintMatches(left, right) {
+  return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
+}
+function inside(root, physical) {
+  const path = relative2(root, physical);
+  return path !== ".." && !path.startsWith("../") && !path.startsWith("..\\") && !isAbsolute3(path);
+}
+async function metadata(root, path, signal) {
+  signal?.throwIfAborted();
+  const absolute = resolve2(root, path);
+  if (!inside(root, absolute)) throw new Error("External path");
+  const logical = await lstat2(absolute);
+  if (logical.isSymbolicLink()) throw new Error("Symlink or external path");
+  const physical = await realpath3(absolute);
+  if (!inside(root, physical)) throw new Error("External path");
+  const current = await lstat2(physical);
+  if (!current.isFile() || current.isSymbolicLink()) throw new Error("Nonregular file");
+  return { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs };
+}
+function interleave(paths, changedPaths) {
+  const changed = new Set(changedPaths);
+  const changedDirectories = new Set(changedPaths.map((path) => posix2.dirname(path)));
+  const changedFirst = paths.filter((path) => changed.has(path));
+  const application = [
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix2.dirname(path)) && !testPath(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix2.dirname(path)) && !testPath(path))
+  ];
+  const tests = [
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix2.dirname(path)) && testPath(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix2.dirname(path)) && testPath(path))
+  ];
+  const result = [...changedFirst];
+  for (let index = 0; index < Math.max(application.length, tests.length); index++) {
+    const applicationPath = application[index];
+    const test = tests[index];
+    if (applicationPath) result.push(applicationPath);
+    if (test) result.push(test);
+  }
+  return result;
+}
+function boundedCache(root, cache) {
+  caches.delete(root);
+  caches.set(root, cache);
+  while (caches.size > MAX_CACHE_ROOTS) caches.delete(caches.keys().next().value);
+}
+function errorDetail(error62) {
+  if (error62 instanceof Error && /Symlink|External path|Nonregular|oversized|secret|Binary|changed during/.test(error62.message)) return error62.message;
+  return "Unreadable file";
+}
+async function bounded(values, stopped, task) {
+  const results = new Array(values.length);
+  let next = 0;
+  const worker = async () => {
+    while (!stopped()) {
+      const index = next++;
+      if (index >= values.length) return;
+      results[index] = await task(values[index]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(INDEX_IO_CONCURRENCY, values.length) }, worker));
+  return results;
+}
+async function buildImportIndex(options) {
+  options.signal?.throwIfAborted();
+  const physicalRoot = await realpath3(options.root);
+  const rootStat = await lstat2(physicalRoot);
+  const rootIdentity = `${physicalRoot}\0${rootStat.dev}\0${rootStat.ino}`;
+  const paths = [...new Set(options.paths)].sort();
+  const universe = paths.join("\0");
+  const known = [...options.known].sort().join("\0");
+  let cache = caches.get(physicalRoot);
+  if (!cache || cache.identity !== rootIdentity || cache.universe !== universe || cache.known !== known) {
+    cache = { identity: rootIdentity, universe, known, entries: /* @__PURE__ */ new Map() };
+  }
+  const deadline = options.discovery ? void 0 : AbortSignal.timeout(options.limits.indexTimeoutMs);
+  const signal = deadline ? options.signal ? AbortSignal.any([options.signal, deadline]) : deadline : options.signal;
+  const stopped = () => {
+    options.signal?.throwIfAborted();
+    return deadline?.aborted ?? false;
+  };
+  const limitations = [];
+  const omissions = /* @__PURE__ */ new Map();
+  const omit2 = (reason, path) => {
+    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
+    entry.count++;
+    if (entry.samples.length < 3) entry.samples.push(path);
+    omissions.set(reason, entry);
+  };
+  const imports = /* @__PURE__ */ new Map();
+  const ordered = interleave(paths, options.changedPaths);
+  const maxFiles = options.limits.maxIndexFiles ?? Number.POSITIVE_INFINITY;
+  const maxBytes = options.limits.maxIndexBytes ?? Number.POSITIVE_INFINITY;
+  const requested = options.discovery?.scannedFiles ?? ordered.length;
+  const requestedPrefix = Math.min(requested, ordered.length);
+  const candidates = ordered.slice(0, Math.min(requestedPrefix, maxFiles));
+  let indexedBytes = 0;
+  let completed = 0;
+  let deadlineReached = false;
+  for (let start = 0; start < candidates.length; start += INDEX_IO_CONCURRENCY) {
+    const batch = candidates.slice(start, start + INDEX_IO_CONCURRENCY);
+    const metadataResults = await bounded(batch, stopped, async (path) => {
+      try {
+        const fingerprint = await metadata(physicalRoot, path, signal);
+        if (stopped()) return { kind: "interrupted" };
+        return { kind: "metadata", fingerprint };
+      } catch (error62) {
+        options.signal?.throwIfAborted();
+        return deadline?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+      }
+    });
+    const slots = /* @__PURE__ */ new Map();
+    let prefix2 = batch.length;
+    for (let index = 0; index < batch.length; index++) {
+      const path = batch[index];
+      const result = metadataResults[index];
+      if (!result || result.kind === "interrupted") {
+        prefix2 = index;
+        deadlineReached = true;
+        break;
+      }
+      if (result.kind === "omitted") {
+        slots.set(path, result);
+        continue;
+      }
+      if (indexedBytes + result.fingerprint.size > maxBytes) {
+        slots.set(path, { kind: "omitted", reason: "byte limit" });
+        continue;
+      }
+      indexedBytes += result.fingerprint.size;
+      const cached2 = cache.entries.get(path);
+      if (cached2 && fingerprintMatches(cached2.fingerprint, result.fingerprint)) {
+        slots.set(path, { kind: "cached", edges: cached2.edges });
+      } else {
+        slots.set(path, { kind: "read", fingerprint: result.fingerprint });
+      }
+    }
+    const reads = batch.slice(0, prefix2).flatMap((path) => {
+      const slot = slots.get(path);
+      return slot?.kind === "read" ? [{ path, fingerprint: slot.fingerprint }] : [];
+    });
+    const readResults = await bounded(reads, stopped, async ({ path, fingerprint }) => {
+      try {
+        const content = await readSource(physicalRoot, path, signal);
+        if (content.includes("\0")) throw new Error("Binary file");
+        if (hasSecret(content)) throw new Error("Potential secret-bearing file");
+        const after = await metadata(physicalRoot, path, signal);
+        if (!fingerprintMatches(fingerprint, after)) throw new Error("File changed during collection");
+        const edges = importsFor(path, content, options.known).sort();
+        if (stopped()) return { kind: "interrupted" };
+        return { kind: "indexed", fingerprint: after, edges };
+      } catch (error62) {
+        options.signal?.throwIfAborted();
+        return deadline?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+      }
+    });
+    const readByPath = new Map(reads.map((entry, index) => [entry.path, readResults[index]]));
+    for (let index = 0; index < prefix2; index++) {
+      const path = batch[index];
+      const slot = slots.get(path);
+      if (slot.kind === "omitted") {
+        cache.entries.delete(path);
+        omit2(slot.reason, path);
+        completed++;
+        continue;
+      }
+      if (slot.kind === "cached") {
+        imports.set(path, [...slot.edges]);
+        completed++;
+        continue;
+      }
+      const result = readByPath.get(path);
+      if (!result || result.kind === "interrupted") {
+        deadlineReached = true;
+        break;
+      }
+      if (result.kind === "omitted") {
+        cache.entries.delete(path);
+        omit2(result.reason, path);
+        completed++;
+        continue;
+      }
+      if (cache.entries.size < MAX_CACHE_ENTRIES || cache.entries.has(path)) {
+        cache.entries.set(path, { fingerprint: result.fingerprint, edges: result.edges });
+      }
+      imports.set(path, [...result.edges]);
+      completed++;
+    }
+    if (deadlineReached) break;
+  }
+  const discovery = options.discovery ? { scannedFiles: Math.min(completed, requestedPrefix), deadlineLimited: options.discovery.deadlineLimited } : { scannedFiles: completed, deadlineLimited: deadlineReached };
+  if (completed === candidates.length && candidates.length < ordered.length && !options.discovery?.deadlineLimited) {
+    limitations.push(`Import index file limit reached: ${completed}/${ordered.length} eligible files scanned.`);
+  }
+  if (discovery.deadlineLimited) limitations.push(`Import index deadline reached: ${imports.size}/${ordered.length} eligible files indexed.`);
+  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
+    limitations.push(`Import index omitted ${count} file(s): ${reason} (${samples.join(", ")}).`);
+  }
+  const incomplete = [
+    { category: "application", indexed: [...imports.keys()].filter((path) => !testPath(path)).length, eligible: paths.filter((path) => !testPath(path)).length },
+    { category: "test", indexed: [...imports.keys()].filter(testPath).length, eligible: paths.filter(testPath).length }
+  ].filter((entry) => entry.indexed < entry.eligible);
+  if (incomplete.length) limitations.push(`Import index coverage is partial: ${incomplete.map((entry) => `${entry.category} ${entry.indexed}/${entry.eligible} files indexed`).join("; ")}.`);
+  const reverse = /* @__PURE__ */ new Map();
+  for (const [path, dependencies] of imports) {
+    for (const dependency of dependencies) {
+      const callers = reverse.get(dependency);
+      if (callers) callers.push(path);
+      else reverse.set(dependency, [path]);
+    }
+  }
+  for (const callers of reverse.values()) callers.sort();
+  boundedCache(physicalRoot, cache);
+  return { imports, reverse, limitations: limitations.sort(), discovery };
+}
+var MAX_CACHE_ROOTS, MAX_CACHE_ENTRIES, caches, testPath, INDEX_IO_CONCURRENCY;
+var init_import_index = __esm({
+  "src/import-index.ts"() {
+    "use strict";
+    init_evidence();
+    init_safety();
+    MAX_CACHE_ROOTS = 8;
+    MAX_CACHE_ENTRIES = 1e5;
+    caches = /* @__PURE__ */ new Map();
+    testPath = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
+    INDEX_IO_CONCURRENCY = 16;
+  }
+});
+
 // src/collector.ts
 import { execFile } from "node:child_process";
+import { realpath as realpath4 } from "node:fs/promises";
+import { posix as posix3, resolve as resolve3 } from "node:path";
 import { promisify } from "node:util";
-import { realpath as realpath3 } from "node:fs/promises";
-import { resolve as resolve2, posix as posix2 } from "node:path";
 async function collect(options) {
-  const signal = AbortSignal.any([AbortSignal.timeout(2e4), ...options.signal ? [options.signal] : []]);
+  const settings = collectionOptionsSchema.parse(options.collection ?? {});
+  const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...options.signal ? [options.signal] : []]);
   const git = async (root2, args) => {
     signal.throwIfAborted();
     return (await exec("git", ["-C", root2, ...args], { maxBuffer: 8 * 1024 * 1024, timeout: 1e4, signal })).stdout;
   };
-  const root = await realpath3((await git(resolve2(options.repo), ["rev-parse", "--show-toplevel"])).trim());
+  const root = await realpath4((await git(resolve3(options.repo), ["rev-parse", "--show-toplevel"])).trim());
   const base = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`])).trim();
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
   const changed = (await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
   const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
   const tracked = (await git(root, ["ls-files", "-z"])).split("\0").filter(Boolean);
-  const basePaths = new Set((await git(root, ["ls-tree", "-r", "--name-only", "-z", base])).split("\0"));
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
-  const paths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort((a, b2) => Number(isTest(a)) - Number(isTest(b2)) || a.localeCompare(b2));
+  const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
-  if (paths.length) limitations.push("Import/caller discovery is heuristic; unresolved imports, aliases, dynamic imports, and external contracts may be missing.");
-  const sources = [];
-  const candidates = [];
-  const originals = /* @__PURE__ */ new Map();
-  let remaining = 6e4;
+  if (changePaths.length) limitations.push("Import/caller discovery is heuristic; unresolved imports, aliases, dynamic imports, and external contracts may be missing.");
   if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
-  async function read(path) {
-    const existing = originals.get(path);
-    if (existing !== void 0) return existing;
-    const value = await readSource(root, path, signal);
-    if (value.includes("\0") || hasSecret(value)) throw new Error("Binary or potential secret-bearing file");
-    originals.set(path, value);
-    return value;
-  }
-  async function load(path, role, targets) {
-    if (sources.some((source) => source.path === path)) return;
-    if (!isSource(path)) {
-      limitations.push(`Unsupported or generated file omitted: ${path}`);
-      return;
+  const loaded = /* @__PURE__ */ new Map();
+  const candidates = [];
+  const candidateIds = /* @__PURE__ */ new Set();
+  const changedSourcePaths = /* @__PURE__ */ new Set();
+  const omissions = /* @__PURE__ */ new Map();
+  const sourceIssues = /* @__PURE__ */ new Map();
+  const recordOmission = (reason, path) => {
+    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
+    entry.count++;
+    if (entry.samples.length < 3) entry.samples.push(path);
+    omissions.set(reason, entry);
+  };
+  const noteSource = (path, message) => {
+    const issues = sourceIssues.get(path) ?? [];
+    if (!issues.includes(message)) issues.push(message);
+    sourceIssues.set(path, issues);
+  };
+  async function load(path, role, targets, change, baseline) {
+    const existing = loaded.get(path);
+    if (existing) {
+      if (role === "changed" && existing.source.role !== "changed") existing.source.role = "changed";
+      return existing.source;
     }
-    if (sources.length >= 16 || remaining < 1e3) {
-      limitations.push(`Context/file budget exhausted: ${path}`);
-      return;
+    if (!isSource(path)) {
+      recordOmission("Unsupported or generated file", path);
+      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      return void 0;
     }
     try {
-      const content = await read(path);
-      let before;
+      const raw = await readSource(root, path, signal);
+      if (raw.includes("\0") || hasSecret(raw)) throw new Error("Binary or potential secret-bearing file");
+      let before = baseline;
       let ranges = targets ?? [{ start: 1, end: 80 }];
       let beforeRanges = ranges;
       if (role === "changed") {
-        if (basePaths.has(path)) before = await git(root, ["show", "--no-ext-diff", "--no-textconv", `${base}:${path}`]);
+        if (change?.error) throw new Error(change.error);
         if (before && hasSecret(before)) throw new Error("Potential secret in base version");
-        const diff = await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--unified=0", base, "--", path]);
-        ranges = untracked.includes(path) ? [{ start: 1, end: content.split("\n").length }] : changedRanges(diff);
-        beforeRanges = [...diff.matchAll(/^@@ -(\d+)(?:,(\d+))? \+/gm)].map((match) => ({ start: Math.max(1, Number(match[1])), end: Math.max(1, Number(match[1]) + Number(match[2] ?? 1) - 1) }));
+        ranges = untracked.includes(path) ? [{ start: 1, end: raw.split("\n").length }] : change?.ranges ?? [];
+        beforeRanges = change?.beforeRanges ?? ranges;
       }
-      const budget = Math.min(12e3, Math.floor(remaining / (before === void 0 ? 1 : 2)));
-      const current = focusSource(content, ranges, options.focus === false ? 6e4 : budget);
-      const old = before === void 0 ? void 0 : focusSource(before, beforeRanges, options.focus === false ? 6e4 : budget);
-      const size = current.content.length + (old?.content.length ?? 0);
-      if (size > remaining) {
-        limitations.push(`Context budget exhausted: ${path}`);
-        return;
-      }
-      const source = {
+      let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
+      let current = focusSource(raw, ranges, excerptBudget);
+      let old = before === void 0 ? void 0 : focusSource(before, beforeRanges, excerptBudget);
+      let source = {
         path,
         role,
         content: current.content,
         ...old ? { before: old.content } : {},
-        evidence: { currentRanges: current.ranges, beforeRanges: old?.ranges, totalLines: current.totalLines, complete: current.complete && (!old || old.complete), digest: hash2([content, before]) }
+        evidence: {
+          currentRanges: current.ranges,
+          beforeRanges: old?.ranges,
+          totalLines: current.totalLines,
+          complete: current.complete && (!old || old.complete),
+          digest: hash2([raw, before])
+        }
       };
-      sources.push(source);
-      remaining -= size;
-      if (!source.evidence.complete) limitations.push(`Focused excerpts only; omitted lines are not reviewed: ${path}`);
-      if (role === "changed" && hasParser(path)) {
-        try {
-          const found = findCandidates(path, content, ranges);
-          const covered = found.filter((candidate) => current.ranges.some((range) => range.start <= candidate.range.start && range.end >= candidate.range.end));
-          candidates.push(...covered);
-          if (covered.length !== found.length) limitations.push(`Candidates outside captured evidence omitted: ${path}`);
-        } catch {
-          limitations.push(`Source could not be parsed; no candidates collected: ${path}`);
+      while ((sourceChars(source) > MAX_PACKET_CHARS || sourceBytes(source) > MAX_PACKET_BYTES) && excerptBudget > 1) {
+        excerptBudget = Math.max(1, Math.floor(excerptBudget / 2));
+        current = focusSource(raw, ranges, excerptBudget);
+        old = before === void 0 ? void 0 : focusSource(before, beforeRanges, excerptBudget);
+        source = {
+          path,
+          role,
+          content: current.content,
+          ...old ? { before: old.content } : {},
+          evidence: {
+            currentRanges: current.ranges,
+            beforeRanges: old?.ranges,
+            totalLines: current.totalLines,
+            complete: current.complete && (!old || old.complete),
+            digest: hash2([raw, before])
+          }
+        };
+      }
+      const names = role === "changed" ? [...raw.matchAll(/(?:def|function|class)\s+([A-Za-z_$][\w$]*)/g)].map((match) => match[1]) : void 0;
+      loaded.set(path, { source, names });
+      if (!source.evidence.complete) noteSource(path, `Focused excerpts only; omitted lines are not reviewed: ${path}`);
+      if (role === "changed" && !ranges.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {
+        noteSource(path, `Changed ranges outside captured evidence omitted: ${path}`);
+      }
+      if (role !== "changed" && targets?.length && !targets.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {
+        noteSource(path, `Relevant support ranges outside captured evidence omitted: ${path}`);
+      }
+      if (role === "changed") {
+        changedSourcePaths.add(path);
+        if (hasParser(path)) {
+          try {
+            const found = findCandidates(path, raw, ranges);
+            const covered = found.filter((candidate) => current.ranges.some((range) => range.start <= candidate.range.start && range.end >= candidate.range.end));
+            for (const candidate of covered) if (!candidateIds.has(candidate.id)) {
+              candidateIds.add(candidate.id);
+              candidates.push(candidate);
+            }
+            if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
+          } catch {
+            noteSource(path, `Source could not be parsed; no candidates collected: ${path}`);
+          }
         }
       }
+      return source;
     } catch (error62) {
       signal.throwIfAborted();
-      const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during/.test(error62.message) ? error62.message : "Deleted or unreadable file";
-      limitations.push(`${message} omitted: ${path}`);
+      const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
+      recordOmission(`${message} omitted`, path);
+      noteSource(path, `${message} omitted: ${path}`);
+      return void 0;
     }
   }
-  for (const path of paths.slice(0, 8)) await load(path, "changed");
-  for (const path of paths.slice(8)) limitations.push(`Changed-file budget exhausted: ${path}`);
-  const changedSources = [...sources];
-  const imports = /* @__PURE__ */ new Map();
-  const indexable = tracked.filter((path) => isSource(path) && (hasParser(path) || path.endsWith(".py"))).sort((a, b2) => Number(isTest(b2)) - Number(isTest(a)) || a.localeCompare(b2));
-  let indexedBytes = 0;
-  for (const path of indexable.slice(0, 200)) {
-    if (indexedBytes > 8e6) {
-      limitations.push("Caller/import discovery stopped at the 8 MB scan budget.");
-      break;
+  const eligibleChanges = [];
+  for (const path of changePaths) {
+    if (!isSource(path)) {
+      recordOmission("Unsupported or generated file", path);
+      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      continue;
     }
     try {
-      const content = await read(path);
-      indexedBytes += Buffer.byteLength(content);
-      imports.set(path, importsFor(path, content, known));
-    } catch {
+      const raw = await readSource(root, path, signal);
+      if (raw.includes("\0") || hasSecret(raw)) throw new Error("Binary or potential secret-bearing file");
+      eligibleChanges.push(path);
+    } catch (error62) {
       signal.throwIfAborted();
+      const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
+      recordOmission(`${message} omitted`, path);
+      noteSource(path, `${message} omitted: ${path}`);
     }
   }
-  if (indexable.length > 200) limitations.push("Caller/import discovery limited to 200 files; the graph is incomplete.");
-  for (const source of changedSources) {
-    const names = [...(originals.get(source.path) ?? "").matchAll(/(?:def|function|class)\s+([A-Za-z_$][\w$]*)/g)].map((match) => match[1]);
-    const reverse = [...imports].filter(([path, dependencies]) => path !== source.path && dependencies.includes(source.path)).map(([path]) => path);
-    const stem = posix2.basename(source.path).replace(/\.[^.]+$/, "");
-    const tests = [.../* @__PURE__ */ new Set([...reverse.filter(isTest), ...tracked.filter((path) => isTest(path) && (posix2.basename(path).startsWith(`test_${stem}.`) || posix2.basename(path).startsWith(`${stem}.test.`) || posix2.basename(path).startsWith(`${stem}.spec.`)))])];
-    const related = [
-      ...tests.slice(0, 2).map((path) => [path, "test"]),
-      ...reverse.filter((path) => !isTest(path)).slice(0, 2).map((path) => [path, "caller"]),
-      ...(imports.get(source.path) ?? importsFor(source.path, originals.get(source.path) ?? "", known)).slice(0, 3).map((path) => [path, "dependency"])
-    ];
-    if ((imports.get(source.path)?.length ?? 0) > 3) limitations.push(`Dependency selection limited: ${source.path}`);
-    if (tests.length > 2 || reverse.filter((path) => !isTest(path)).length > 2) limitations.push(`Related test/caller selection limited: ${source.path}`);
-    for (const [path, role] of related) {
-      let targets = [];
+  await readGitChangeContext({
+    root,
+    base,
+    paths: eligibleChanges,
+    signal,
+    onBaseline: async (path, change, baseline) => {
+      await load(path, "changed", void 0, change, baseline);
+    }
+  });
+  const indexPaths = tracked.filter((path) => isSource(path) && isImportable(path)).sort();
+  const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
+  limitations.push(...index.limitations);
+  const sharedPacketLimitations = [...limitations];
+  const conventionalTests = /* @__PURE__ */ new Map();
+  for (const path of tracked) {
+    if (!isTest(path)) continue;
+    const match = posix3.basename(path).match(/^(?:test_)?(.+?)(?:\.(?:test|spec))?\.[^.]+$/);
+    if (!match) continue;
+    const entries = conventionalTests.get(match[1]) ?? [];
+    entries.push(path);
+    conventionalTests.set(match[1], entries);
+  }
+  for (const paths of conventionalTests.values()) paths.sort();
+  const relatedByChange = /* @__PURE__ */ new Map();
+  const supportNames = /* @__PURE__ */ new Map();
+  for (const path of [...changedSourcePaths].sort()) {
+    const related = /* @__PURE__ */ new Map();
+    for (const candidate of index.reverse.get(path) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, isTest(candidate) ? "test" : "caller");
+    const stem = posix3.basename(path).replace(/\.[^.]+$/, "");
+    for (const candidate of conventionalTests.get(stem) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, "test");
+    for (const candidate of index.imports.get(path) ?? []) if (!changedSourcePaths.has(candidate) && !related.has(candidate)) related.set(candidate, "dependency");
+    const names = loaded.get(path)?.names ?? [];
+    for (const relatedPath of related.keys()) {
+      const targetNames = supportNames.get(relatedPath) ?? /* @__PURE__ */ new Set();
+      for (const name of names) targetNames.add(name);
+      supportNames.set(relatedPath, targetNames);
+    }
+    relatedByChange.set(path, related);
+  }
+  const packets = [];
+  const sourceByPath = new Map([...loaded].map(([path, item]) => [path, item.source]));
+  const primaryPaths = [...changedSourcePaths].sort();
+  const batches = [];
+  let batch = [];
+  let batchChars = 0;
+  let batchBytes = 2;
+  for (const path of primaryPaths) {
+    const source = sourceByPath.get(path);
+    const nextChars = batchChars + sourceChars(source);
+    const nextBytes = batchBytes + sourceBytes(source) + (batch.length ? 1 : 0);
+    if (batch.length && (batch.length >= MAX_PACKET_CHANGED || nextChars > PRIMARY_TARGET_CHARS || nextBytes > PRIMARY_TARGET_BYTES)) {
+      batches.push(batch);
+      batch = [];
+      batchChars = 0;
+      batchBytes = 2;
+    }
+    batch.push(path);
+    batchChars += sourceChars(source);
+    batchBytes += sourceBytes(source) + (batch.length > 1 ? 1 : 0);
+  }
+  if (batch.length || !primaryPaths.length) batches.push(batch);
+  for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+    const primary = batches[batchIndex];
+    const packetLimitations2 = [...sharedPacketLimitations];
+    const paths = [];
+    let chars = 0;
+    let bytes = 2;
+    const add = (path, required2) => {
+      const source = sourceByPath.get(path);
+      if (!source || paths.includes(path)) return true;
+      const nextChars = chars + sourceChars(source);
+      const nextBytes = bytes + sourceBytes(source) + (paths.length ? 1 : 0);
+      if (nextChars > MAX_PACKET_CHARS || nextBytes > MAX_PACKET_BYTES || paths.length >= MAX_PACKET_FILES) {
+        if (required2) packetLimitations2.push(`Changed excerpt exceeds packet budget: ${path}`);
+        else packetLimitations2.push(`Context omitted by packet budget: ${path}`);
+        return false;
+      }
+      paths.push(path);
+      chars = nextChars;
+      bytes = nextBytes;
+      return true;
+    };
+    for (const path of primary) {
+      if (!add(path, true)) throw new Error(`Focused changed evidence cannot fit packet: ${path}`);
+      packetLimitations2.push(...sourceIssues.get(path) ?? []);
+    }
+    const relatedRoles = ["test", "caller", "dependency"];
+    const relatedQueues = primary.map((path) => relatedRoles.map((role) => [...relatedByChange.get(path) ?? []].filter(([, relatedRole]) => relatedRole === role).sort(([left], [right]) => left.localeCompare(right))));
+    const related = [];
+    const queuedRelated = /* @__PURE__ */ new Set();
+    for (let offset = 0; ; offset++) {
+      let queuedAtOffset = false;
+      for (const queues of relatedQueues) for (const queue of queues) {
+        const entry = queue[offset];
+        if (!entry) continue;
+        queuedAtOffset = true;
+        if (!queuedRelated.has(entry[0])) {
+          queuedRelated.add(entry[0]);
+          related.push(entry);
+        }
+      }
+      if (!queuedAtOffset) break;
+    }
+    let attempted = 0;
+    for (const [relatedPath, role] of related) {
+      if (paths.length >= MAX_PACKET_FILES || attempted >= MAX_PACKET_FILES) {
+        packetLimitations2.push("Additional related context omitted by packet file budget.");
+        break;
+      }
+      attempted++;
+      let targets;
       try {
-        targets = symbolRanges(await read(path), names);
+        const relatedRaw = await readSource(root, relatedPath, signal);
+        if (!relatedRaw.includes("\0") && !hasSecret(relatedRaw)) {
+          const ranges = symbolRanges(relatedRaw, [...supportNames.get(relatedPath) ?? []]);
+          targets = ranges.length ? ranges : void 0;
+        }
       } catch {
         signal.throwIfAborted();
       }
-      await load(path, role, targets.length ? targets : void 0);
+      const wasLoaded = loaded.has(relatedPath);
+      const source = await load(relatedPath, role, targets);
+      if (source) sourceByPath.set(relatedPath, source);
+      if (source && add(relatedPath, false)) {
+        packetLimitations2.push(...sourceIssues.get(relatedPath) ?? []);
+      } else if (source && !wasLoaded) {
+        sourceByPath.delete(relatedPath);
+        loaded.delete(relatedPath);
+        sourceIssues.delete(relatedPath);
+      } else if (!source) {
+        packetLimitations2.push(...sourceIssues.get(relatedPath) ?? []);
+      }
+    }
+    const packetCandidates = candidates.filter((candidate) => primary.includes(candidate.path)).map((candidate) => candidate.id);
+    packets.push({ id: hash2({ primary, paths, packetLimitations: packetLimitations2 }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations2 });
+  }
+  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
+    limitations.push(`Collection omitted ${count} file(s): ${reason} (${samples.join(", ")}).`);
+  }
+  const sourceIssueCounts = /* @__PURE__ */ new Map();
+  for (const path of sourceByPath.keys()) {
+    for (const issue2 of sourceIssues.get(path) ?? []) {
+      const reason = issue2.replace(/: [^:]+$/, "");
+      const entry = sourceIssueCounts.get(reason) ?? { count: 0, samples: [] };
+      entry.count++;
+      if (entry.samples.length < 3) entry.samples.push(path);
+      sourceIssueCounts.set(reason, entry);
     }
   }
-  if (candidates.length > 40) limitations.push(`${candidates.length - 40} candidates omitted by the 40-candidate budget.`);
+  for (const [reason, { count, samples }] of [...sourceIssueCounts].sort(([left], [right]) => left.localeCompare(right))) {
+    limitations.push(`Collected source limitation for ${count} file(s): ${reason} (${samples.join(", ")}).`);
+  }
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
+  const sources = [...sourceByPath.values()].sort((a, b2) => a.path.localeCompare(b2.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  return {
-    schemaVersion: 1,
-    root,
-    base,
-    head,
-    sources,
-    candidates: candidates.slice(0, 40),
-    limitations,
-    ...context,
-    snapshot: hash2({ root, base, head, sources, candidates: candidates.slice(0, 40), limitations, ...context })
-  };
+  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
+  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
-var exec, hasParser, isTest, isSource;
+var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, isSource, sourceChars, sourceBytes;
 var init_collector = __esm({
   "src/collector.ts"() {
     "use strict";
     init_checks3();
+    init_collection_options();
     init_domain();
-    init_safety();
+    init_git_context();
     init_evidence();
+    init_import_index();
+    init_safety();
     exec = promisify(execFile);
+    MAX_PACKET_CHARS = 6e4;
+    MAX_PACKET_BYTES = 8e4;
+    MAX_PACKET_FILES = 16;
+    MAX_PACKET_CHANGED = 8;
+    SOURCE_EXCERPT_CHARS = 12e3;
     hasParser = (path) => /\.(?:[cm]?[jt]sx?)$/.test(path);
+    PRIMARY_TARGET_CHARS = 3e4;
+    PRIMARY_TARGET_BYTES = 4e4;
+    isImportable = (path) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
     isTest = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
     isSource = (path) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path) && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path) && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
+    sourceChars = (source) => source.content.length + (source.before?.length ?? 0);
+    sourceBytes = (source) => Buffer.byteLength(JSON.stringify(source));
   }
 });
 
@@ -46708,14 +47598,14 @@ function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
 }
 function sleep(ms, signal) {
-  return new Promise((resolve4, reject) => {
+  return new Promise((resolve5, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof SdkError ? signal.reason : new SdkError(SdkErrorCode.RequestTimeout, String(signal.reason)));
       return;
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
-      resolve4();
+      resolve5();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
@@ -47417,8 +48307,8 @@ var init_src_CX2iR2pK = __esm({
         if (rawResultType === "input_required") {
           const rawInputRequests = raw["inputRequests"];
           const inputRequests = isPlainObject$4(rawInputRequests) ? rawInputRequests : {};
-          const requestState = raw["requestState"];
-          if (Object.keys(inputRequests).length === 0 && typeof requestState !== "string") return {
+          const requestState2 = raw["requestState"];
+          if (Object.keys(inputRequests).length === 0 && typeof requestState2 !== "string") return {
             kind: "invalid",
             error: new SdkError(SdkErrorCode.InvalidResult, `Invalid result for ${method}: input_required carries neither inputRequests nor requestState (every input_required result must include at least one of the two)`, {
               method,
@@ -47428,7 +48318,7 @@ var init_src_CX2iR2pK = __esm({
           return {
             kind: "input_required",
             inputRequests,
-            ...typeof requestState === "string" && { requestState }
+            ...typeof requestState2 === "string" && { requestState: requestState2 }
           };
         }
         if (rawResultType !== "complete") return {
@@ -48507,7 +49397,7 @@ var init_src_CX2iR2pK = __esm({
         const flowStartedAt = Date.now();
         let onAbort;
         let cleanupMessageId;
-        return new Promise((resolve4, reject) => {
+        return new Promise((resolve5, reject) => {
           const earlyReject = (error62) => {
             reject(error62);
           };
@@ -48575,7 +49465,7 @@ var init_src_CX2iR2pK = __esm({
             }
             if (decoded.kind === "invalid") return reject(decoded.error);
             if (decoded.kind === "input_required") {
-              if (options?.allowInputRequired === true) return resolve4(manualInputRequiredValue(decoded));
+              if (options?.allowInputRequired === true) return resolve5(manualInputRequiredValue(decoded));
               const flow2 = {
                 codec: codec2,
                 request,
@@ -48587,11 +49477,11 @@ var init_src_CX2iR2pK = __esm({
                   params
                 }, resultSchema, legOptions)
               };
-              return resolve4(this._resolveNonCompleteResult(decoded, flow2));
+              return resolve5(this._resolveNonCompleteResult(decoded, flow2));
             }
             const result = decoded.result;
             validateStandardSchema(resultSchema, result).then((parseResult) => {
-              if (parseResult.success) resolve4(parseResult.data);
+              if (parseResult.success) resolve5(parseResult.data);
               else reject(new SdkError(SdkErrorCode.InvalidResult, `Invalid result for ${request.method}: ${parseResult.error}`));
             }, reject);
           });
@@ -51407,7 +52297,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
         const schOrFunc = root.refs[ref];
         if (schOrFunc) return schOrFunc;
-        let _sch = resolve4.call(this, root, ref);
+        let _sch = resolve5.call(this, root, ref);
         if (_sch === void 0) {
           const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
           const { schemaId } = this.opts;
@@ -51433,7 +52323,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       function sameSchemaEnv(s1, s2) {
         return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
       }
-      function resolve4(root, ref) {
+      function resolve5(root, ref) {
         let sch;
         while (typeof (sch = this.refs[ref]) == "string") ref = sch;
         return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
@@ -51883,47 +52773,47 @@ var init_ajvProvider_CEoC_sr = __esm({
         else if (typeof uri === "object") uri = parse4(serialize(uri, options), options);
         return uri;
       }
-      function resolve4(baseURI, relativeURI, options) {
+      function resolve5(baseURI, relativeURI, options) {
         const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
         const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
         schemelessOptions.skipEscape = true;
         return serialize(resolved, schemelessOptions);
       }
-      function resolveComponent(base, relative2, options, skipNormalization) {
+      function resolveComponent(base, relative3, options, skipNormalization) {
         const target = {};
         if (!skipNormalization) {
           base = parse4(serialize(base, options), options);
-          relative2 = parse4(serialize(relative2, options), options);
+          relative3 = parse4(serialize(relative3, options), options);
         }
         options = options || {};
-        if (!options.tolerant && relative2.scheme) {
-          target.scheme = relative2.scheme;
-          target.userinfo = relative2.userinfo;
-          target.host = relative2.host;
-          target.port = relative2.port;
-          target.path = removeDotSegments(relative2.path || "");
-          target.query = relative2.query;
+        if (!options.tolerant && relative3.scheme) {
+          target.scheme = relative3.scheme;
+          target.userinfo = relative3.userinfo;
+          target.host = relative3.host;
+          target.port = relative3.port;
+          target.path = removeDotSegments(relative3.path || "");
+          target.query = relative3.query;
         } else {
-          if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
-            target.userinfo = relative2.userinfo;
-            target.host = relative2.host;
-            target.port = relative2.port;
-            target.path = removeDotSegments(relative2.path || "");
-            target.query = relative2.query;
+          if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
+            target.userinfo = relative3.userinfo;
+            target.host = relative3.host;
+            target.port = relative3.port;
+            target.path = removeDotSegments(relative3.path || "");
+            target.query = relative3.query;
           } else {
-            if (!relative2.path) {
+            if (!relative3.path) {
               target.path = base.path;
-              if (relative2.query !== void 0) target.query = relative2.query;
+              if (relative3.query !== void 0) target.query = relative3.query;
               else target.query = base.query;
             } else {
-              if (relative2.path[0] === "/") target.path = removeDotSegments(relative2.path);
+              if (relative3.path[0] === "/") target.path = removeDotSegments(relative3.path);
               else {
-                if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative2.path;
-                else if (!base.path) target.path = relative2.path;
-                else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
+                if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative3.path;
+                else if (!base.path) target.path = relative3.path;
+                else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
                 target.path = removeDotSegments(target.path);
               }
-              target.query = relative2.query;
+              target.query = relative3.query;
             }
             target.userinfo = base.userinfo;
             target.host = base.host;
@@ -51931,7 +52821,7 @@ var init_ajvProvider_CEoC_sr = __esm({
           }
           target.scheme = base.scheme;
         }
-        target.fragment = relative2.fragment;
+        target.fragment = relative3.fragment;
         return target;
       }
       function equal(uriA, uriB, options) {
@@ -52057,7 +52947,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const fastUri = {
         SCHEMES,
         normalize,
-        resolve: resolve4,
+        resolve: resolve5,
         resolveComponent,
         equal,
         serialize,
@@ -54908,7 +55798,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const content = require_content$1();
       const core = require_core$1();
       const format = require_format();
-      const metadata = require_meta_data$1();
+      const metadata2 = require_meta_data$1();
       const validation = require_validation$1();
       const META_SUPPORT_DATA = ["/properties"];
       function addMetaSchema2019($data) {
@@ -54918,7 +55808,7 @@ var init_ajvProvider_CEoC_sr = __esm({
           content,
           core,
           with$data(this, format),
-          metadata,
+          metadata2,
           with$data(this, validation)
         ].forEach((sch) => this.addMetaSchema(sch, void 0, false));
         return this;
@@ -55358,7 +56248,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const content = require_content();
       const core = require_core();
       const format = require_format_annotation();
-      const metadata = require_meta_data();
+      const metadata2 = require_meta_data();
       const validation = require_validation();
       const META_SUPPORT_DATA = ["/properties"];
       function addMetaSchema2020($data) {
@@ -55369,7 +56259,7 @@ var init_ajvProvider_CEoC_sr = __esm({
           content,
           core,
           with$data(this, format),
-          metadata,
+          metadata2,
           with$data(this, validation)
         ].forEach((sch) => this.addMetaSchema(sch, void 0, false));
         return this;
@@ -55965,8 +56855,8 @@ var init_mcp_DXXb3Vv3 = __esm({
           if (round > maxRounds) return legacyShimFailure(method, inputRequiredRoundsExceededMessage(method, maxRounds));
           const inputRequests = current.inputRequests;
           const hasInputRequests = inputRequests != null && Object.keys(inputRequests).length > 0;
-          const requestState = typeof current.requestState === "string" ? current.requestState : void 0;
-          if (!hasInputRequests && requestState === void 0) throw new ProtocolError(ProtocolErrorCode.InternalError, `Handler for ${method} returned an input-required result with neither inputRequests nor requestState (every InputRequiredResult must include at least one of the two)`);
+          const requestState2 = typeof current.requestState === "string" ? current.requestState : void 0;
+          if (!hasInputRequests && requestState2 === void 0) throw new ProtocolError(ProtocolErrorCode.InternalError, `Handler for ${method} returned an input-required result with neither inputRequests nor requestState (every InputRequiredResult must include at least one of the two)`);
           let responses;
           if (hasInputRequests) {
             const declared = this._host.resolvedClientCapabilities(ctx);
@@ -56009,11 +56899,11 @@ var init_mcp_DXXb3Vv3 = __esm({
               ...ctx.mcpReq,
               inputResponses: responses,
               droppedInputResponseKeys: void 0,
-              requestState: requestStateAccessor(requestState)
+              requestState: requestStateAccessor(requestState2)
             }
           };
-          if (requestState !== void 0) {
-            const decoded = await this._host.verifyRequestState(requestState, ctxNext, method);
+          if (requestState2 !== void 0) {
+            const decoded = await this._host.verifyRequestState(requestState2, ctxNext, method);
             if (decoded !== void 0) ctxNext = withRequestStateValue(ctxNext, decoded);
           }
           const next = await handler(request, ctxNext);
@@ -56914,34 +57804,34 @@ var init_mcp_DXXb3Vv3 = __esm({
       }
       registerResource(name, uriOrTemplate, config2, readCallback) {
         const cacheHint = config2.cacheHint;
-        let metadata = config2;
+        let metadata2 = config2;
         if (cacheHint !== void 0) {
           assertValidCacheHint(cacheHint, `resource ${name}`);
           const rest = { ...config2 };
           delete rest.cacheHint;
-          metadata = rest;
+          metadata2 = rest;
         }
         if (typeof uriOrTemplate === "string") {
           if (this._registeredResources[uriOrTemplate]) throw new Error(`Resource ${uriOrTemplate} is already registered`);
-          const registeredResource = this._createRegisteredResource(name, config2.title, uriOrTemplate, metadata, readCallback);
+          const registeredResource = this._createRegisteredResource(name, config2.title, uriOrTemplate, metadata2, readCallback);
           if (cacheHint !== void 0) registeredResource.cacheHint = cacheHint;
           this.setResourceRequestHandlers();
           this.sendResourceListChanged();
           return registeredResource;
         } else {
           if (this._registeredResourceTemplates[name]) throw new Error(`Resource template ${name} is already registered`);
-          const registeredResourceTemplate = this._createRegisteredResourceTemplate(name, config2.title, uriOrTemplate, metadata, readCallback);
+          const registeredResourceTemplate = this._createRegisteredResourceTemplate(name, config2.title, uriOrTemplate, metadata2, readCallback);
           if (cacheHint !== void 0) registeredResourceTemplate.cacheHint = cacheHint;
           this.setResourceRequestHandlers();
           this.sendResourceListChanged();
           return registeredResourceTemplate;
         }
       }
-      _createRegisteredResource(name, title, uri, metadata, readCallback) {
+      _createRegisteredResource(name, title, uri, metadata2, readCallback) {
         const registeredResource = {
           name,
           title,
-          metadata,
+          metadata: metadata2,
           readCallback,
           enabled: true,
           disable: () => registeredResource.update({ enabled: false }),
@@ -56963,11 +57853,11 @@ var init_mcp_DXXb3Vv3 = __esm({
         this._registeredResources[uri] = registeredResource;
         return registeredResource;
       }
-      _createRegisteredResourceTemplate(name, title, template, metadata, readCallback) {
+      _createRegisteredResourceTemplate(name, title, template, metadata2, readCallback) {
         const registeredResourceTemplate = {
           resourceTemplate: template,
           title,
-          metadata,
+          metadata: metadata2,
           readCallback,
           enabled: true,
           disable: () => registeredResourceTemplate.update({ enabled: false }),
@@ -57256,7 +58146,7 @@ var init_stdio = __esm({
       }
       send(message) {
         if (this._closed) return Promise.reject(/* @__PURE__ */ new Error("StdioServerTransport is closed"));
-        return new Promise((resolve4, reject) => {
+        return new Promise((resolve5, reject) => {
           const json2 = serializeMessage(message);
           let settled = false;
           const onError = (error62) => {
@@ -57271,14 +58161,14 @@ var init_stdio = __esm({
             settled = true;
             this._stdout.off("error", onError);
             this._stdout.off("drain", onDrain);
-            resolve4();
+            resolve5();
           };
           this._stdout.once("error", onError);
           if (this._stdout.write(json2)) {
             if (settled) return;
             settled = true;
             this._stdout.off("error", onError);
-            resolve4();
+            resolve5();
           } else if (!settled) this._stdout.once("drain", onDrain);
         });
       }
@@ -57292,19 +58182,35 @@ __export(mcp_exports, {
   createServer: () => createServer,
   serve: () => serve
 });
-import { realpath as realpath4 } from "node:fs/promises";
+import { realpath as realpath5 } from "node:fs/promises";
 function createServer(repo, evaluatorFactory) {
-  const server = new McpServer({ name: "tracecheck", version: "0.2.0" });
+  const server = new McpServer({ name: "tracecheck", version: releaseVersion });
   const cache = /* @__PURE__ */ new Map();
+  const previewScopes = /* @__PURE__ */ new Map();
+  const rememberPreview = (snapshot, discovery) => {
+    const now = Date.now();
+    for (const [key, entry] of previewScopes) if (entry.expires <= now) previewScopes.delete(key);
+    if (!previewScopes.has(snapshot) && previewScopes.size >= CACHE_LIMIT) previewScopes.delete(previewScopes.keys().next().value);
+    previewScopes.set(snapshot, { expires: now + CACHE_TTL_MS, discovery });
+  };
+  const previewScope = (snapshot) => {
+    const entry = previewScopes.get(snapshot);
+    if (!entry || entry.expires <= Date.now()) {
+      previewScopes.delete(snapshot);
+      throw new Error("Preview snapshot is unknown or expired. Run tracecheck_preview again.");
+    }
+    return entry.discovery;
+  };
   const scope = {
     repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
     base: external_exports.string().min(1).default("HEAD").describe("Git baseline; the working tree is compared against this commit."),
     includeUntracked: external_exports.boolean().default(false),
     task: external_exports.string().min(1).optional(),
-    repositoryContext: external_exports.string().min(1).optional()
+    repositoryContext: external_exports.string().min(1).optional(),
+    collection: collectionOptionsSchema.optional().describe("Bounded local collection settings. Matching settings are required when reviewing a preview snapshot.")
   };
   const target = async (requested) => {
-    if (repo && requested && await realpath4(repo) !== await realpath4(requested)) throw new Error("This server is bound to a different repository.");
+    if (repo && requested && await realpath5(repo) !== await realpath5(requested)) throw new Error("This server is bound to a different repository.");
     if (!repo && !requested) throw new Error("Supply repo or launch the server with --repo.");
     return repo ?? requested;
   };
@@ -57329,23 +58235,47 @@ function createServer(repo, evaluatorFactory) {
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_preview", {
-    description: "Collect bounded source context for broad quality review and JS/TS source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.",
+    description: "Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.",
     inputSchema: external_exports.object(scope),
-    outputSchema: external_exports.object({ snapshot: external_exports.string(), files: external_exports.array(external_exports.object({ path: external_exports.string(), role: external_exports.string(), characters: external_exports.number() })), candidates: external_exports.number(), limitations: external_exports.array(external_exports.string()) }),
+    outputSchema: external_exports.object({
+      snapshot: external_exports.string(),
+      packets: external_exports.array(external_exports.object({ id: external_exports.string(), changedPaths: external_exports.array(external_exports.string()) })),
+      files: external_exports.array(external_exports.object({ path: external_exports.string(), role: external_exports.string(), characters: external_exports.number() })),
+      candidates: external_exports.number(),
+      limitations: external_exports.array(external_exports.string())
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async (args, ctx) => {
     const plan = await collect({ ...args, repo: await target(args.repo), signal: ctx.mcpReq.signal });
-    const output2 = { snapshot: plan.snapshot, files: plan.sources.map((source) => ({ path: source.path, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })), candidates: plan.candidates.length, limitations: plan.limitations };
+    if (!plan.discovery) throw new Error("Collection did not produce a discovery scope. Run tracecheck_preview again.");
+    rememberPreview(plan.snapshot, plan.discovery);
+    const output2 = {
+      snapshot: plan.snapshot,
+      packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
+      files: plan.sources.map((source) => ({ path: source.path, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
+      candidates: plan.candidates.length,
+      limitations: plan.limitations
+    };
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_review", {
-    description: "Review the previewed snapshot across all 19 quality dimensions plus source-anchored checks using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation adds quality deltas. Never edits or executes code.",
-    inputSchema: external_exports.object({ ...scope, previousEvaluation: qualityEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
+    description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
+    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.describe("Maximum review duration in milliseconds."), previousEvaluation: qualityEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(9e4)]);
-    const plan = await collect({ ...args, repo: await target(args.repo), signal });
+    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(args.reviewTimeoutMs)]);
+    const root = await target(args.repo);
+    const discovery = previewScope(args.snapshot);
+    const collectionRequest = {
+      repo: args.repo,
+      base: args.base,
+      includeUntracked: args.includeUntracked,
+      task: args.task,
+      repositoryContext: args.repositoryContext,
+      collection: args.collection
+    };
+    const plan = await collect({ ...collectionRequest, repo: root, discovery, signal });
     if (plan.snapshot !== args.snapshot) throw new Error("Repository context changed since preview. Run tracecheck_preview again.");
     const model = process.env.JEV_MODEL ?? "jev-latest";
     const key = `${plan.root}:${plan.snapshot}:${model}`;
@@ -57353,14 +58283,15 @@ function createServer(repo, evaluatorFactory) {
     const cached2 = Boolean(existing && existing.expires > Date.now());
     const report = cached2 ? existing.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model, signal }), { signal });
     signal.throwIfAborted();
-    const current = await collect({ ...args, repo: plan.root, signal });
+    const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
     if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
     if (!cached2) {
-      if (cache.size >= 16) cache.delete(cache.keys().next().value);
-      cache.set(key, { expires: Date.now() + 3e5, report });
+      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
+      cache.set(key, { expires: Date.now() + CACHE_TTL_MS, report });
     }
     const compared = structuredClone(report);
     if (compared.quality) compared.quality = compareQuality(compared.quality, args.previousEvaluation);
+    else if (args.previousEvaluation && compared.packetQualities?.length) compared.limitations.push("Previous evaluation comparisons apply only to a single-packet quality result; no repository-wide comparison was performed.");
     const output2 = { cached: cached2, report: compared };
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
@@ -57376,6 +58307,7 @@ async function serve(repo) {
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
 }
+var releaseVersion, CACHE_LIMIT, CACHE_TTL_MS;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -57388,6 +58320,10 @@ var init_mcp = __esm({
     init_review();
     init_quality();
     init_schema();
+    init_collection_options();
+    releaseVersion = true ? "0.3.0-rc.1" : createRequire(import.meta.url)("../package.json").version;
+    CACHE_LIMIT = 16;
+    CACHE_TTL_MS = 3e5;
   }
 });
 
@@ -57399,7 +58335,7 @@ init_review();
 init_quality();
 import { parseArgs } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve as resolve3 } from "node:path";
+import { dirname, resolve as resolve4 } from "node:path";
 
 // src/history.ts
 function compare(previous, current) {
@@ -57419,6 +58355,22 @@ function compare(previous, current) {
 
 // src/cli.ts
 init_schema();
+init_collection_options();
+function positiveSafeInteger(value, flag) {
+  if (value === void 0) return void 0;
+  if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive safe integer.`);
+  return parsed;
+}
+function collectionOptions(values) {
+  return collectionOptionsSchema.parse({
+    maxIndexFiles: positiveSafeInteger(values["index-max-files"], "--index-max-files"),
+    maxIndexBytes: positiveSafeInteger(values["index-max-bytes"], "--index-max-bytes"),
+    indexTimeoutMs: positiveSafeInteger(values["index-timeout-ms"], "--index-timeout-ms"),
+    collectionTimeoutMs: positiveSafeInteger(values["collection-timeout-ms"], "--collection-timeout-ms")
+  });
+}
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
     repo: { type: "string" },
@@ -57431,30 +58383,40 @@ async function main() {
     help: { type: "boolean", short: "h" },
     input: { type: "string" },
     task: { type: "string" },
-    context: { type: "string" }
+    context: { type: "string" },
+    "index-max-files": { type: "string" },
+    "index-max-bytes": { type: "string" },
+    "index-timeout-ms": { type: "string" },
+    "collection-timeout-ms": { type: "string" },
+    "review-timeout-ms": { type: "string" }
   } });
   const command = positionals[0];
   if (values.help || !command) {
     console.log(`Tracecheck \u2014 evidence-backed review powered by Jev
 
-  tracecheck preview --repo PATH [--base HEAD] [--include-untracked] [--json]
-  tracecheck review  --repo PATH [--base HEAD] [--json] [--out report.json]
+  tracecheck preview --repo PATH [--base HEAD] [--include-untracked] [collection limits] [--json]
+  tracecheck review  --repo PATH [--base HEAD] [collection limits] [--review-timeout-ms N] [--json] [--out report.json]
   tracecheck verify  --input evidence.json [--repo PATH] [--out result.json]
   tracecheck assess  --input context.json [--previous evaluation.json] [--out evaluation.json]
   tracecheck compare --previous old.json --current current.json
   tracecheck mcp     --repo PATH
 
-Preview is local. Review sends bounded source context to TypeSafe and requires
+Collection limits: --index-max-files N, --index-max-bytes N,
+--index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
+All values are positive safe integers. Review timeout defaults to 300000 ms.
+
+Preview is local. Review sends bounded evidence for all change packets to TypeSafe and requires
 JEV_API_KEY or TYPESAFE_API_KEY. Optional JEV_MODEL selects the model (default: jev-latest).
 Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
-Broad review covers 19 quality dimensions in any supplied language. Automatic
+Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
+Packet evidence is bounded and does not establish repository-wide semantic completeness.
 Use --task and --context to supply requirements and repository facts.`);
     return;
   }
   if (command === "mcp") {
     const { serve: serve2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-    await serve2(values.repo ? resolve3(values.repo) : void 0);
+    await serve2(values.repo ? resolve4(values.repo) : void 0);
     return;
   }
   if (command === "compare") {
@@ -57468,11 +58430,11 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error("verify requires --input evidence.json");
     const controller2 = new AbortController();
     process.once("SIGINT", () => controller2.abort());
-    const signal2 = AbortSignal.any([controller2.signal, AbortSignal.timeout(9e4)]);
+    const signal = AbortSignal.any([controller2.signal, AbortSignal.timeout(9e4)]);
     const input2 = JSON.parse(await readFile(values.input, "utf8"));
-    const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal: signal2 }), signal2);
+    const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal }), signal);
     if (values.out) {
-      await mkdir(dirname(resolve3(values.out)), { recursive: true });
+      await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(output2, null, 2) + "\n", { mode: 384 });
     }
     console.log(JSON.stringify(output2, null, 2));
@@ -57485,7 +58447,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (values.previous) input2.previousEvaluation = qualityEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
     const evaluation = await assess(input2, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL }));
     if (values.out) {
-      await mkdir(dirname(resolve3(values.out)), { recursive: true });
+      await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });
     }
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
@@ -57494,23 +58456,38 @@ Use --task and --context to supply requirements and repository facts.`);
   if (!["preview", "review"].includes(command)) throw new Error(`Unknown command: ${command}`);
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
-  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(9e4)]);
-  const plan = await collect({ repo: values.repo ?? ".", base: values.base, includeUntracked: values["include-untracked"], task: values.task, repositoryContext: values.context, signal });
+  const collection = collectionOptions(values);
+  const reviewTimeoutMs = reviewTimeoutSchema.parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms"));
+  const collectionRequest = {
+    base: values.base,
+    includeUntracked: values["include-untracked"],
+    task: values.task,
+    repositoryContext: values.context,
+    collection
+  };
+  const plan = await collect({ repo: values.repo ?? ".", ...collectionRequest, signal: controller.signal });
   if (command === "preview") {
+    const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)
 Snapshot: ${plan.snapshot}
-${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
+${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
+Review implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.
+${packets}
 ${plan.sources.map((source) => `${source.role}: ${source.path}`).join("\n")}
 ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     return;
   }
-  const previous = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))).quality : void 0;
-  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal }), { signal, previousEvaluation: previous });
-  signal.throwIfAborted();
-  const current = await collect({ repo: plan.root, base: values.base, includeUntracked: values["include-untracked"], task: values.task, repositoryContext: values.context, signal });
+  const reviewSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(reviewTimeoutMs)]);
+  if (values.previous && plan.packets.length > 1) throw new Error("Previous evaluation comparison is supported only for a single change packet.");
+  const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))) : void 0;
+  if (values.previous && !previousReport?.quality) throw new Error("Previous report has no single-packet quality evaluation to compare.");
+  const previous = previousReport?.quality;
+  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
+  reviewSignal.throwIfAborted();
+  const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
   if (values.out) {
-    const destination = resolve3(values.out);
+    const destination = resolve4(values.out);
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, JSON.stringify(report, null, 2) + "\n", { mode: 384 });
   }

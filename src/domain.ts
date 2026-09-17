@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import type { QualityEvaluation } from './quality.js';
 
 export const CHECK_VERSION = '1';
 export const POLICY_VERSION = '2';
@@ -10,9 +11,14 @@ export type Candidate = {
   id: string; check: string; path: string; symbol: string; range: Range;
   quote: string; hypothesis: string; verification: string;
 };
+export type ReviewPacket = {
+  id: string; changedPaths: string[]; sourcePaths: string[]; candidateIds: string[]; limitations: string[];
+};
+export type DiscoveryScope = { scannedFiles: number; deadlineLimited: boolean };
 export type ReviewPlan = {
   schemaVersion: 1; root: string; base: string; head: string; snapshot: string;
-  sources: Source[]; candidates: Candidate[]; limitations: string[];
+  sources: Source[]; candidates: Candidate[]; packets: ReviewPacket[]; limitations: string[];
+  discovery?: DiscoveryScope;
   task?: string; repositoryContext?: string;
 };
 export type Choice = { type: 'choice'; instructions: string; criteria: Record<string, string> };
@@ -43,6 +49,7 @@ export type Report = {
   checkVersion: string; policyVersion: string; models: string[];
   status: 'needs_attention' | 'inconclusive' | 'no_findings';
   decisions: Decision[]; limitations: string[];
-  quality?: import('./quality.js').QualityEvaluation;
+  quality?: QualityEvaluation;
+  packetQualities?: { packetId: string; changedPaths: string[]; evaluation: QualityEvaluation }[];
   usage: { inputTokens: number; outputTokens: number; requests: number; elapsedMs: number };
 };

@@ -23,9 +23,11 @@ if (!values.live) {
     for (const mode of index % 2 ? ['focused', 'full'] as const : ['full', 'focused'] as const) {
       const content = item[mode];
       const snapshot = hash({ content, contract: item.contract, hypothesis: item.hypothesis });
+      const candidateId = hash([item.family, item.quote]).slice(0, 16);
       const plan: ReviewPlan = { schemaVersion: 1, root: '/benchmark-subject', base: item.revision, head: data.revision, snapshot,
         sources: [{ path: item.path, content, role: 'changed' }], limitations: [], task: item.contract,
-        candidates: [{ id: hash([item.family, item.quote]).slice(0, 16), check: 'supplied-concern', path: item.path, symbol: item.symbol,
+        packets: [{ id: hash(item.id), changedPaths: [item.path], sourcePaths: [item.path], candidateIds: [candidateId], limitations: [] }],
+        candidates: [{ id: candidateId, check: 'supplied-concern', path: item.path, symbol: item.symbol,
           range: { start: item.start, end: item.end }, quote: item.quote, hypothesis: item.hypothesis, verification: 'Evaluate the contract using the offline executable oracle.' }] };
       const report = await review(plan, evaluator, signal);
       const decision = report.decisions[0]!;

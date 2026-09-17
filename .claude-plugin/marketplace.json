@@ -7,7 +7,11 @@
   "plugins": [
     {
       "name": "tracecheck",
-      "source": "./",
+      "source": {
+        "source": "github",
+        "repo": "bmccarn/tracecheck",
+        "ref": "v0.2.0"
+      },
       "description": "Continuous quality review with source-anchored findings."
     }
   ]

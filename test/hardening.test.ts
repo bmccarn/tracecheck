@@ -39,7 +39,7 @@ test('large Python edits retain original line anchors, callers, tests, and old-l
   assert.ok(source.content.length < 12_000); assert.equal(source.evidence!.totalLines, 1203);
   assert.equal(plan.sources.find(source => source.path.endsWith('caller.py'))!.role, 'caller');
   assert.equal(plan.sources.find(source => source.path.endsWith('test_decode.py'))!.role, 'test');
-  assert.match(plan.limitations.join('\n'), /omitted lines/);
+  assert.equal(source.evidence!.complete, false);
   await writeFile(join(repo.root, 'src/pkg/decode.py'), prefix.replace('padding', 'outside excerpt') + 'def decode(text):\n    return text\n');
   assert.notEqual((await collect({ repo: repo.root })).snapshot, plan.snapshot);
 });

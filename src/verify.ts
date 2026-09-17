@@ -51,11 +51,21 @@ export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, 
     if (excerpt !== item.content) throw new Error('Evidence differs from local source. Re-read the referenced lines.');
   }
   const snapshot = hash({ ...input, repo: root, digests: [...captured].map(([path, content]) => [path, hash(content)]) });
+  const excerpts = new Map<string, string[]>();
+  for (const item of input.evidence) {
+    const parts = excerpts.get(item.path) ?? [];
+    parts.push(`[Evidence ${item.id}; role ${item.role}; original start line ${item.startLine}]\n${item.content}`);
+    excerpts.set(item.path, parts);
+  }
+  const sourcePaths = [...excerpts.keys()];
+  const candidateId = hash(input.hypothesis).slice(0, 16);
   let missing: Answer | undefined;
   const report = await review({ schemaVersion: 1, root: root ?? '/caller-supplied', base: 'supplied', head: 'supplied', snapshot,
     task: input.contract, limitations: input.missingContext,
-    sources: input.evidence.map(item => ({ path: item.path, role: 'changed', content: `[Evidence ${item.id}; role ${item.role}; original start line ${item.startLine}]\n${item.content}` })),
-    candidates: [{ id: hash(input.hypothesis).slice(0, 16), check: 'agent-hypothesis', path: target.path, symbol: 'agent-selected',
+    sources: [...excerpts].map(([path, parts]) => ({ path, role: 'changed', content: parts.join('\n\n') })),
+    packets: [{ id: hash([sourcePaths, candidateId]), changedPaths: sourcePaths, sourcePaths,
+      candidateIds: [candidateId], limitations: input.missingContext }],
+    candidates: [{ id: candidateId, check: 'agent-hypothesis', path: target.path, symbol: 'agent-selected',
       range: { start: input.target.start, end: input.target.end }, quote: input.target.quote, hypothesis: input.hypothesis,
       verification: 'Agent investigates the verdict and runs an appropriate reproducer or regression check.' }],
   }, { async evaluate(state, questions) {

@@ -42,7 +42,7 @@ Run it as a **local MCP server** or use the **CLI** directly. Live assessments s
 | **Score** | An ordered quality assessment, normalized to a 1–10 scale. |
 | **Choice** | Selecting a concern or classifying a source finding's support and potential impact. |
 
-Independent questions can share a request and its source context. Tracecheck sends the broad assessment with the first source-check batch, avoiding a separate upload for those two layers. Typed responses support schema validation, explicit uncertainty, and automated comparisons without parsing a review essay.
+Independent questions can share a request and its source context. Tracecheck shares broad and source-check questions when the serialized request fits; otherwise it reduces candidate batches or splits independent broad questions without dropping source evidence. All requests are size-checked before inference begins. Empty evidence triggers no provider request. Typed responses support schema validation, explicit uncertainty, and automated comparisons without parsing a review essay.
 
 The division of work is deliberate: code extracts locations and computes comparisons; Jev supplies semantic judgments; the coding agent decides how to improve the implementation. Jev does not generate patches or prove that a fix works. Its [confidence signals](https://docs.typesafe.ai/confidence) still need calibration against representative review cases.
 
@@ -117,6 +117,8 @@ flowchart TD
 
 For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. Repository reviews also recollect after inference and reject changes made during the request. CLI `review` collects its own current context and does not require a prior preview token.
 
+MCP preview tokens belong to the current server process and expire after five minutes or bounded-cache eviction. Repeat preview if the token is unavailable. A time-limited preview pins its completed discovery scope for review and freshness checks, so a faster warm scan cannot masquerade as a repository edit.
+
 ## Quality dimensions
 
 These 15 dimensions are considered whenever the supplied evidence permits:
@@ -179,6 +181,8 @@ node dist/plugin.mjs compare \
 
 Keep the baseline fixed across commits by passing the same commit SHA with `--base` to both reviews. Quality comparisons require matching scope, model, and rubric; uncertain pairs do not produce numeric improvement claims. Source history additionally checks repository, baseline, and policy compatibility.
 
+A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews. Source-finding history still uses the combined decisions.
+
 Source findings can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. None of these means a fix has been executed and verified.
 
 ### Supply context directly
@@ -221,6 +225,11 @@ A `diff` string is also supported. At least one current context field is require
 | `--json` | Emit full JSON for preview, review, or assess. |
 | `--out FILE` | Save a review report or quality assessment as JSON. |
 | `--previous FILE` | Previous repository report for review; previous quality assessment for assess. |
+| `--index-max-files N` | Optional local import-index file budget; unset by default. |
+| `--index-max-bytes N` | Optional local import-index byte budget; unset by default. |
+| `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
+| `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
+| `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
 
 Repository `review` uses these exit codes:
 
@@ -235,12 +244,21 @@ A zero exit does not prove correctness. `assess` returns quality signals without
 
 ## Install the plugin
 
-After exporting your TypeSafe API key, install from GitHub.
+Install the skill and MCP runtime from the same release. For this candidate, build and extract the verified marketplace bundle from the checkout root:
+
+```sh
+npm ci
+npm run package:check
+mkdir -p release/unpacked
+tar -xzf release/tracecheck-marketplace-0.3.0-rc.1.tgz -C release/unpacked
+```
+
+Use the absolute path to `release/unpacked/tracecheck-marketplace` in the commands below. Keep that directory available: clients may load local marketplace files in place. See the [installation gate](docs/publishing.md#native-installation-gate) for promotion checks.
 
 **Claude Code**
 
 ```text
-/plugin marketplace add bmccarn/tracecheck
+/plugin marketplace add /absolute/path/to/tracecheck/release/unpacked/tracecheck-marketplace
 /plugin install tracecheck@tracecheck-plugins
 ```
 
@@ -249,10 +267,13 @@ Invoke `/tracecheck:tracecheck` to start the review workflow.
 **Codex**
 
 ```sh
-codex plugin marketplace add bmccarn/tracecheck
+codex plugin marketplace add /absolute/path/to/tracecheck/release/unpacked/tracecheck-marketplace
+codex plugin add tracecheck@tracecheck-plugins
 ```
 
-Select the Tracecheck marketplace in the Plugins directory and install Tracecheck. Start a new task and ask to use its skill. Both installations require Node.js 22.18+ and a Jev key in the launching environment.
+Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ and a Jev key in the launching environment. After the first stable payload is published, the local marketplace path can be replaced with `bmccarn/tracecheck-plugins`; that remote is not usable while empty.
+
+Existing installations from `bmccarn/tracecheck` remain pinned to historical `v0.2.0`. Re-register against the release-only marketplace after its first stable publication to receive the newer runtime and skill together.
 
 ## MCP and agent setup
 
@@ -275,7 +296,7 @@ Configure your MCP client with:
 
 Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
-The package includes portable plugin manifests, Codex and Claude compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). Follow the [installation and integration guide](docs/integrations.md) for local plugin installation. The skill supplies the review cadence; adding the MCP server alone only exposes its tools.
+The package includes portable plugin manifests, Codex and Claude compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The Claude and Codex plugin paths above remain native client installations. [Configure Cursor manually with its MCP entry and a copied complete skill directory](docs/integrations.md#cursor-manual-mcp--skill); npm installation alone registers neither for Cursor. The skill supplies the review cadence; adding the MCP server alone only exposes its tools.
 
 A useful first instruction to your agent:
 
@@ -293,20 +314,37 @@ npm run package:check
 
 This builds and verifies an npm tarball and a marketplace bundle for both clients in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
 
-The GitHub plugin, [npm package](https://www.npmjs.com/package/@bmccarn/tracecheck), and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) are public. Run the CLI directly:
+### Current public stable: 0.2.0
+
+The GitHub plugin, [npm package](https://www.npmjs.com/package/@bmccarn/tracecheck), and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) are public. Pin the current public stable package:
 
 ```sh
 npx --yes @bmccarn/tracecheck@0.2.0 --help
 npx --yes @bmccarn/tracecheck@0.2.0 review --repo /path/to/project
 ```
 
-You can also run the same artifact from GitHub:
+You can also run the same stable artifact from GitHub:
 
 ```sh
 npx --yes --package=https://github.com/bmccarn/tracecheck/releases/download/v0.2.0/bmccarn-tracecheck-0.2.0.tgz tracecheck --help
 ```
 
-To start the MCP server, use `npx --yes @bmccarn/tracecheck@0.2.0 mcp` (or `preview`, `review`, and `assess`). An `npx` MCP configuration exposes tools; install the plugin to register the associated skill as well.
+These stable CLI examples remain valid. The four-tool MCP server and matching skill described in [the integration guide](docs/integrations.md#cursor-manual-mcp--skill) require either the built local checkout before publication or the published release candidate; do not pair that skill with the `0.2.0` runtime.
+
+### Release candidate: 0.3.0-rc.1
+
+After `0.3.0-rc.1` is published to npm's `next` channel, users may explicitly pin its CLI and four-tool MCP runtime. Before publication, use the local build; the command below requires that registry version to exist:
+
+```sh
+npx --yes @bmccarn/tracecheck@0.3.0-rc.1 --help
+npx --yes @bmccarn/tracecheck@0.3.0-rc.1 mcp
+```
+
+Pair that runtime with the skill copied from the same release-candidate source. Before publication, use the matching built local checkout instead. A published prerelease receives npm's `next` tag and GitHub prerelease artifacts, but does not update the stable marketplace payload.
+
+### Release-only stable marketplace
+
+Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins` from the same verified release artifact. The repository becomes an installation source after its first stable publication; release candidates never update it.
 
 See the [publishing guide](docs/publishing.md) for local artifact testing, Claude/Codex installation, registry publication, and version updates.
 
@@ -329,16 +367,21 @@ Tracecheck does not load `.env` files automatically or persist your API key. Rev
 
 | Limit | Current value |
 | --- | --- |
-| Collected files | 16 |
+| Collected files per packet | 16 |
 | Current file read limit | 256,000 bytes |
-| Changed files | 8, reserving file slots for supporting evidence |
-| Focused source per current/baseline version | Up to 12,000 characters each |
-| Caller/import discovery | 200 tracked files, approximately 8 MB |
-| Total source context, including baseline versions | 60,000 characters |
-| Parser-derived source candidates | 40 |
-| Serialized provider request | Less than 180,000 bytes |
+| Baseline file read limit | 8 MiB |
+| Primary changed files per packet | Up to 8, with evidence capacity reserved for supporting context |
+| Focused source per current/baseline version | Up to 12,000 characters each, reduced further if required to fit |
+| Caller/import discovery | Eligible tracked JS/TS/Python files; optional file/byte caps and a soft deadline |
+| Source context per packet, including baselines | 60,000 characters and 80,000 serialized bytes |
+| Parser-derived source candidates | No global cutoff; evaluated in batches of up to 10 |
+| Serialized review request | 160,000-byte preflight; provider client also enforces 180,000 bytes |
 
-Collection omissions are reported. An oversized provider request fails visibly. Large files use bounded excerpts with original line anchors, visible omissions, and full-content digests. Discovery follows one hop of supported JS/TS and Python imports, selected callers, and related tests; it is heuristic, not a complete call graph. Collection has a 20-second deadline; repository review has a 90-second pipeline deadline.
+Every safely readable, supported changed file is assigned to a packet; later files are not dropped after the first eight. Large files use bounded excerpts with original line anchors, visible omissions, and full-content digests. This covers changed files, not necessarily every changed line: omitted ranges, unsupported files, secrets, and unreadable or oversized files remain coverage gaps.
+
+Repository discovery is separate from model-input size. A bounded in-process cache retains file identities and import edges, not raw source, and rechecks paths, timestamps, inode/device identity, and the known file set before reuse. Each CLI process starts cold; repeated MCP requests and recollection within a CLI review can reuse the index. One-hop JS/TS and Python import discovery remains heuristic: aliases, unresolved imports, and dynamic behavior may be missing even when every eligible file was indexed.
+
+Partial discovery reports successfully indexed versus eligible file counts and bounded omission summaries. Raise discovery deadlines for a large repository without increasing model packet sizes. CLI flags above correspond to MCP's nested `collection` fields `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; use identical collection arguments for preview and review. MCP review accepts `reviewTimeoutMs` separately. Timeouts accept positive integer milliseconds up to one hour. More packets mean more provider requests; preview exposes packet membership before transmission.
 
 ## Coverage and validation
 
@@ -346,6 +389,7 @@ The broad assessment accepts code in any language, but that is not a claim of eq
 
 ```sh
 npm run validate                    # Type checks, tests, and builds
+npm run package:check               # Tarball contents and offline CLI/MCP execution
 npm run demo                        # Scripted example; no live inference
 npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
@@ -354,6 +398,8 @@ npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project labe
 ```
 
 Live commands require credentials and consume API usage. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
+
+GitHub Actions runs `npm ci`, `npm run validate`, and `npm run package:check` on pushes and pull requests using Node 22.18.0. These checks need no live inference credentials.
 
 ## Troubleshooting
 

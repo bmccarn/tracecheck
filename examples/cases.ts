@@ -34,7 +34,9 @@ export function decode(input: string) { return JSON.parse(input); }` },
 
 export function casePlan(fixture: { id: string; code: string }): ReviewPlan {
   const path = `${fixture.id}.ts`;
+  const candidates = findCandidates(path, fixture.code, [{ start: 1, end: fixture.code.split('\n').length }]);
   return { schemaVersion: 1, root: '/synthetic-benchmark', base: 'synthetic-v1', head: 'synthetic-v1', snapshot: hash(fixture.code),
     sources: [{ path, content: fixture.code, role: 'changed' }],
-    candidates: findCandidates(path, fixture.code, [{ start: 1, end: fixture.code.split('\n').length }]), limitations: [] };
+    candidates, limitations: [],
+    packets: [{ id: hash(fixture.id), changedPaths: [path], sourcePaths: [path], candidateIds: candidates.map(candidate => candidate.id), limitations: [] }] };
 }

@@ -7,7 +7,7 @@ description: Verify suspected code defects with Jev after an implementation chec
 
 You own repository investigation, evidence selection, implementation, and test execution. Tracecheck checks supplied hypotheses with Jev. Its judgment is additional evidence, not a replacement for your review.
 
-Before the first call, read [tool usage](references/tool-usage.md) for input shapes and recovery.
+Before the first call, read [tool usage](references/tool-usage.md) for request shapes and recovery, including setup, connection, credential, and unavailable-tool failures.
 
 1. Establish the requested behavior and review scope. Inspect the change, relevant conventions, callers, and tests. Finish with a concrete behavioral contract and the changed paths accounted for.
 2. Discover concerns using your normal code reasoning. For each material concern, record a falsifiable hypothesis, trigger, expected behavior, source location, and your provisional verdict before consulting Jev. If no concern is supported, report the inspected scope and gaps rather than inventing a hypothesis.

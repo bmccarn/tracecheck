@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.3.0-rc.1 — 2026-09-17
+
+- Add agent-led hypothesis verification through `tracecheck_verify` and the `verify` CLI, including anchored evidence, counterevidence, and bounded follow-up.
+- Replace the default fixed import-index cutoff with repository-wide discovery, configurable resource budgets, and a safely revalidated metadata/edge cache.
+- Review all supported, safely readable changed files in bounded evidence packets; remove the global forty-candidate cutoff.
+- Preserve independent packet quality assessments and expose packet scope, partial indexing coverage, and collection settings through CLI/MCP.
+- Batch Git evidence reads, retaining path safety and per-file baseline limits without spawning Git for every changed file.
+- Add regressions for cache freshness, path safety, packet evidence integrity, complete-change coverage, and request accounting.
+- Run typechecks, tests, and offline package verification in CI on pushes and pull requests.
+- Synchronize release versions and MCP server metadata; publish verified archives through protected tag-triggered npm trusted publishing.
+- Separate prerelease npm/GitHub artifacts from the generated stable-only Claude/Codex marketplace.
+- Document matching Cursor MCP and skill installation, credential handling, and native-client release gates.
+- Exclude local client secrets, release staging files, diagnostics, and generated artifacts from Git and the npm payload.
+
 ## 0.2.0 — 2026-09-17
 
 Initial public release.
