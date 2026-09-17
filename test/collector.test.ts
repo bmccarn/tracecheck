@@ -1,10 +1,22 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { writeFile, symlink } from 'node:fs/promises';
+import { mkdir, writeFile, symlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { collect } from '../src/collector.js';
 import { findCandidates } from '../src/checks.js';
+import type { ReviewPacket, ReviewPlan } from '../src/domain.js';
 import { repository } from './helpers.js';
+
+async function writeSeries(root: string, directory: string, prefix: string, suffix: string, count: number, content = 'export {};') {
+  await mkdir(join(root, directory), { recursive: true });
+  await Promise.all(Array.from({ length: count }, (_value, index) =>
+    writeFile(join(root, directory, `${prefix}${String(index).padStart(3, '0')}${suffix}`), content)));
+}
+
+function packetBytes(plan: ReviewPlan, packet: ReviewPacket) {
+  const sources = packet.sourcePaths.map(path => plan.sources.find(source => source.path === path)!);
+  return Buffer.byteLength(JSON.stringify(sources));
+}
 
 test('collects a guard removal, retains old code, and changes snapshot when context changes', async t => {
   const repo = await repository(); t.after(repo.cleanup);
@@ -46,15 +58,18 @@ test('finds candidates in changed functions without flagging unrelated functions
   assert.equal(shifted[0]!.id, candidates[0]!.id);
 });
 
-test('loads tracked relative imports and related tests without executing them', async t => {
+test('borrows tracked dependencies and callers as packet-local support without executing tests', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'helper.ts'), 'export const denominator = 2;');
+  await writeFile(join(repo.root, 'caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
   await writeFile(join(repo.root, 'average.test.ts'), 'throw new Error("this file must never execute");');
   repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add context');
   await writeFile(join(repo.root, 'average.ts'), 'import { denominator } from "./helper.js";\nexport function average(xs: number[]) { return xs.length / denominator; }');
   const plan = await collect({ repo: repo.root });
   assert.equal(plan.sources.find(source => source.path === 'helper.ts')!.role, 'dependency');
+  assert.equal(plan.sources.find(source => source.path === 'caller.ts')!.role, 'caller');
   assert.equal(plan.sources.find(source => source.path === 'average.test.ts')!.role, 'test');
+  assert.deepEqual(plan.packets[0]!.sourcePaths, ['average.ts', 'average.test.ts', 'caller.ts', 'helper.ts']);
 });
 
 test('retains non-JS source for quality review and binds task context to the snapshot', async t => {
@@ -63,7 +78,89 @@ test('retains non-JS source for quality review and binds task context to the sna
   const plan = await collect({ repo: repo.root, includeUntracked: true, task: 'Return None for invalid JSON.' });
   assert.equal(plan.sources[0]!.path, 'decode.py');
   assert.equal(plan.candidates.length, 0);
-  assert.equal(plan.limitations.length, 0);
   const changed = await collect({ repo: repo.root, includeUntracked: true, task: 'Throw for invalid JSON.' });
   assert.notEqual(changed.snapshot, plan.snapshot);
+});
+
+test('packs every eligible changed path exactly once across bounded packets', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeSeries(repo.root, 'changes', 'change-', '.ts', 17, 'export const baseline = 1;');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add changed files');
+  await writeSeries(repo.root, 'changes', 'change-', '.ts', 17, 'export const changed = (value: number) => value / 2;');
+  const plan = await collect({ repo: repo.root });
+  assert.equal(plan.packets.length, 3);
+  const primaries = plan.packets.flatMap(packet => packet.changedPaths);
+  assert.equal(new Set(primaries).size, 17);
+  assert.deepEqual(primaries.sort(), Array.from({ length: 17 }, (_value, index) => `changes/change-${String(index).padStart(3, '0')}.ts`));
+  for (const packet of plan.packets) {
+    assert.ok(packet.changedPaths.length <= 8);
+    assert.ok(packet.sourcePaths.length <= 16);
+    assert.ok(packet.sourcePaths.reduce((total, path) => {
+      const source = plan.sources.find(item => item.path === path)!;
+      return total + source.content.length + (source.before?.length ?? 0);
+    }, 0) <= 60_000);
+    assert.ok(packetBytes(plan, packet) <= 80_000);
+  }
+});
+
+test('keeps every candidate globally rather than applying the obsolete forty-candidate cutoff', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const baseline = Array.from({ length: 41 }, (_value, index) => `export function value${index}(a: number, b: number) { return a; }`).join('\n');
+  const changed = Array.from({ length: 41 }, (_value, index) => `export function value${index}(a: number, b: number) { return a / b; }`).join('\n');
+  await writeFile(join(repo.root, 'many.ts'), baseline);
+  repo.git('add', 'many.ts'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add candidate fixture');
+  await writeFile(join(repo.root, 'many.ts'), changed);
+  const plan = await collect({ repo: repo.root });
+  assert.equal(plan.candidates.length, 41);
+  assert.equal(plan.packets[0]!.candidateIds.length, 41);
+});
+
+test('discovers a caller past the old two-hundred-file index cutoff', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeSeries(repo.root, '.', 'noise-', '.ts', 205);
+  await writeFile(join(repo.root, 'zz-caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add import graph');
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((total, value) => total + value, 0); }');
+  const plan = await collect({ repo: repo.root });
+  assert.equal(plan.sources.find(source => source.path === 'zz-caller.ts')!.role, 'caller');
+});
+
+test('reuses constrained discovery scope without pinning collected evidence', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add caller');
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((total, value) => total + value, 0); }');
+
+  const options = { repo: repo.root, collection: { maxIndexFiles: 1 } };
+  const initial = await collect(options);
+  assert.deepEqual(initial.discovery, { scannedFiles: 1, deadlineLimited: false });
+
+  const revalidated = await collect({ ...options, discovery: initial.discovery });
+  assert.equal(revalidated.snapshot, initial.snapshot);
+  assert.deepEqual(revalidated.sources, initial.sources);
+  assert.deepEqual(revalidated.packets, initial.packets);
+  assert.deepEqual(revalidated.limitations, initial.limitations);
+
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((total, value) => total + value + 1, 0); }');
+  const mutated = await collect({ ...options, discovery: initial.discovery });
+  assert.notEqual(mutated.snapshot, initial.snapshot);
+  assert.match(mutated.sources.find(source => source.path === 'average.ts')!.content, /\+ 1/);
+});
+
+test('round-robins packet support so fan-in does not crowd out another change context', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'first.ts'), 'export const first = () => 1;');
+  await writeFile(join(repo.root, 'second-dependency.ts'), 'export const dependency = 2;');
+  await writeFile(join(repo.root, 'second.ts'), 'import { dependency } from "./second-dependency.js"; export const second = () => dependency;');
+  await writeFile(join(repo.root, 'second.test.ts'), 'import { second } from "./second.js"; void second;');
+  await writeSeries(repo.root, 'first-callers', 'caller-', '.ts', 15, 'import { first } from "../first.js"; export const caller = () => first();');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add packet support graph');
+
+  await writeFile(join(repo.root, 'first.ts'), 'export const first = (value: number) => value / 2;');
+  await writeFile(join(repo.root, 'second.ts'), 'import { dependency } from "./second-dependency.js"; export const second = () => dependency / 2;');
+  const plan = await collect({ repo: repo.root });
+
+  assert.equal(plan.packets.length, 1);
+  assert.ok(plan.packets[0]!.sourcePaths.includes('second.test.ts'));
+  assert.ok(plan.packets[0]!.sourcePaths.includes('second-dependency.ts'));
 });

@@ -1,4 +1,55 @@
-# Validation — Tracecheck 0.2
+# Validation
+
+## Release preparation and native installation — September 17, 2026
+
+- `npm run release:check` passes: 82 tests, type-checking, builds, synchronized metadata, actual npm/marketplace archives, offline CLI, and all four MCP tools. MCP initialization reports `0.3.0-rc.1`. No Jev request is made by this release check.
+- Primary language-server diagnostics confirm zero errors, warnings, information, or hints in all 35 changed source, test, script, JSON, and workflow files. `actionlint` passes both workflows.
+- Fresh, isolated Claude Code and Codex profiles install the extracted candidate marketplace and enable Tracecheck `0.3.0-rc.1`. Both installed payloads contain the complete skill and its reference. Claude's native MCP health check connects; an SDK client using Codex's resolved transport connects and enumerates all four tools at the matching version.
+- Genuine registry `@bmccarn/tracecheck@0.2.0` upgrades to the candidate through native Claude `plugin update` and Codex `plugin add` in isolated profiles. Claude lists the skill and MCP server; Codex enables the new cached version. The installed runtime exposes four tools and returns actionable missing-key guidance naming both supported environment variables.
+- A live synthetic `tracecheck_verify` call through the installed candidate runtime succeeds with caller-supplied provenance and `jev-1.13.0`. The zero-divisor concern remains inconclusive/uncertain, with a supported choice probability of 0.66 but confidence 0.49 and `gather_evidence` as the next action. This proves live integration, not a confirmed defect or accuracy estimate.
+- Cursor's documented whole-directory skill copy succeeds twice without nesting a duplicate directory. Cursor editor discovery remains untested. Full native-agent turns in the isolated profiles require authentication: Claude reported not logged in; Codex returned missing bearer/basic authentication. No real client auth was copied or configured. These interactive checks remain stable-promotion gates.
+- The workflow's marketplace publication body, with only its Git remote replaced by a disposable local bare repository, handles an empty repository and a repeated publication. The repeated run is a no-op and preserves unrelated content. This does not test GitHub SSH authorization or npm OIDC.
+- A marketplace `dist/` ignore rule reproduced a successful publication missing its executable before the force-staging fix. After the fix, the executable is committed, unrelated content survives, and repeating publication creates no extra commit.
+- Injected rename failures during preparation and rollback leave all five recovery backups intact, remove temporary `.next` files, and report the recovery filename pattern plus the underlying filesystem error. UUID-qualified staging names avoid reusing a prior process's backups.
+- Actual Git-tag fixtures verify that a `0.3.0` stable tag blocks publishing `0.2.1`, permits `0.3.1`, and does not block a prerelease candidate. Prerelease tags do not block older stable versions, and no-tag metadata checks work without a Git repository.
+- Ignore checks exclude local credentials, Cursor configuration, release/diagnostic artifacts, and interrupted version-preparation files while retaining distributable manifests, the bundle, the complete skill, and `.env.example`.
+- GitHub API checks confirm the protected `release` environment, `v*` tag policy, required owner approval, marketplace repository variable, environment-scoped deploy-key secret, and marketplace-only writable deploy key. The account owner subsequently confirmed npm trusted-publisher setup. No candidate or stable publication occurred during these checks; OIDC remains unverified until the authorized release run.
+
+Earlier checkpoints below retain their original test counts and measurements.
+
+## Scalable collection and scoped review — September 17, 2026
+
+- `npm run validate`: 73 tests pass; type-checking and compiled/standalone builds pass. Primary language-server checks confirm no diagnostics in the 22 changed source, test, example, and benchmark files.
+- Markdown language-server checks returned no findings but could not confirm clean results for six documentation files; these push-only-server results are not counted as confirmed clean.
+- `npm run package:check`: the actual npm and marketplace archives pass offline CLI and all four MCP tool checks. This package check makes no Jev requests.
+- A disposable repository with 50,065 tracked small TypeScript files and 64 changed files produced eight bounded packets and all 64 candidates, retained a distant caller, and preserved the warm snapshot. The compiled CLI preview also covered all 64 changes. With default collection budgets, the final run took 5,076 ms with a cold import cache and 2,286 ms warm. Before batched Git reads, the same synthetic workload took 45,034 ms cold and 42,118 ms warm. These are individual measurements on one Apple M3 Ultra workstation, not disk-cold or general repository latency guarantees; the final fixture disabled automatic Git maintenance.
+- With a deliberately short 25 ms discovery deadline, preview completed a 160-file prefix while an independent warm scan reached 368 files. Pinned recollection retained the original snapshot. Actual live CLI and MCP reviews succeeded across that boundary, and a real source edit still changed the snapshot. An emptied file also received a live assessment using its baseline evidence.
+- A live nine-file, two-packet CLI review used two requests, 37,011 input tokens, and 5,167 output tokens; the review stage took 1,086 ms. Five of six labeled synthetic cases matched expectations. The empty-average defect remained uncertain, and none of the three clean counterparts was reported as supported. Thresholds were not relaxed. This verifies integration and preserves the known abstention; it does not estimate real-world accuracy.
+- An isolated agent exercised the primary verification loop on a fresh RapidRegs CSV-rendering concern: two live, locally anchored Jev checkpoints plus follow-up investigation and an isolated execution of the exact renderer. The conclusion remained an unresolved conditional risk, not a confirmed defect. A malformed evidence excerpt was rejected before inference. See [the real agent-loop record](agent-evaluation.md#isolated-rapidregs-loop--september-17-2026) for timings, scope, and limitations.
+
+Collection still has explicit coverage gaps: unsupported or unsafe files, bounded excerpts, heuristic import resolution, and soft-deadline omissions. Overall collection/review deadlines fail closed rather than returning an apparently complete result after cancellation. Packet assessments are not averaged into a repository-wide grade. The primary agent-selected verification flow remains agent investigation → Jev assessment → agent follow-up.
+
+The milestone entries below are historical checkpoints, not current test counts.
+
+## Agent-first verification milestone
+
+- 41 tests cover the new language-independent verification path, quote and source validation, stale evidence rejection, bound-repository MCP behavior, and paired benchmark scoring.
+- A live RapidRegs verification through the new CLI rejected a known repaired concern with locally checked evidence. This is an integration check, not a fresh accuracy estimate; see [agent evaluation](agent-evaluation.md).
+- The standalone runtime now exposes four MCP tools. Published v0.2.0 still exposes the earlier three-tool interface.
+
+## Unreleased evidence milestone — September 17, 2026
+
+- `npm run validate`: 35 tests pass, including bounded collection, original-line anchors, root isolation, cancellation, provider response limits, manual-context secret screening, split evidence gating, cache comparison reuse, and mid-review edit rejection.
+- Broad review now asks 76 questions once; the 23-candidate batching test checks 96, 20, and 6 questions.
+- The RapidRegs harness checks 24 labels across six families with executable local oracles. A 48-request live run measured both full and function-centered packets; [results and limitations](accuracy.md) include the observed recall regression with smaller packets.
+- Actual RapidRegs collection and a live 19-dimension review completed. The review was inconclusive; no automatic Python source checks or credible quality scores were produced.
+- RapidRegs remained unmodified. Raw source-bearing records stay in ignored `.tracecheck/`.
+
+The entries below record earlier releases and are not measurements of the current rubric.
+
+---
+
+## Historical Tracecheck 0.2
 
 ## Current checks
 

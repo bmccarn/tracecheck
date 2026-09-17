@@ -8,3 +8,16 @@ dist/*
 *.tsbuildinfo
 release/
 *.tgz
+
+# Local diagnostics, generated coverage, and research output.
+coverage/
+*.log
+.DS_Store
+*.release-prepare-*.backup
+*.release-prepare-*.next
+.firecrawl/
+
+# Local authentication and client overrides; distributable manifests stay tracked.
+/.npmrc
+/.cursor/mcp.json
+/.mcp.local.json

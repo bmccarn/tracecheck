@@ -1,8 +1,9 @@
 {
   "name": "@bmccarn/tracecheck",
-  "version": "0.2.0",
+  "version": "0.3.0-rc.1",
   "description": "Evidence-backed code review powered by Jev",
   "type": "module",
+  "packageManager": "npm@11.5.1",
   "bin": {
     "tracecheck": "dist/plugin.mjs"
   },
@@ -20,7 +21,11 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run release:check",
     "package:check": "npm run build && node scripts/package-release.mjs",
-    "release:check": "npm run validate && npm run package:check && node scripts/release-metadata.mjs"
+    "release:check": "npm run validate && npm run package:check && node scripts/release-metadata.mjs && node scripts/release-gates.mjs",
+    "release:prepare": "node scripts/release-prepare.mjs",
+    "release:gates": "node scripts/release-gates.mjs",
+    "accuracy": "tsx benchmarks/run.ts",
+    "accuracy:paired": "tsx benchmarks/paired.ts"
   },
   "engines": {
     "node": ">=22.18.0"
@@ -41,7 +46,7 @@
     "plugin.json",
     "mcp.json",
     ".codex-plugin",
-    ".claude-plugin",
+    ".claude-plugin/plugin.json",
     ".mcp.json",
     "skills",
     "README.md",

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { assertSafeOutbound } from './safety.js';
 import type { Choice, Evaluator, Response, Question, TypedResponse, TypedEvaluator } from './domain.js';
 
 const answerSchema = z.object({
@@ -14,6 +15,23 @@ const responseSchema = z.object({
   usage: z.object({ input_tokens: z.number().int().nonnegative(), output_tokens: z.number().int().nonnegative() }),
 });
 
+async function boundedJson(response: globalThis.Response): Promise<unknown> {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error('Jev returned an empty response.');
+  const chunks: Uint8Array[] = []; let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 512_000) throw new Error('Jev response exceeded the 512 KB response budget.');
+      chunks.push(value);
+    }
+    try { return JSON.parse(Buffer.concat(chunks).toString('utf8')); }
+    catch { throw new Error('Jev returned invalid JSON; review is incomplete.'); }
+  } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
+}
+
 export class Jev implements Evaluator, TypedEvaluator {
   readonly model: string;
   constructor(private options: { apiKey: string; model?: string; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number }) {
@@ -24,17 +42,19 @@ export class Jev implements Evaluator, TypedEvaluator {
   async evaluate(state: unknown, questions: Record<string, Choice>): Promise<Response>;
   async evaluate(state: unknown, questions: Record<string, Question>): Promise<TypedResponse>;
   async evaluate(state: unknown, questions: Record<string, Question>): Promise<TypedResponse> {
+    assertSafeOutbound(state);
     const body = JSON.stringify({ model: this.model, state, questions });
     if (Buffer.byteLength(body) > 180_000) throw new Error('Review request exceeds the local 180 KB request budget. Reduce the review scope.');
     const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 45_000);
     const signal = this.options.signal ? AbortSignal.any([timeout, this.options.signal]) : timeout;
     const request = this.options.fetch ?? fetch;
     for (let attempt = 0; attempt < 3; attempt++) {
+      signal.throwIfAborted();
       const response = await request('https://api.typesafe.ai/v1/systemone', {
         method: 'POST', headers: { Authorization: `Bearer ${this.options.apiKey}`, 'Content-Type': 'application/json' }, body, signal,
       });
       if (response.ok) {
-        const parsed = responseSchema.safeParse(await response.json());
+        const parsed = responseSchema.safeParse(await boundedJson(response));
         if (!parsed.success) throw new Error('Jev returned an invalid response; review is incomplete.');
         for (const [id, question] of Object.entries(questions)) {
           const answer = parsed.data.answers[id];
@@ -53,7 +73,7 @@ export class Jev implements Evaluator, TypedEvaluator {
       }
       // Read only a known error code; never surface a remote body that may echo source.
       if (response.status === 400) {
-        const body: unknown = await response.json().catch(() => null);
+        const body: unknown = await boundedJson(response).catch(() => null);
         const error = z.object({ detail: z.object({ error_type: z.string() }) }).safeParse(body);
         if (error.success && error.data.detail.error_type === 'max_tokens_exceeded') {
           throw new Error('Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.');

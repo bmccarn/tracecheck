@@ -14,12 +14,12 @@ test('retains the complete 19-dimension baseline and four conditional dimensions
   ].sort());
   assert.deepEqual(dimensions.filter(item => item.conditional).map(item => item.key), ['performance','scalability','compatibility','observability']);
   const questions = Object.values(qualityQuestions());
-  for (const type of ['noul','score','choice']) assert.equal(questions.filter(question => question.type === type).length, 19);
+  for (const type of ['noul','score','choice']) assert.equal(questions.filter(question => question.type === type).length, type === 'noul' ? 38 : 19);
 });
 
 test('normalizes independent scores and withholds scores without sufficient context', async () => {
   const response = await baseline();
-  response.answers.quality_performance_applicability = { type: 'noul', noul: 0.1 };
+  response.answers.quality_performance_relevance = { type: 'noul', noul: 0.1 };
   response.answers.quality_correctness_applicability = { type: 'noul', noul: 0.5 };
   const evaluation = transformQuality(response, 'scope', 'snapshot');
   assert.equal(evaluation.metrics.readability!.score, 8);
@@ -70,7 +70,7 @@ test('missing typed decisions fail closed and empty manual contexts are rejected
 test('broad review and candidate checks share one request and account usage once', async () => {
   let calls = 0;
   const report = await reviewAll(planFor(), { async evaluate(_state, questions) {
-    calls++; assert.equal(Object.keys(questions).length, 59);
+    calls++; assert.equal(Object.keys(questions).length, 78);
     return typedFixture(questions);
   } });
   assert.equal(calls, 1); assert.equal(report.usage.requests, 1);
@@ -80,19 +80,130 @@ test('broad review and candidate checks share one request and account usage once
 });
 
 test('non-JS context still receives all quality dimensions without source candidates', async () => {
-  const plan = planFor(); plan.candidates = []; plan.sources = [{ path: 'a.py', content: 'def add(a,b): return a+b', role: 'changed' }];
+  const plan = planFor();
+  plan.candidates = [];
+  plan.sources = [{ path: 'a.py', content: 'def add(a,b): return a+b', role: 'changed' }];
+  plan.packets = [{ id: 'python', changedPaths: ['a.py'], sourcePaths: ['a.py'], candidateIds: [], limitations: [] }];
   let calls = 0;
   const report = await reviewAll(plan, { async evaluate(_state, questions) { calls++; return typedFixture(questions); } });
   assert.equal(calls, 1); assert.equal(Object.keys(report.quality!.metrics).length, 19);
   assert.ok(!report.limitations.some(value => value.includes('no semantic review')));
 });
 
-test('large reviews ask the broad questions once and include later source batches', async () => {
-  const plan = planFor(); plan.candidates = Array.from({ length: 23 }, (_, index) => ({ ...plan.candidates[0]!, id: String(index) }));
-  const sizes: number[] = [];
-  const report = await reviewAll(plan, { async evaluate(_state, questions) { sizes.push(Object.keys(questions).length); return typedFixture(questions); } });
-  assert.deepEqual(sizes, [77,20,6]);
-  assert.equal(report.usage.requests, 3);
-  assert.equal(report.usage.inputTokens, 300);
-  assert.equal(report.decisions.length, 23);
+test('large reviews ask broad questions once and decide every candidate across batches', async () => {
+  const plan = planFor();
+  plan.candidates = Array.from({ length: 43 }, (_, index) => ({ ...plan.candidates[0]!, id: String(index) }));
+  plan.packets[0]!.candidateIds = plan.candidates.map(candidate => candidate.id);
+  let broadCalls = 0;
+  const report = await reviewAll(plan, { async evaluate(_state, questions) {
+    if (Object.keys(questions).some(id => id.startsWith('quality_'))) broadCalls++;
+    return typedFixture(questions);
+  } });
+  assert.equal(broadCalls, 1);
+  assert.equal(report.usage.requests, 5);
+  assert.equal(report.usage.inputTokens, 500);
+  assert.equal(report.decisions.length, 43);
+});
+
+test('plans near-limit evidence into bounded evaluator requests without dropping broad or candidate decisions', async () => {
+  const plan = planFor();
+  plan.sources[0]!.content = `export const evidence = '${'x'.repeat(78_000)}';`;
+  plan.candidates = Array.from({ length: 17 }, (_, index) => ({
+    ...plan.candidates[0]!, id: `candidate-${index}`, hypothesis: 'detail '.repeat(600),
+  }));
+  plan.packets[0]!.candidateIds = plan.candidates.map(candidate => candidate.id);
+  const calls: string[][] = [];
+  const report = await reviewAll(plan, { async evaluate(state, questions) {
+    assert.ok(new TextEncoder().encode(JSON.stringify({ state, questions })).byteLength <= 160_000);
+    calls.push(Object.keys(questions));
+    return typedFixture(questions);
+  } });
+  const asked = calls.flat();
+  for (const candidate of plan.candidates) {
+    assert.equal(asked.filter(key => key === `${candidate.id}_assessment`).length, 1);
+    assert.equal(asked.filter(key => key === `${candidate.id}_impact`).length, 1);
+  }
+  for (const key of Object.keys(qualityQuestions())) assert.equal(asked.filter(askedKey => askedKey === key).length, 1);
+  const broadRequests = calls.filter(call => call.some(key => key.startsWith('quality_'))).length;
+  assert.ok(calls.length > 2);
+  assert.ok(calls.some(call => call.filter(key => key.endsWith('_assessment')).length < 10));
+  assert.equal(report.usage.requests, calls.length);
+  assert.equal(report.quality!.usage.requests, broadRequests);
+  assert.equal(report.decisions.length, plan.candidates.length);
+});
+
+test('preflights impossible context before calling the typed evaluator', async () => {
+  const plan = planFor();
+  plan.repositoryContext = 'x'.repeat(200_000);
+  let calls = 0;
+  await assert.rejects(reviewAll(plan, { async evaluate(_state, questions) {
+    calls++;
+    return typedFixture(questions);
+  } }), /cannot be evaluated without dropping evidence/);
+  assert.equal(calls, 0);
+});
+
+test('empty evidence is inconclusive without evaluator calls or a numeric quality result', async () => {
+  const plan = planFor(' ');
+  let calls = 0;
+  const report = await reviewAll(plan, { async evaluate(_state, questions) {
+    calls++;
+    return typedFixture(questions);
+  } });
+  assert.equal(calls, 0);
+  assert.equal(report.quality, undefined);
+  assert.equal(report.packetQualities, undefined);
+  assert.ok(report.limitations.some(value => value.includes('has no source evidence')));
+  assert.equal(report.status, 'inconclusive');
+});
+
+test('before-only evidence is evaluated rather than treated as an empty packet', async () => {
+  const plan = planFor();
+  plan.sources[0]!.before = plan.sources[0]!.content;
+  plan.sources[0]!.content = ' ';
+  let calls = 0;
+  const report = await reviewAll(plan, { async evaluate(_state, questions) {
+    calls++;
+    return typedFixture(questions);
+  } });
+  assert.equal(calls, 1);
+  assert.equal(report.quality!.usage.requests, 1);
+  assert.ok(Object.values(report.quality!.metrics).every(metric => metric.status === 'assessed'));
+});
+
+test('skips an empty packet while retaining the nonempty packet review', async () => {
+  const plan = planFor();
+  plan.sources.push({ path: 'empty.ts', content: ' ', role: 'changed' });
+  plan.packets.push({ id: 'empty', changedPaths: ['empty.ts'], sourcePaths: ['empty.ts'], candidateIds: [], limitations: [] });
+  let calls = 0;
+  const report = await reviewAll(plan, { async evaluate(_state, questions) {
+    calls++;
+    return typedFixture(questions);
+  } });
+  assert.equal(calls, 1);
+  assert.equal(report.decisions.length, 1);
+  assert.equal(report.quality, undefined);
+  assert.deepEqual(report.packetQualities?.map(packet => packet.packetId), ['packet-1']);
+  assert.ok(report.limitations.some(value => value.includes('Packet empty has no source evidence; no provider review was performed.')));
+});
+
+test('publishes independent packet qualities without inventing an aggregate quality', async () => {
+  const plan = planFor();
+  const later = { ...plan.candidates[0]!, id: 'later', path: 'later.ts', quote: 'x / y' };
+  plan.sources.push({ path: 'later.ts', content: 'export const later = x / y;', role: 'changed' });
+  plan.candidates.push(later);
+  plan.packets = [
+    { id: 'first', changedPaths: ['example.ts'], sourcePaths: ['example.ts'], candidateIds: [plan.candidates[0]!.id], limitations: [] },
+    { id: 'later', changedPaths: ['later.ts'], sourcePaths: ['later.ts'], candidateIds: ['later'], limitations: [] },
+  ];
+  const states: Array<{ sources: Array<{ path: string }> }> = [];
+  const report = await reviewAll(plan, { async evaluate(state, questions) {
+    const packetState = state as { sources: Array<{ path: string }> };
+    states.push(packetState);
+    return typedFixture(questions);
+  } });
+  assert.equal(report.quality, undefined);
+  assert.deepEqual(report.packetQualities?.map(packet => packet.changedPaths), [['example.ts'], ['later.ts']]);
+  assert.deepEqual(states.map(state => state.sources.map(source => source.path)), [['example.ts'], ['later.ts']]);
+  assert.equal(report.usage.requests, 2); assert.equal(report.usage.inputTokens, 200);
 });

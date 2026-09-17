@@ -19,9 +19,11 @@ export async function repository() {
 }
 
 export function planFor(content = 'export function ratio(a: number, b: number) { return a / b; }'): ReviewPlan {
-  return { schemaVersion: 1, root: '/fixture', base: 'base', head: 'head', snapshot: 'a'.repeat(64),
-    sources: [{ path: 'example.ts', content, role: 'changed' }],
-    candidates: findCandidates('example.ts', content, [{ start: 1, end: 100 }]), limitations: [] };
+  const sources = [{ path: 'example.ts', content, role: 'changed' as const }];
+  const candidates = findCandidates('example.ts', content, [{ start: 1, end: 100 }]);
+  return { schemaVersion: 1, root: '/fixture', base: 'base', head: 'head', snapshot: 'a'.repeat(64), sources, candidates,
+    packets: [{ id: 'packet-1', changedPaths: ['example.ts'], sourcePaths: ['example.ts'], candidateIds: candidates.map(candidate => candidate.id), limitations: [] }],
+    limitations: [] };
 }
 
 export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evaluator {

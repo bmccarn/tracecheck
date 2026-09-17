@@ -17,5 +17,6 @@ export const reportSchema = z.object({
   })),
   limitations: z.array(z.string()),
   quality: qualityEvaluationSchema.optional(),
+  packetQualities: z.array(z.object({ packetId: z.string(), changedPaths: z.array(z.string()), evaluation: qualityEvaluationSchema })).optional(),
   usage: z.object({ inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), requests: z.number().nonnegative(), elapsedMs: z.number().nonnegative() }),
 });
