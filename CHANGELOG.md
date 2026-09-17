@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.3.0-rc.2 — 2026-09-17
+
+- Fix the release workflow's npm archive path: an explicit `./release/` prefix prevents npm 11.5.1 from interpreting the archive as a GitHub repository.
+- Retain the immutable `v0.3.0-rc.1` tag; its release job failed before npm authentication or publication.
+
 ## 0.3.0-rc.1 — 2026-09-17
 
 - Add agent-led hypothesis verification through `tracecheck_verify` and the `verify` CLI, including anchored evidence, counterevidence, and bounded follow-up.

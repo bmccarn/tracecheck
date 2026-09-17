@@ -33,7 +33,7 @@ Load the included `skills/tracecheck/SKILL.md` through the client's skill suppor
 
 Cursor discovers local stdio MCP servers from either project `.cursor/mcp.json` or global `~/.cursor/mcp.json`. Add the `tracecheck` entry inside the existing `mcpServers` object; preserve every other server entry.
 
-Until `0.3.0-rc.1` is published, point Cursor at a built local checkout so the MCP runtime matches the included four-tool skill:
+Until `0.3.0-rc.2` is published, point Cursor at a built local checkout so the MCP runtime matches the included four-tool skill:
 
 ```json
 {
@@ -50,11 +50,11 @@ Until `0.3.0-rc.1` is published, point Cursor at a built local checkout so the M
 }
 ```
 
-After `0.3.0-rc.1` is published to npm's `next` channel, replace only `command` and `args` with the pinned release-candidate runtime:
+After `0.3.0-rc.2` is published to npm's `next` channel, replace only `command` and `args` with the pinned release-candidate runtime:
 
 ```json
 "command": "npx",
-"args": ["--yes", "@bmccarn/tracecheck@0.3.0-rc.1", "mcp"]
+"args": ["--yes", "@bmccarn/tracecheck@0.3.0-rc.2", "mcp"]
 ```
 
 Do not pair the new four-tool skill with the public `0.2.0` runtime; that stable release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.

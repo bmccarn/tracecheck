@@ -250,7 +250,7 @@ Install the skill and MCP runtime from the same release. For this candidate, bui
 npm ci
 npm run package:check
 mkdir -p release/unpacked
-tar -xzf release/tracecheck-marketplace-0.3.0-rc.1.tgz -C release/unpacked
+tar -xzf release/tracecheck-marketplace-0.3.0-rc.2.tgz -C release/unpacked
 ```
 
 Use the absolute path to `release/unpacked/tracecheck-marketplace` in the commands below. Keep that directory available: clients may load local marketplace files in place. See the [installation gate](docs/publishing.md#native-installation-gate) for promotion checks.
@@ -331,13 +331,13 @@ npx --yes --package=https://github.com/bmccarn/tracecheck/releases/download/v0.2
 
 These stable CLI examples remain valid. The four-tool MCP server and matching skill described in [the integration guide](docs/integrations.md#cursor-manual-mcp--skill) require either the built local checkout before publication or the published release candidate; do not pair that skill with the `0.2.0` runtime.
 
-### Release candidate: 0.3.0-rc.1
+### Release candidate: 0.3.0-rc.2
 
-After `0.3.0-rc.1` is published to npm's `next` channel, users may explicitly pin its CLI and four-tool MCP runtime. Before publication, use the local build; the command below requires that registry version to exist:
+After `0.3.0-rc.2` is published to npm's `next` channel, users may explicitly pin its CLI and four-tool MCP runtime. Before publication, use the local build; the command below requires that registry version to exist:
 
 ```sh
-npx --yes @bmccarn/tracecheck@0.3.0-rc.1 --help
-npx --yes @bmccarn/tracecheck@0.3.0-rc.1 mcp
+npx --yes @bmccarn/tracecheck@0.3.0-rc.2 --help
+npx --yes @bmccarn/tracecheck@0.3.0-rc.2 mcp
 ```
 
 Pair that runtime with the skill copied from the same release-candidate source. Before publication, use the matching built local checkout instead. A published prerelease receives npm's `next` tag and GitHub prerelease artifacts, but does not update the stable marketplace payload.

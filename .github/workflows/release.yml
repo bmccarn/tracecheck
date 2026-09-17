@@ -86,7 +86,7 @@ jobs:
           set -euo pipefail
           unset NODE_AUTH_TOKEN NPM_TOKEN npm_config__authToken
           archive="$(node --input-type=module -e "import manifest from './release/release-manifest.json' with { type: 'json' }; if (manifest.version !== process.env.RELEASE_VERSION || !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$/.test(manifest.npmArchive)) process.exit(1); process.stdout.write(manifest.npmArchive);")"
-          npm publish "release/$archive" --ignore-scripts --provenance --tag "$RELEASE_CHANNEL"
+          npm publish "./release/$archive" --ignore-scripts --provenance --tag "$RELEASE_CHANNEL"
 
       - name: Create GitHub prerelease
         if: steps.release.outputs.channel == 'next'
