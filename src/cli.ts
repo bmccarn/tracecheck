@@ -59,15 +59,19 @@ Use --task and --context to supply requirements and repository facts.`);
     return;
   }
   if (!['preview', 'review'].includes(command)) throw new Error(`Unknown command: ${command}`);
-  const plan = await collect({ repo: values.repo ?? '.', base: values.base, includeUntracked: values['include-untracked'], task: values.task, repositoryContext: values.context });
+  const controller = new AbortController();
+  process.once('SIGINT', () => controller.abort());
+  const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
+  const plan = await collect({ repo: values.repo ?? '.', base: values.base, includeUntracked: values['include-untracked'], task: values.task, repositoryContext: values.context, signal });
   if (command === 'preview') {
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\nSnapshot: ${plan.snapshot}\n${plan.sources.length} files · ${plan.candidates.length} candidates\n${plan.sources.map(source => `${source.role}: ${source.path}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
     return;
   }
-  const controller = new AbortController();
-  process.once('SIGINT', () => controller.abort());
   const previous = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, 'utf8'))).quality : undefined;
-  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal: controller.signal }), { signal: controller.signal, previousEvaluation: previous });
+  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal }), { signal, previousEvaluation: previous });
+  signal.throwIfAborted();
+  const current = await collect({ repo: plan.root, base: values.base, includeUntracked: values['include-untracked'], task: values.task, repositoryContext: values.context, signal });
+  if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');
   if (values.out) {
     const destination = resolve(values.out);
     await mkdir(dirname(destination), { recursive: true });

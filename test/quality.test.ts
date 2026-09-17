@@ -14,12 +14,12 @@ test('retains the complete 19-dimension baseline and four conditional dimensions
   ].sort());
   assert.deepEqual(dimensions.filter(item => item.conditional).map(item => item.key), ['performance','scalability','compatibility','observability']);
   const questions = Object.values(qualityQuestions());
-  for (const type of ['noul','score','choice']) assert.equal(questions.filter(question => question.type === type).length, 19);
+  for (const type of ['noul','score','choice']) assert.equal(questions.filter(question => question.type === type).length, type === 'noul' ? 38 : 19);
 });
 
 test('normalizes independent scores and withholds scores without sufficient context', async () => {
   const response = await baseline();
-  response.answers.quality_performance_applicability = { type: 'noul', noul: 0.1 };
+  response.answers.quality_performance_relevance = { type: 'noul', noul: 0.1 };
   response.answers.quality_correctness_applicability = { type: 'noul', noul: 0.5 };
   const evaluation = transformQuality(response, 'scope', 'snapshot');
   assert.equal(evaluation.metrics.readability!.score, 8);
@@ -70,7 +70,7 @@ test('missing typed decisions fail closed and empty manual contexts are rejected
 test('broad review and candidate checks share one request and account usage once', async () => {
   let calls = 0;
   const report = await reviewAll(planFor(), { async evaluate(_state, questions) {
-    calls++; assert.equal(Object.keys(questions).length, 59);
+    calls++; assert.equal(Object.keys(questions).length, 78);
     return typedFixture(questions);
   } });
   assert.equal(calls, 1); assert.equal(report.usage.requests, 1);
@@ -91,7 +91,7 @@ test('large reviews ask the broad questions once and include later source batche
   const plan = planFor(); plan.candidates = Array.from({ length: 23 }, (_, index) => ({ ...plan.candidates[0]!, id: String(index) }));
   const sizes: number[] = [];
   const report = await reviewAll(plan, { async evaluate(_state, questions) { sizes.push(Object.keys(questions).length); return typedFixture(questions); } });
-  assert.deepEqual(sizes, [77,20,6]);
+  assert.deepEqual(sizes, [96,20,6]);
   assert.equal(report.usage.requests, 3);
   assert.equal(report.usage.inputTokens, 300);
   assert.equal(report.decisions.length, 23);

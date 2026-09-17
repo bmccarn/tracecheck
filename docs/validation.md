@@ -1,4 +1,18 @@
-# Validation — Tracecheck 0.2
+# Validation
+
+## Unreleased evidence milestone — September 17, 2026
+
+- `npm run validate`: 35 tests pass, including bounded collection, original-line anchors, root isolation, cancellation, provider response limits, manual-context secret screening, split evidence gating, cache comparison reuse, and mid-review edit rejection.
+- Broad review now asks 76 questions once; the 23-candidate batching test checks 96, 20, and 6 questions.
+- The RapidRegs harness checks 24 labels across six families with executable local oracles. A 48-request live run measured both full and function-centered packets; [results and limitations](accuracy.md) include the observed recall regression with smaller packets.
+- Actual RapidRegs collection and a live 19-dimension review completed. The review was inconclusive; no automatic Python source checks or credible quality scores were produced.
+- RapidRegs remained unmodified. Raw source-bearing records stay in ignored `.tracecheck/`.
+
+The entries below record earlier releases and are not measurements of the current rubric.
+
+---
+
+## Historical Tracecheck 0.2
 
 ## Current checks
 

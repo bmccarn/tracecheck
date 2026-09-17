@@ -24,9 +24,9 @@ Run it as a **local MCP server** or use the **CLI** directly. Live assessments s
 
 | Capability | What it provides |
 | --- | --- |
-| **19 independent quality dimensions** | Applicability, 1–10 scores, confidence, selected concerns, and suggested next steps. No blended overall grade. |
+| **19 independent quality dimensions** | Separate relevance and evidence sufficiency, 1–10 scores, confidence, selected concerns, and suggested next steps. No blended overall grade. |
 | **Findings tied to source** | Parser-derived locations and code excerpts, with separate support and impact judgments. |
-| **Repository context** | Git changes and baseline source, bounded relative-import expansion, and related tests. |
+| **Repository context** | Git changes and baseline source, bounded JS/TS and Python import discovery, callers, and related tests. |
 | **Checkpoint comparisons** | Eligible quality deltas and finding history, without treating a missing finding as a verified fix. |
 | **Explicit uncertainty** | Missing context, uncertain judgments, and omitted files remain visible. |
 | **Agent and CLI workflows** | Three MCP tools, a continuous-review skill, readable terminal output, and JSON reports. |
@@ -116,7 +116,7 @@ flowchart TD
 4. **Compare locally.** Previous assessments are used for comparison, not sent to Jev as evidence about the current implementation.
 5. **Act on supported concerns.** Investigate findings, make justified changes, run normal project checks, and review another checkpoint. Avoid changing code solely to raise a score.
 
-For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. CLI `review` collects its own current context and does not require a prior preview token.
+For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. Repository reviews also recollect after inference and reject changes made during the request. CLI `review` collects its own current context and does not require a prior preview token.
 
 ## Quality dimensions
 
@@ -310,21 +310,24 @@ See the [publishing guide](docs/publishing.md) for local artifact testing, Claud
 Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api). The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
 - `preview` is local. `preview --json` shows the captured source as well as the collection metadata.
-- The collector skips generated paths, symlinks, binary files, and some recognizable secret patterns. This is not comprehensive secret detection; manually supplied context does not pass through that collector screening.
+- The collector skips generated paths, symlinks, binary files, and some recognizable secret patterns. Known credential patterns are also checked at the provider boundary for manually supplied context. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
-- Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. This cache does not apply to CLI runs or supplied-context assessments.
+- Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
 
 ### Collection limits
 
 | Limit | Current value |
 | --- | --- |
 | Collected files | 16 |
-| Current file size | 24,000 bytes |
+| Current file read limit | 256,000 bytes |
+| Changed files | 8, reserving file slots for supporting evidence |
+| Focused source per current/baseline version | Up to 12,000 characters each |
+| Caller/import discovery | 200 tracked files, approximately 8 MB |
 | Total source context, including baseline versions | 60,000 characters |
 | Parser-derived source candidates | 40 |
 | Serialized provider request | Less than 180,000 bytes |
 
-Collection omissions are reported. An oversized provider request fails visibly. Automatic dependency expansion follows one hop of supported relative JS/TS imports and selected related tests; it is not a complete call graph.
+Collection omissions are reported. An oversized provider request fails visibly. Large files use bounded excerpts with original line anchors, visible omissions, and full-content digests. Discovery follows one hop of supported JS/TS and Python imports, selected callers, and related tests; it is heuristic, not a complete call graph. Collection has a 20-second deadline; repository review has a 90-second pipeline deadline.
 
 ## Coverage and validation
 
@@ -336,6 +339,7 @@ npm run demo                        # Scripted example; no live inference
 npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
 npm run quality-smoke -- --live      # Live supplied-context Python assessments
+npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project label checks
 ```
 
 Live commands require credentials and consume API usage. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
@@ -353,12 +357,9 @@ Live commands require credentials and consume API usage. The [validation record]
 
 ## Roadmap
 
-The next milestone focuses on review quality and reliability:
+The unreleased evidence milestone adds a real-project benchmark, separate relevance/evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. These changes are in the source branch; npm v0.2.0 remains the previous release.
 
-- Representative bug/clean/fix benchmarks and calibrated thresholds.
-- Separate relevance, evidence sufficiency, and concern-support judgments.
-- Focused evidence packets with better caller, contract, and test retrieval.
-- Stronger cache isolation, request budgets, and cancellation boundaries.
+The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. Next steps are automatic Python candidates, labeled retrieval evaluation, more independent bug/fix families, and threshold calibration on a fresh holdout.
 
 Later work includes broader source checks, incremental reassessment, isolated reproductions and fix verification, and CI/SARIF exports. These are planned capabilities, not current features.
 
@@ -375,7 +376,7 @@ Run `npm ci` and `npm run validate` before submitting implementation changes. A 
 | [`src/mcp.ts`](src/mcp.ts) and [`src/cli.ts`](src/cli.ts) | MCP tools and command-line entry points. |
 | [`test/`](test/) and [`examples/`](examples/) | Regression tests, demos, and live smoke checks. |
 
-Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Capability coverage](docs/parity.md)
+Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Capability coverage](docs/parity.md)
 
 ## License
 

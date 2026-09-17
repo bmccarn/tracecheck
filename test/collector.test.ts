@@ -63,7 +63,7 @@ test('retains non-JS source for quality review and binds task context to the sna
   const plan = await collect({ repo: repo.root, includeUntracked: true, task: 'Return None for invalid JSON.' });
   assert.equal(plan.sources[0]!.path, 'decode.py');
   assert.equal(plan.candidates.length, 0);
-  assert.equal(plan.limitations.length, 0);
+  assert.deepEqual(plan.limitations, ['Import/caller discovery is heuristic; unresolved imports, aliases, dynamic imports, and external contracts may be missing.']);
   const changed = await collect({ repo: repo.root, includeUntracked: true, task: 'Throw for invalid JSON.' });
   assert.notEqual(changed.snapshot, plan.snapshot);
 });

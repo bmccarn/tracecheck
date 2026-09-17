@@ -4,15 +4,15 @@ Tracecheck has a broad quality layer and a source-finding layer. Jev supplies ty
 
 ## Execution
 
-`tracecheck_assess` accepts explicit task, diff, files, and repository facts. It asks 57 questions in one request: applicability (Noul), quality level (Score), and primary concern (Choice) for each of 19 dimensions. The concern catalog and suggestions are independently authored. Input is language-agnostic and does not cause filesystem access.
+`tracecheck_assess` accepts explicit task, diff, files, and repository facts. It asks 76 questions in one request: relevance (Noul), evidence sufficiency (Noul), quality level (Score), and primary concern (Choice) for each of 19 dimensions. The concern catalog and suggestions are independently authored. Input is language-agnostic and does not cause filesystem access.
 
 `tracecheck_review` collects bounded Git context, considers the same 19 dimensions, and adds source-check candidates. The broad questions and the first ten candidates share one provider call. Additional candidates are processed in batches of ten. Questions are independent; no answer is assumed to be visible to another question in the same request. Aggregate token/request usage counts each call once. The nested quality usage describes the shared first request and must not be added to report totals.
 
-The collector retains current and baseline source, one hop of relative JS/TS imports, and filename-associated tests. Several common source/config/documentation extensions are collected for the broad layer. Babel provides JS/TS syntax analysis; TypeScript 7 supplies compilation, not the old in-process compiler API. No repository code, compiler plugin, or test is executed.
+The collector retains current and baseline source, one hop of supported JS/TS and Python imports, selected reverse callers, and import- or filename-associated tests. Several common source/config/documentation extensions are collected for the broad layer. Babel provides JS/TS syntax analysis; TypeScript 7 supplies compilation, not the old in-process compiler API. No repository code, compiler plugin, or test is executed.
 
 ## Quality policy
 
-All 19 dimensions are considered; performance, scalability, compatibility, and observability require evidence of relevance. Applicability >= 0.8 permits a score. Lower values produce unassessed or uncertain states. This is stricter than the baseline's binary 0.5 cutoff and is a deliberate, provisional policy requiring calibration.
+All 19 dimensions are considered; performance, scalability, compatibility, and observability require evidence of relevance. Separate relevance and evidence sufficiency judgments must both be >= 0.8 to permit a score. The compatibility applicability field is their minimum, not a product. Rubric version 2 is not numerically compared with version 1. Lower values produce unassessed or uncertain states. This is stricter than the baseline's binary 0.5 cutoff and is a deliberate, provisional policy requiring calibration.
 
 A Score is converted from Jev's zero-based ten-level rubric to a 1–10 value. Its confidence is preserved separately from applicability. Scores with confidence below 0.6 remain explicitly uncertain. Concerns require Choice confidence >= 0.6 and selected probability >= 0.8 to become actionable priorities. A high score cannot suppress an actionable concern.
 
@@ -30,22 +30,22 @@ Candidate identities use path, symbol, check, normalized expression, and duplica
 
 ## Budgets and omissions
 
-Automatic collection is bounded to 16 files, 24 KB per current file, 60,000 source characters including baselines, and 40 source candidates. Full versions of included files are transmitted. Manual context is not silently truncated; the provider client rejects requests above 180 KB serialized size. Provider token-limit errors ask the caller to split context coherently.
+Automatic collection is bounded to 16 files (at most eight changed), 256 KB per current file read, 60,000 source characters including baselines, and 40 source candidates. Files that exceed the excerpt budget retain bounded original-line excerpts, nearby function bodies where possible, and full-content digests. Each version gets at most 12,000 characters, reduced when the total budget requires it. Caller/import indexing scans at most 200 tracked files with an approximately 8 MB budget. Manual context is not silently truncated; the provider client rejects requests above 180 KB serialized size. Provider token-limit errors ask the caller to split context coherently.
 
-Generated paths, external symlinks, unsupported files, parse failures, unresolved imports, potential secret-bearing source, and budget omissions are visible gaps. Secret pattern checks are not comprehensive DLP. Relative imports and related tests are supported; arbitrary callers, path aliases, CommonJS graphs, and dynamic imports are not fully resolved. Dependency edits do not yet schedule source checks in unchanged callers.
+Generated paths, external symlinks, unsupported files, parse failures, potential secret-bearing source, and budget omissions are visible gaps. Secret pattern checks are not comprehensive DLP. Heuristic import and reverse-caller discovery is incomplete; unresolved references, path aliases, and dynamic imports may be missed. Selection limits and the graph limitation are reported. Dependency edits do not yet schedule source checks in unchanged callers.
 
-Captured content is hashed with task/context. Collection is not an atomic filesystem transaction. MCP recollects before accepting a preview token and rejects stale snapshots, but cannot stop a user from editing files after capture.
+Captured content digests are hashed with canonical repository identity and task/context. Collection is not an atomic filesystem transaction. MCP recollects before accepting a preview token. Both repository review entry points recollect after inference and reject changed snapshots, but cannot prevent later edits.
 
 ## MCP and provider boundary
 
 The official MCP v2 server uses stdio, Zod 4 input/output schemas, read-only annotations, remote-access hints, and request cancellation. Stdout is reserved for protocol messages. The server can be bound to one repository or accept an explicit repository per collection call. Supplied-context assessment needs neither Git nor a configured repository.
 
-The Jev client handles all three primitives, validates requested answer types/options/ranges, retains the resolved model identifier, applies a request deadline across retries, and honors bounded Retry-After delays. Errors cannot become successful reviews. Credentials are read from the environment and sent directly to TypeSafe.
+The Jev client handles all three primitives, validates requested answer types/options/ranges, retains the resolved model identifier, applies a request deadline across retries, and honors bounded Retry-After delays. Responses are limited to 512 KB, and malformed response errors do not echo provider bodies. Secret-pattern screening also applies to supplied contexts before transmission. Collection is bounded to 20 seconds and repository review to 90 seconds, with cancellation propagated into Git and provider work. Errors cannot become successful reviews. Credentials are read from the environment and sent directly to TypeSafe.
 
-Repository reviews cache up to 16 reports for five minutes. Keys include source/task/context snapshots, requested model, and prior-evaluation identity. The original report time and cache-hit flag remain visible. A mutable model alias can change upstream; choose an available concrete version for reproducible evaluations.
+Repository reviews cache up to 16 reports for five minutes. Keys include canonical repository identity, source/task/context snapshots, and requested model. Prior evaluations are compared against a cloned report locally and do not invalidate cached inference. The original report time and cache-hit flag remain visible. A mutable model alias can change upstream; choose an available concrete version for reproducible evaluations.
 
 ## Packaging and next work
 
 The runtime is bundled into a standalone ESM file. Portable plugin manifests, client compatibility adapters, and a continuous-review skill accompany it. Packaging validation is distinct from installation inside every client.
 
-Remaining improvements are broader candidate coverage, caller-aware retrieval, real-PR evaluation, calibrated thresholds, sandboxed witness execution, verified-fix tracking, and CI/SARIF export. See the capability parity checklist and recorded validation results.
+Remaining improvements are broader candidate coverage, complete caller retrieval, broader real-PR evaluation, calibrated thresholds, sandboxed witness execution, verified-fix tracking, and CI/SARIF export. See the capability parity checklist and recorded validation results.

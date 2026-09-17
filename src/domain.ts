@@ -1,10 +1,10 @@
 import { createHash } from 'node:crypto';
 
 export const CHECK_VERSION = '1';
-export const POLICY_VERSION = '1';
+export const POLICY_VERSION = '2';
 export const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
-export type Source = { path: string; content: string; role: 'changed' | 'dependency' | 'test'; before?: string };
+export type Source = { path: string; content: string; role: 'changed' | 'dependency' | 'caller' | 'test'; before?: string; evidence?: { currentRanges: Range[]; beforeRanges?: Range[]; totalLines: number; complete: boolean; digest: string } };
 export type Range = { start: number; end: number };
 export type Candidate = {
   id: string; check: string; path: string; symbol: string; range: Range;

@@ -37,7 +37,7 @@ export async function review(plan: ReviewPlan, evaluator: Evaluator, signal?: Ab
     signal?.throwIfAborted();
     const batch = plan.candidates.slice(offset, offset + 10);
     const questions = Object.assign({}, ...batch.map(questionsFor)) as Record<string, Choice>;
-    const response = await evaluator.evaluate({ sources: plan.sources, candidates: batch, limitations: plan.limitations }, questions);
+    const response = await evaluator.evaluate({ sources: plan.sources, candidates: batch, limitations: plan.limitations, task: plan.task, repositoryContext: plan.repositoryContext }, questions);
     models.add(response.model);
     usage.inputTokens += response.usage.input_tokens;
     usage.outputTokens += response.usage.output_tokens;
