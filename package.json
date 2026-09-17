@@ -1,0 +1,71 @@
+{
+  "name": "@bmccarn/tracecheck",
+  "version": "0.2.0",
+  "description": "Evidence-backed code review powered by Jev",
+  "type": "module",
+  "bin": {
+    "tracecheck": "dist/plugin.mjs"
+  },
+  "scripts": {
+    "build": "tsc && node scripts/build.mjs",
+    "check": "tsc -p tsconfig.check.json",
+    "test": "npm run build && tsx --test test/*.test.ts",
+    "validate": "npm run check && npm test",
+    "review": "tsx src/cli.ts review",
+    "demo": "tsx examples/demo.ts",
+    "mcp": "tsx src/cli.ts mcp",
+    "benchmark": "tsx examples/benchmark.ts",
+    "smoke": "tsx examples/live-smoke.ts",
+    "quality-smoke": "tsx examples/live-quality.ts",
+    "prepack": "npm run build",
+    "prepublishOnly": "npm run release:check",
+    "package:check": "npm run build && node scripts/package-release.mjs",
+    "release:check": "npm run validate && npm run package:check && node scripts/release-metadata.mjs"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/client": "2.0.0",
+    "@types/node": "22.20.3",
+    "esbuild": "0.28.2",
+    "tsx": "4.23.13",
+    "typescript": "7.0.2",
+    "@babel/parser": "8.0.5",
+    "@babel/types": "8.0.5",
+    "@modelcontextprotocol/server": "2.0.0",
+    "zod": "4.6.5"
+  },
+  "files": [
+    "dist/plugin.mjs",
+    "plugin.json",
+    "mcp.json",
+    ".codex-plugin",
+    ".claude-plugin",
+    ".mcp.json",
+    "skills",
+    "README.md",
+    "docs"
+  ],
+  "keywords": [
+    "code-review",
+    "mcp",
+    "jev",
+    "claude-code",
+    "codex",
+    "agent-skill"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "license": "MIT",
+  "author": "bmccarn",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bmccarn/tracecheck.git"
+  },
+  "homepage": "https://github.com/bmccarn/tracecheck#readme",
+  "bugs": {
+    "url": "https://github.com/bmccarn/tracecheck/issues"
+  }
+}

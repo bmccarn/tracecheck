@@ -1,0 +1,14 @@
+{
+  "name": "tracecheck",
+  "version": "0.2.0",
+  "description": "Continuous quality review and source-anchored findings powered by Jev.",
+  "author": {
+    "name": "bmccarn"
+  },
+  "keywords": [
+    "code-review",
+    "mcp",
+    "jev",
+    "software-quality"
+  ]
+}

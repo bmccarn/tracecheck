@@ -1,0 +1,14 @@
+{
+  "name": "tracecheck-plugins",
+  "owner": {
+    "name": "bmccarn"
+  },
+  "description": "Jev-powered code review for coding agents.",
+  "plugins": [
+    {
+      "name": "tracecheck",
+      "source": "./",
+      "description": "Continuous quality review with source-anchored findings."
+    }
+  ]
+}

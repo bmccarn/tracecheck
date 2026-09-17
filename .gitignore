@@ -1,0 +1,10 @@
+node_modules/
+dist/*
+!dist/plugin.mjs
+.tracecheck/
+.env
+.env.*
+!.env.example
+*.tsbuildinfo
+release/
+*.tgz

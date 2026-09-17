@@ -1,0 +1,35 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "tracecheck",
+  "version": "0.2.0",
+  "description": "Continuous quality review and source-anchored findings powered by Jev.",
+  "author": {
+    "name": "bmccarn"
+  },
+  "keywords": [
+    "code-review",
+    "mcp",
+    "jev",
+    "software-quality"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "Tracecheck",
+        "shortDescription": "Review quality and verify code concerns",
+        "longDescription": "Review nineteen independent quality dimensions, compare implementation checkpoints, and investigate source-anchored concerns with Jev.",
+        "developerName": "Tracecheck",
+        "category": "Developer Tools",
+        "capabilities": [
+          "MCP tools",
+          "Agent Skill",
+          "Code review"
+        ],
+        "defaultPrompt": [
+          "Review this implementation with Tracecheck.",
+          "Compare this change with the previous quality assessment."
+        ]
+      }
+    }
+  }
+}

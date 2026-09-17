@@ -1,0 +1,14 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/mcp.schema.json",
+  "mcpServers": {
+    "tracecheck": {
+      "type": "stdio",
+      "command": "node",
+      "args": [
+        "./dist/plugin.mjs",
+        "mcp"
+      ],
+      "cwd": "./"
+    }
+  }
+}
