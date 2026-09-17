@@ -282,7 +282,13 @@ npm run package:check
 
 This builds and verifies an npm tarball and a marketplace bundle for both clients in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
 
-Run `npx --yes @bmccarn/tracecheck@0.2.0 mcp` (or `preview`, `review`, and `assess`) to use the versioned npm runtime. An `npx` MCP configuration exposes tools; install the plugin to register the associated skill as well.
+The GitHub plugin and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) are public. npm registry publication is pending account setup. You can run the published GitHub artifact now:
+
+```sh
+npx --yes --package=https://github.com/bmccarn/tracecheck/releases/download/v0.2.0/bmccarn-tracecheck-0.2.0.tgz tracecheck --help
+```
+
+After registry publication, the shorter command will be `npx --yes @bmccarn/tracecheck@0.2.0 mcp` (or `preview`, `review`, and `assess`). An `npx` MCP configuration exposes tools; install the plugin to register the associated skill as well.
 
 See the [publishing guide](docs/publishing.md) for local artifact testing, Claude/Codex installation, registry publication, and version updates.
 
