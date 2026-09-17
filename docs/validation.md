@@ -1,5 +1,12 @@
 # Validation
 
+## Candidate publication-path repair — September 17, 2026
+
+- The `v0.3.0-rc.1` release failed before npm authentication: npm 11.5.1 parsed `release/bmccarn-tracecheck-0.3.0-rc.1.tgz` as a GitHub repository. The same failure reproduces locally with the pinned npm version and `--dry-run`.
+- Prefixing the archive with `./` resolves it as a local file. The repaired workflow's actual publication shell block, run with npm 11.5.1 and a temporary wrapper that appends `--dry-run --json`, selects `@bmccarn/tracecheck@0.3.0-rc.2`, includes all 18 files, and succeeds with the production provenance flag. This verifies path handling, not OIDC authentication or registry publication.
+- `npm run release:check` still passes all 82 tests, builds, metadata gates, offline CLI, and four MCP tools. Workflow lint passes; primary LSP checks confirm all six changed workflow/metadata files with no diagnostics.
+- The failed `v0.3.0-rc.1` tag is preserved. The repair uses a new `0.3.0-rc.2` candidate; runtime logic is unchanged apart from synchronized version metadata. Temporary smoke fixtures were removed.
+
 ## Release preparation and native installation — September 17, 2026
 
 - `npm run release:check` passes: 82 tests, type-checking, builds, synchronized metadata, actual npm/marketplace archives, offline CLI, and all four MCP tools. MCP initialization reports `0.3.0-rc.1`. No Jev request is made by this release check.

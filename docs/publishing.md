@@ -6,7 +6,7 @@ One version covers the standalone CLI, four-tool MCP server, review skill, and p
 
 | Surface | Release source |
 | --- | --- |
-| npm `next` | Prereleases such as `0.3.0-rc.1` |
+| npm `next` | Prereleases such as `0.3.0-rc.2` |
 | npm `latest` | Stable versions such as `0.3.0` |
 | GitHub releases | The verified npm and marketplace archives for the matching immutable tag |
 | `bmccarn/tracecheck-plugins` | Generated stable marketplace payload for Claude and Codex; never release candidates |
@@ -23,7 +23,7 @@ From a checkout containing the intended changes:
 
 ```sh
 npm ci
-npm run release:prepare -- 0.3.0-rc.1
+npm run release:prepare -- 0.3.0-rc.2
 ```
 
 Preparation validates all metadata before updating `package.json`, the lockfile, and the three plugin manifests together. It neither commits nor publishes. Update the changelog and relevant installation examples, then run:
@@ -74,8 +74,8 @@ The account owner has confirmed that this trusted publisher is configured. OIDC 
 After the release PR is merged, tag the exact reviewed commit, replacing `REVIEWED_COMMIT` with its SHA:
 
 ```sh
-git tag -a v0.3.0-rc.1 REVIEWED_COMMIT -m 'Tracecheck 0.3.0-rc.1'
-git push origin v0.3.0-rc.1
+git tag -a v0.3.0-rc.2 REVIEWED_COMMIT -m 'Tracecheck 0.3.0-rc.2'
+git push origin v0.3.0-rc.2
 ```
 
 Approve the protected `release` deployment only after checking the tag, commit, version, and channel. GitHub Actions installs locked dependencies, runs the release checks, retains the verified artifacts, and publishes the exact checked npm tarball to `next`. It attaches the npm and marketplace archives to a GitHub prerelease. The stable marketplace is not modified.
@@ -83,14 +83,20 @@ Approve the protected `release` deployment only after checking the tag, commit, 
 Once the candidate is actually published:
 
 ```sh
-npx --yes @bmccarn/tracecheck@0.3.0-rc.1 --help
-npx --yes @bmccarn/tracecheck@0.3.0-rc.1 mcp
+npx --yes @bmccarn/tracecheck@0.3.0-rc.2 --help
+npx --yes @bmccarn/tracecheck@0.3.0-rc.2 mcp
 ```
 
 Before publication, test the local tarball instead of using a registry version that does not exist:
 
 ```sh
-npm exec --yes --package=/absolute/path/to/tracecheck/release/bmccarn-tracecheck-0.3.0-rc.1.tgz -- tracecheck --help
+npm exec --yes --package=/absolute/path/to/tracecheck/release/bmccarn-tracecheck-0.3.0-rc.2.tgz -- tracecheck --help
+```
+
+When publishing a local archive with pinned npm 11.5.1, the path must begin with `./` or be absolute: `release/<file>.tgz` is otherwise interpreted as a GitHub shorthand. A pinned-npm dry-run checks only publication-path handling; it is not proof of OIDC trusted publishing.
+
+```sh
+npm exec --yes --package=npm@11.5.1 -- npm publish ./release/bmccarn-tracecheck-0.3.0-rc.2.tgz --dry-run --ignore-scripts --provenance --tag next
 ```
 
 The historical public `0.2.0` has three tools. Do not pair it with the newer agent-first skill, which calls `tracecheck_verify`.
