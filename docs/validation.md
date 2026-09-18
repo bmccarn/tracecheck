@@ -1,5 +1,10 @@
 # Validation
 
+## Stable 0.3.0 preparation — September 18, 2026
+
+- `npm run release:check` passes all 82 tests, type-checking, builds, synchronized metadata, and offline CLI/four-tool MCP checks for the actual `0.3.0` npm and marketplace archives. The tagged release gate selects `latest`. Workflow lint passes; primary LSP checks confirm all five updated metadata files with no diagnostics.
+- The owner requested stable promotion with the previously recorded native-agent authentication and Cursor UI limitations still explicit. Publication must populate the release-only marketplace before its remote native-install commands are usable; preparation checks do not claim that remote publication or installation has already occurred.
+
 ## Candidate publication-path repair — September 17, 2026
 
 - The `v0.3.0-rc.1` release failed before npm authentication: npm 11.5.1 parsed `release/bmccarn-tracecheck-0.3.0-rc.1.tgz` as a GitHub repository. The same failure reproduces locally with the pinned npm version and `--dry-run`.

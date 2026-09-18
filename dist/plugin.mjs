@@ -58321,7 +58321,7 @@ var init_mcp = __esm({
     init_quality();
     init_schema();
     init_collection_options();
-    releaseVersion = true ? "0.3.0-rc.2" : createRequire(import.meta.url)("../package.json").version;
+    releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
     CACHE_LIMIT = 16;
     CACHE_TTL_MS = 3e5;
   }

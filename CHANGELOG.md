@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-18
 
+- Promote agent-led verification, four-tool MCP integration, and scalable evidence collection to the stable release.
+- Distribute the matching skill and bundled runtime through the release-only Claude Code and Codex marketplace for native installation.
 - Update CI and release workflows to SHA-pinned Node 24 actions, including supported setup-node cache controls, and pin runners to Ubuntu 24.04.
 
 ## 0.3.0-rc.2 — 2026-09-17

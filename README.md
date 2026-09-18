@@ -244,21 +244,12 @@ A zero exit does not prove correctness. `assess` returns quality signals without
 
 ## Install the plugin
 
-Install the skill and MCP runtime from the same release. For this candidate, build and extract the verified marketplace bundle from the checkout root:
-
-```sh
-npm ci
-npm run package:check
-mkdir -p release/unpacked
-tar -xzf release/tracecheck-marketplace-0.3.0-rc.2.tgz -C release/unpacked
-```
-
-Use the absolute path to `release/unpacked/tracecheck-marketplace` in the commands below. Keep that directory available: clients may load local marketplace files in place. See the [installation gate](docs/publishing.md#native-installation-gate) for promotion checks.
+After Tracecheck `0.3.0` is published, install the matching skill and four-tool MCP runtime through the stable marketplace:
 
 **Claude Code**
 
 ```text
-/plugin marketplace add /absolute/path/to/tracecheck/release/unpacked/tracecheck-marketplace
+/plugin marketplace add bmccarn/tracecheck-plugins
 /plugin install tracecheck@tracecheck-plugins
 ```
 
@@ -267,13 +258,13 @@ Invoke `/tracecheck:tracecheck` to start the review workflow.
 **Codex**
 
 ```sh
-codex plugin marketplace add /absolute/path/to/tracecheck/release/unpacked/tracecheck-marketplace
+codex plugin marketplace add bmccarn/tracecheck-plugins
 codex plugin add tracecheck@tracecheck-plugins
 ```
 
-Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ and a Jev key in the launching environment. After the first stable payload is published, the local marketplace path can be replaced with `bmccarn/tracecheck-plugins`; that remote is not usable while empty.
+Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ and a Jev key in the launching environment. The release-only marketplace becomes available only when the stable `0.3.0` publication has populated it from the verified release artifact. For local-bundle development and prepublication installation, follow the [publishing guide](docs/publishing.md#prerelease-local-bundle-installation).
 
-Existing installations from `bmccarn/tracecheck` remain pinned to historical `v0.2.0`. Re-register against the release-only marketplace after its first stable publication to receive the newer runtime and skill together.
+Existing installations from `bmccarn/tracecheck` remain pinned to historical `v0.2.0`. Re-register against the release-only marketplace after stable `0.3.0` publication to receive the newer runtime and skill together.
 
 ## MCP and agent setup
 
@@ -314,39 +305,30 @@ npm run package:check
 
 This builds and verifies an npm tarball and a marketplace bundle for both clients in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
 
-### Current public stable: 0.2.0
+### Stable target: 0.3.0
 
-The GitHub plugin, [npm package](https://www.npmjs.com/package/@bmccarn/tracecheck), and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) are public. Pin the current public stable package:
+After `0.3.0` is published, it is the `latest` npm release and the source for the stable Claude/Codex marketplace payload. Pin its CLI or four-tool MCP runtime:
+
+```sh
+npx --yes @bmccarn/tracecheck@0.3.0 --help
+npx --yes @bmccarn/tracecheck@0.3.0 mcp
+```
+
+Pair that runtime with the complete skill directory from the same `0.3.0` package or release artifact. Native Claude and Codex users should use the marketplace commands above; Cursor uses the [version-matched manual setup](docs/integrations.md#cursor-manual-mcp--skill).
+
+### Historical legacy: 0.2.0
+
+The public `0.2.0` npm package and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) remain available for existing CLI installations:
 
 ```sh
 npx --yes @bmccarn/tracecheck@0.2.0 --help
 npx --yes @bmccarn/tracecheck@0.2.0 review --repo /path/to/project
 ```
 
-You can also run the same stable artifact from GitHub:
+`0.2.0` predates the four-tool MCP server and matching skill, so it is not a new-installation path for those integrations.
 
-```sh
-npx --yes --package=https://github.com/bmccarn/tracecheck/releases/download/v0.2.0/bmccarn-tracecheck-0.2.0.tgz tracecheck --help
-```
+Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins` from the same verified release artifact. See the [publishing guide](docs/publishing.md) for prepublication local-bundle testing, stable publication, and recovery.
 
-These stable CLI examples remain valid. The four-tool MCP server and matching skill described in [the integration guide](docs/integrations.md#cursor-manual-mcp--skill) require either the built local checkout before publication or the published release candidate; do not pair that skill with the `0.2.0` runtime.
-
-### Release candidate: 0.3.0-rc.2
-
-After `0.3.0-rc.2` is published to npm's `next` channel, users may explicitly pin its CLI and four-tool MCP runtime. Before publication, use the local build; the command below requires that registry version to exist:
-
-```sh
-npx --yes @bmccarn/tracecheck@0.3.0-rc.2 --help
-npx --yes @bmccarn/tracecheck@0.3.0-rc.2 mcp
-```
-
-Pair that runtime with the skill copied from the same release-candidate source. Before publication, use the matching built local checkout instead. A published prerelease receives npm's `next` tag and GitHub prerelease artifacts, but does not update the stable marketplace payload.
-
-### Release-only stable marketplace
-
-Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins` from the same verified release artifact. The repository becomes an installation source after its first stable publication; release candidates never update it.
-
-See the [publishing guide](docs/publishing.md) for local artifact testing, Claude/Codex installation, registry publication, and version updates.
 
 ## Configuration and data handling
 
@@ -414,7 +396,7 @@ GitHub Actions runs `npm ci`, `npm run validate`, and `npm run package:check` on
 
 ## Roadmap
 
-The unreleased evidence milestone adds a real-project benchmark, separate relevance/evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. These changes are in the source branch; npm v0.2.0 remains the previous release.
+The `0.3.0` version adds a real-project benchmark, separate relevance/evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. Its public availability follows the stable publication process above; npm `0.2.0` remains the previous release.
 
 The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
 
