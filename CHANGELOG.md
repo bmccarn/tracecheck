@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 — 2026-09-17
+## 0.3.0 — 2026-09-18
 
 - Promote agent-led verification, four-tool MCP integration, and scalable evidence collection to the stable release.
 - Distribute the matching skill and bundled runtime through the release-only Claude Code and Codex marketplace for native installation.
