@@ -11,19 +11,19 @@ One version covers the standalone CLI, four-tool MCP server, review skill, and p
 | GitHub releases | The verified npm and marketplace archives for the matching immutable tag |
 | `bmccarn/tracecheck-plugins` | Generated stable marketplace payload for Claude and Codex; never release candidates |
 
-Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. It has no usable catalog until its first stable payload is published. Source-repository catalogs remain pinned to the historical `v0.2.0` release; they do not track development or automatically migrate existing installations.
+Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. Before its first stable publication it does not provide an installation catalog; after a successful stable publication it is the canonical Claude/Codex marketplace source. Source-repository catalogs remain pinned to the historical `v0.2.0` release; they do not track development or automatically migrate existing installations.
 
 A prerelease must not move npm's `latest` tag or update the stable marketplace. Published versions and release tags are immutable. The workflow is not a cross-service transaction: npm, GitHub releases, and the marketplace can succeed independently; use the recovery procedure below after a partial publication.
 
 Release versions use `MAJOR.MINOR.PATCH` with an optional prerelease suffix such as `-rc.1`. Build metadata (`+...`) is deliberately rejected so registry identity, channel selection, tags, and archive names agree.
 
-## Prepare a release PR
+## Prepare a stable release PR
 
-From a checkout containing the intended changes:
+From a checkout containing the intended `0.3.0` changes:
 
 ```sh
 npm ci
-npm run release:prepare -- 0.3.0-rc.2
+npm run release:prepare -- 0.3.0
 ```
 
 Preparation validates all metadata before updating `package.json`, the lockfile, and the three plugin manifests together. It neither commits nor publishes. Update the changelog and relevant installation examples, then run:
@@ -101,9 +101,29 @@ npm exec --yes --package=npm@11.5.1 -- npm publish ./release/bmccarn-tracecheck-
 
 The historical public `0.2.0` has three tools. Do not pair it with the newer agent-first skill, which calls `tracecheck_verify`.
 
-## Native installation gate
+## Native marketplace installation
 
-Extract the candidate's `tracecheck-marketplace-<version>.tgz`. It contains both catalogs and `plugins/tracecheck/`, copied from the verified npm payload.
+After stable `0.3.0` publication has completed and populated `bmccarn/tracecheck-plugins`, this is the primary installation path:
+
+Claude Code:
+
+```text
+/plugin marketplace add bmccarn/tracecheck-plugins
+/plugin install tracecheck@tracecheck-plugins
+```
+
+Codex:
+
+```sh
+codex plugin marketplace add bmccarn/tracecheck-plugins
+codex plugin add tracecheck@tracecheck-plugins
+```
+
+For Cursor, follow the stable version-matched [manual setup](integrations.md#cursor-manual-mcp--skill); npm does not register its MCP entry or skill automatically.
+
+## Prerelease local-bundle installation
+
+This historical candidate workflow remains for local development and prepublication testing; it is not the normal stable client-installation path. Extract the candidate's `tracecheck-marketplace-<version>.tgz`. It contains both catalogs and `plugins/tracecheck/`, copied from the verified npm payload.
 
 Claude Code:
 
@@ -127,7 +147,12 @@ Offline package checks and CLI-native installation checks do not by themselves p
 
 ## Publish stable
 
-Prepare and merge a new release PR using `npm run release:prepare -- 0.3.0`, with the final changelog and rebuilt bundle. Run the release checks again; do not merely relabel a candidate tarball. Tag the reviewed stable commit as `v0.3.0` and approve its release deployment.
+Prepare and merge a new release PR using `npm run release:prepare -- 0.3.0`, with the final changelog and rebuilt bundle. Run the release checks again; do not merely relabel a candidate tarball. Tag the reviewed stable commit and submit it for the protected release approval:
+
+```sh
+git tag -a v0.3.0 REVIEWED_COMMIT -m 'Tracecheck 0.3.0'
+git push origin v0.3.0
+```
 
 This workflow supports one forward-moving stable line, not maintenance/backport channels. For a tagged stable release, the gate reads fetched local `v*` tags and rejects any version older than an existing stable release; prerelease tags do not block stable publication. A failed tag lookup also blocks publication. No-tag local metadata checks remain independent of Git history. Every approved stable release moves npm `latest` and replaces the shared marketplace payload. Downgrades belong to the explicit recovery procedure, not ordinary tag publication.
 
@@ -137,7 +162,7 @@ The stable workflow publishes the tested npm archive to `latest`, attaches the a
 - `.claude-plugin/marketplace.json`
 - `plugins/tracecheck/`
 
-It does not force-push or replace unrelated marketplace content. An initially empty marketplace is supported. Users then add `bmccarn/tracecheck-plugins` and install `tracecheck@tracecheck-plugins`.
+It does not force-push or replace unrelated marketplace content. After successful stable publication, users add `bmccarn/tracecheck-plugins` and install `tracecheck@tracecheck-plugins`.
 
 Existing users of the source-repository marketplace must re-register the marketplace against `bmccarn/tracecheck-plugins` after its first stable publication, then update/reinstall Tracecheck. The marketplace name remains `tracecheck-plugins`. Until that migration, the source catalogs remain pinned to `v0.2.0` rather than silently shipping a release candidate.
 

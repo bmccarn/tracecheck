@@ -33,7 +33,7 @@ Load the included `skills/tracecheck/SKILL.md` through the client's skill suppor
 
 Cursor discovers local stdio MCP servers from either project `.cursor/mcp.json` or global `~/.cursor/mcp.json`. Add the `tracecheck` entry inside the existing `mcpServers` object; preserve every other server entry.
 
-Until `0.3.0-rc.2` is published, point Cursor at a built local checkout so the MCP runtime matches the included four-tool skill:
+Before stable `0.3.0` is published, point Cursor at a built local checkout so the MCP runtime matches the included four-tool skill:
 
 ```json
 {
@@ -50,25 +50,35 @@ Until `0.3.0-rc.2` is published, point Cursor at a built local checkout so the M
 }
 ```
 
-After `0.3.0-rc.2` is published to npm's `next` channel, replace only `command` and `args` with the pinned release-candidate runtime:
+After stable `0.3.0` is published to npm, replace only `command` and `args` with the pinned stable runtime:
 
 ```json
 "command": "npx",
-"args": ["--yes", "@bmccarn/tracecheck@0.3.0-rc.2", "mcp"]
+"args": ["--yes", "@bmccarn/tracecheck@0.3.0", "mcp"]
 ```
 
-Do not pair the new four-tool skill with the public `0.2.0` runtime; that stable release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
+Do not pair the new four-tool skill with the public `0.2.0` runtime; that historical release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
 
-Copy the complete skill directory—not only `SKILL.md`—from the checkout or release source matching the configured runtime to one discovered Cursor location:
+Copy the complete skill directory—not only `SKILL.md`—from the source matching the configured runtime to one discovered Cursor location. After `0.3.0` is published, unpack that exact npm package and copy its entire skill folder:
 
 ```sh
+npm pack @bmccarn/tracecheck@0.3.0
+mkdir -p /tmp/tracecheck-0.3.0
+tar -xzf bmccarn-tracecheck-0.3.0.tgz -C /tmp/tracecheck-0.3.0
+
 # Global on this machine
 mkdir -p ~/.cursor/skills/tracecheck
-cp -R /absolute/path/to/tracecheck/skills/tracecheck/. ~/.cursor/skills/tracecheck/
+cp -R /tmp/tracecheck-0.3.0/package/skills/tracecheck/. ~/.cursor/skills/tracecheck/
 
 # Or, for this project only
 mkdir -p /path/to/project/.cursor/skills/tracecheck
-cp -R /absolute/path/to/tracecheck/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
+cp -R /tmp/tracecheck-0.3.0/package/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
+```
+
+Before publication, copy the complete folder from the matching local checkout instead:
+
+```sh
+cp -R /absolute/path/to/tracecheck/skills/tracecheck/. ~/.cursor/skills/tracecheck/
 ```
 
 The copied directory must retain `SKILL.md` and `references/tool-usage.md`. This is a manual Cursor integration, not a native Cursor marketplace plugin or an automatic client-configuration change.

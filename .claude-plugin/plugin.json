@@ -1,6 +1,6 @@
 {
   "name": "tracecheck",
-  "version": "0.3.0-rc.2",
+  "version": "0.3.0",
   "description": "Continuous quality review and source-anchored findings powered by Jev.",
   "author": {
     "name": "bmccarn"
