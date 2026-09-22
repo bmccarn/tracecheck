@@ -3,12 +3,13 @@ import { resolve } from 'node:path';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { qualityEvaluationSchema } from '../src/quality.js';
+import { providerEnvironment } from '../src/jev.js';
 
 if (!process.argv.includes('--live')) { console.log('Run npm run quality-smoke -- --live to review synthetic Python before and after a repair through MCP.'); process.exit(0); }
 const client = new Client({ name: 'tracecheck-quality-smoke', version: '1.0.0' });
 try {
   await client.connect(new StdioClientTransport({ command: process.execPath, args: [resolve('dist/plugin.mjs'), 'mcp'], stderr: 'pipe',
-    env: { PATH: process.env.PATH ?? '', JEV_API_KEY: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', JEV_MODEL: process.env.JEV_MODEL ?? 'jev-latest' } }));
+    env: { PATH: process.env.PATH ?? '', ...providerEnvironment() } }));
   const task = 'decode accepts arbitrary external JSON text, returns its decoded value, and returns None for malformed JSON. It must not throw for invalid JSON.';
   const beforeInput = { task, scope: 'synthetic-python-decode-v1', files: [{ path: 'decode.py', content: 'import json\n\ndef decode(text: str):\n    """Return decoded JSON, or None when the JSON is malformed."""\n    return json.loads(text)\n' }],
     repositoryContext: 'Small Python library. Its callers supply arbitrary external strings. The source is complete for this operation. No production workload or scale target is established.' };

@@ -23,7 +23,7 @@ For any stdio MCP client, including clients without a portable installer target,
 
 - Command: `node`
 - Arguments: `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp`
-- Environment: forward `TYPESAFE_API_KEY` or `JEV_API_KEY`; optionally `JEV_MODEL`.
+- Environment: forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL` and `JEV_MODEL`.
 
 Append `--repo`, `/absolute/path/to/reviewed/repository` to bind the process to one repository. Otherwise provide `repo` in collection-tool calls. GUI-launched clients may not inherit interactive shell variables; configure their environment explicitly without committing credentials.
 
@@ -57,7 +57,7 @@ After stable `0.3.0` is published to npm, replace only `command` and `args` with
 "args": ["--yes", "@bmccarn/tracecheck@0.3.0", "mcp"]
 ```
 
-Do not pair the new four-tool skill with the public `0.2.0` runtime; that historical release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
+Do not pair the new four-tool skill with the public `0.2.0` runtime; that historical release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. To use Jev through OpenRouter, use `"OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
 
 Copy the complete skill directory—not only `SKILL.md`—from the source matching the configured runtime to one discovered Cursor location. After `0.3.0` is published, unpack that exact npm package and copy its entire skill folder:
 

@@ -32,11 +32,59 @@ async function boundedJson(response: globalThis.Response): Promise<unknown> {
   } finally { await reader.cancel().catch(() => {}); reader.releaseLock(); }
 }
 
+export const TYPESAFE_BASE_URL = 'https://api.typesafe.ai';
+export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
+export const DEFAULT_MODEL = 'jev-latest';
+/** Environment variables that select the provider, credential, and model. */
+export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL'] as const;
+
+export type JevSettings = { apiKey: string; baseUrl: string; model: string };
+
+/**
+ * Resolves provider settings from the environment. A TypeSafe key takes precedence over an
+ * OpenRouter key. OpenRouter serves TypeSafe's System One API, so only the base URL differs.
+ * An explicit TYPESAFE_BASE_URL always wins.
+ */
+export function jevSettings(env: NodeJS.ProcessEnv = process.env): JevSettings {
+  const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  return {
+    apiKey: typesafeKey || openRouterKey || '',
+    baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
+    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL,
+  };
+}
+
+export function jevFromEnv(signal?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Jev {
+  return new Jev({ ...jevSettings(env), signal });
+}
+
+/** The provider variables that are set, for forwarding to a child process. */
+export function providerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  return Object.fromEntries(PROVIDER_ENVIRONMENT.flatMap(name => env[name] ? [[name, env[name]]] : []));
+}
+
+function systemOneEndpoint(baseUrl: string): string {
+  let url: URL;
+  try { url = new URL(baseUrl); } catch { throw new Error('TYPESAFE_BASE_URL must be an absolute URL.'); }
+  const loopback = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+  // The API key travels in a header, so it must never reach a remote host in plain text.
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && loopback)) {
+    throw new Error('TYPESAFE_BASE_URL must use HTTPS unless it points to a loopback host.');
+  }
+  if (url.username || url.password || /[?#]/.test(baseUrl)) {
+    throw new Error('TYPESAFE_BASE_URL must not contain credentials, a query, or a fragment.');
+  }
+  return `${url.origin}${url.pathname.replace(/\/+$/, '')}/v1/systemone`;
+}
+
 export class Jev implements Evaluator, TypedEvaluator {
   readonly model: string;
-  constructor(private options: { apiKey: string; model?: string; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number }) {
-    if (!options.apiKey.trim()) throw new Error('Set JEV_API_KEY or TYPESAFE_API_KEY before running a live review. Preview and demo do not require a key.');
-    this.model = options.model ?? 'jev-latest';
+  readonly endpoint: string;
+  constructor(private options: { apiKey: string; model?: string; baseUrl?: string; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number }) {
+    if (!options.apiKey.trim()) throw new Error('Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.');
+    this.model = options.model ?? DEFAULT_MODEL;
+    this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
   }
 
   async evaluate(state: unknown, questions: Record<string, Choice>): Promise<Response>;
@@ -50,7 +98,7 @@ export class Jev implements Evaluator, TypedEvaluator {
     const request = this.options.fetch ?? fetch;
     for (let attempt = 0; attempt < 3; attempt++) {
       signal.throwIfAborted();
-      const response = await request('https://api.typesafe.ai/v1/systemone', {
+      const response = await request(this.endpoint, {
         method: 'POST', headers: { Authorization: `Bearer ${this.options.apiKey}`, 'Content-Type': 'application/json' }, body, signal,
       });
       if (response.ok) {
@@ -74,8 +122,11 @@ export class Jev implements Evaluator, TypedEvaluator {
       // Read only a known error code; never surface a remote body that may echo source.
       if (response.status === 400) {
         const body: unknown = await boundedJson(response).catch(() => null);
-        const error = z.object({ detail: z.object({ error_type: z.string() }) }).safeParse(body);
-        if (error.success && error.data.detail.error_type === 'max_tokens_exceeded') {
+        const direct = z.object({ detail: z.object({ error_type: z.string() }) }).safeParse(body);
+        // OpenRouter forwards TypeSafe's error body as a string inside its own error envelope.
+        const relayed = z.object({ error: z.object({ message: z.string() }) }).safeParse(body);
+        if ((direct.success && direct.data.detail.error_type === 'max_tokens_exceeded')
+          || (relayed.success && /"error_type"\s*:\s*"max_tokens_exceeded"/.test(relayed.data.error.message))) {
           throw new Error('Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.');
         }
       } else await response.body?.cancel();

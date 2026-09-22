@@ -6,6 +6,7 @@ import { execFileSync } from 'node:child_process';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { reportSchema } from '../src/schema.js';
+import { providerEnvironment } from '../src/jev.js';
 
 if (!process.argv.includes('--live')) {
   console.log('Run npm run smoke -- --live to exercise Jev through the actual MCP server on synthetic source.');
@@ -23,7 +24,7 @@ try {
   await writeFile(join(root, 'decode.ts'), contract + 'export function decode(input: string) { return JSON.parse(input); }\nexport const malformed = decode("{broken");');
   await client.connect(new StdioClientTransport({ command: process.execPath,
     args: [resolve('dist/plugin.mjs'), 'mcp', '--repo', root], stderr: 'pipe',
-    env: { PATH: process.env.PATH ?? '', JEV_API_KEY: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', JEV_MODEL: process.env.JEV_MODEL ?? 'jev-latest' } }));
+    env: { PATH: process.env.PATH ?? '', ...providerEnvironment() } }));
   const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
   assert.ok(!preview.isError, JSON.stringify(preview));
   const snapshot = (preview.structuredContent as { snapshot: string }).snapshot;
@@ -34,7 +35,8 @@ try {
   assert.equal(report.decisions.length, 1);
   assert.equal(Object.keys(report.quality!.metrics).length, 19);
   assert.equal(report.usage.requests, 1);
-  assert.equal(report.models[0]?.startsWith('jev-'), true);
+  // OpenRouter reports its namespaced ID, for example typesafe/jev-1.13-20260917.
+  assert.match(report.models[0] ?? '', /^(?:typesafe\/)?jev-/);
   const repeat = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
   assert.ok(!repeat.isError);
   const repeated = repeat.structuredContent as { report: { id: string }; cached: boolean };

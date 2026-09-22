@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { realpath } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { collect } from './collector.js';
-import { Jev } from './jev.js';
+import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { reviewAll } from './review.js';
 import { assess, compareQuality, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
@@ -55,7 +55,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   }, async (args, ctx) => {
     const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(90_000)]);
     const selected = repo || args.repo ? await target(args.repo) : undefined;
-    const output = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal }), signal);
+    const output = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
   });
   server.registerTool('tracecheck_assess', {
@@ -63,7 +63,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     inputSchema: qualityInputSchema, outputSchema: qualityEvaluationSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
-    const output = await assess(args, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal: ctx.mcpReq.signal }));
+    const output = await assess(args, jevFromEnv(ctx.mcpReq.signal));
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
   });
   server.registerTool('tracecheck_preview', {
@@ -98,11 +98,11 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
       task: args.task, repositoryContext: args.repositoryContext, collection: args.collection };
     const plan = await collect({ ...collectionRequest, repo: root, discovery, signal });
     if (plan.snapshot !== args.snapshot) throw new Error('Repository context changed since preview. Run tracecheck_preview again.');
-    const model = process.env.JEV_MODEL ?? 'jev-latest';
-    const key = `${plan.root}:${plan.snapshot}:${model}`;
+    const settings = jevSettings();
+    const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     const existing = cache.get(key);
     const cached = Boolean(existing && existing.expires > Date.now());
-    const report = cached ? existing!.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model, signal }), { signal });
+    const report = cached ? existing!.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal });
     signal.throwIfAborted();
     const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
     if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Preview and review again.');

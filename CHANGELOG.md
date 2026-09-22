@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Support Jev served through OpenRouter. Set `OPENROUTER_API_KEY`, or point `TYPESAFE_BASE_URL` at `https://openrouter.ai/api` with an OpenRouter key in `TYPESAFE_API_KEY`. A TypeSafe key still takes precedence.
+- Add `TYPESAFE_BASE_URL` to select any System One API base URL. Tracecheck rejects plain-HTTP remote hosts and URLs that contain credentials, a query, or a fragment.
+- The MCP review cache now keys reports by endpoint as well as model.
+- Recognize the context-limit error that OpenRouter relays from TypeSafe, so over-limit requests get the same "split the review" guidance.
+
 ## 0.3.0 — 2026-09-18
 
 - Promote agent-led verification, four-tool MCP integration, and scalable evidence collection to the stable release.
