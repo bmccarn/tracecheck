@@ -16,6 +16,9 @@
 - Retry network failures when calling Jev, and report `Jev request failed (network error)` after the last attempt instead of `fetch failed`.
 - Add `JEV_TIMEOUT_MS` for the per-request timeout, and name the limit and its duration when a request, review, or verification times out.
 - Keep the baseline of renamed files: a renamed and edited file is reviewed against the old path's content, pure renames produce no changed ranges or candidates, and renames across unsupported paths are reported.
+- MCP review cache hits no longer re-collect the repository, cache eviction keeps live entries, and a previous evaluation that cannot be compared always adds a limitation.
+- `compare` matches models regardless of order and reports newly supported findings.
+- `tracecheck_assess` has a bounded timeout and honors client cancellation, CLI `assess` stops on Ctrl-C, `tracecheck_verify` limits evidence by UTF-8 bytes, and the `previousEvaluation` input schema is smaller.
 
 ## 0.3.0 — 2026-09-18
 
