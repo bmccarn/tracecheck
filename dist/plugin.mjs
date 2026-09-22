@@ -21294,9 +21294,11 @@ function reportFor(plan, started, decisions, models, limitations, usage) {
     usage
   };
 }
-async function evaluateAll(evaluator, requests, limit, signal) {
+async function evaluateAll(evaluator, requests, limit, signal, onProgress) {
   const outcomes = new Array(requests.length);
   let next = 0;
+  let completed = 0;
+  onProgress?.(0, requests.length);
   const worker = async () => {
     for (let index = next++; index < requests.length; index = next++) {
       signal?.throwIfAborted();
@@ -21307,6 +21309,7 @@ async function evaluateAll(evaluator, requests, limit, signal) {
         signal?.throwIfAborted();
         outcomes[index] = { error: error62 };
       }
+      onProgress?.(++completed, requests.length);
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, requests.length) }, worker));
@@ -21317,11 +21320,11 @@ function isIncomplete(report) {
 }
 async function orchestrate(plan, evaluator, broad, options) {
   const started = Date.now();
-  const { signal, concurrency = DEFAULT_CONCURRENCY } = options;
+  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress } = options;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error("Review concurrency must be a positive whole number.");
   const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
   const requests = packets.filter(hasSourceEvidence).flatMap((evidence) => planPacket(plan, evidence, broad));
-  const outcomes = await evaluateAll(evaluator, requests, concurrency, signal);
+  const outcomes = await evaluateAll(evaluator, requests, concurrency, signal, onProgress);
   signal?.throwIfAborted();
   const decisions = [];
   const models = /* @__PURE__ */ new Set();
@@ -36868,6 +36871,7 @@ async function collect(options) {
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
   const changed = [];
   const renames = /* @__PURE__ */ new Map();
+  options.onPhase?.("Listing changed files");
   const statusFields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"], signal, "Git change listing failed");
   for (let index2 = 0; index2 < statusFields.length; ) {
     const status = statusFields[index2++];
@@ -37013,6 +37017,7 @@ async function collect(options) {
       return void 0;
     }
   }
+  options.onPhase?.("Reading changed files");
   const eligibleChanges = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
@@ -37048,6 +37053,7 @@ async function collect(options) {
     }
   });
   const indexPaths = tracked.filter((path) => isSource(path) && isImportable(path)).sort();
+  options.onPhase?.("Indexing imports");
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
   limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
@@ -37078,6 +37084,7 @@ async function collect(options) {
     }
     relatedByChange.set(path, related);
   }
+  options.onPhase?.("Assembling change packets");
   const packets = [];
   const sourceByPath = new Map([...loaded].map(([path, item]) => [path, item.source]));
   const primaryPaths = [...changedSourcePaths].sort();
@@ -37314,6 +37321,50 @@ var init_project_config = __esm({
     }).partial().strict();
     where = (path) => path.length ? `"${path.map(String).join(".")}"` : "the top level";
     defined = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([, item]) => item !== void 0));
+  }
+});
+
+// src/progress.ts
+var ReviewProgress;
+var init_progress = __esm({
+  "src/progress.ts"() {
+    "use strict";
+    ReviewProgress = class {
+      constructor(send) {
+        this.send = send;
+      }
+      send;
+      progress = 0;
+      total;
+      planned = 0;
+      /** A collection phase has started. Phases after planning are ignored. */
+      phase = (message) => {
+        if (this.total === void 0) this.emit(this.progress + 1, message);
+      };
+      /** The review planned `total` requests (`completed` is 0), or one more request finished (`completed` of `total`). */
+      requests = (completed, total) => {
+        if (this.total === void 0) {
+          this.planned = this.progress + 1;
+          this.total = this.planned + total + 2;
+          this.emit(this.planned, total ? `Sending ${total} provider request${total === 1 ? "" : "s"}` : "No provider requests needed");
+          return;
+        }
+        this.emit(this.planned + completed, `Completed provider request ${completed} of ${total}`);
+      };
+      /** Every request finished; the repository is collected again to confirm it did not change. */
+      checking = () => {
+        if (this.total !== void 0) this.emit(this.total - 1, "Checking that the repository did not change");
+      };
+      /** The review report is ready. */
+      finished = () => {
+        if (this.total !== void 0) this.emit(this.total, "Review complete");
+      };
+      emit(progress, message) {
+        if (progress <= this.progress) return;
+        this.progress = progress;
+        this.send({ progress, ...this.total === void 0 ? {} : { total: this.total }, message });
+      }
+    };
   }
 });
 
@@ -51394,6 +51445,16 @@ __export(mcp_exports, {
   serve: () => serve
 });
 import { realpath as realpath6 } from "node:fs/promises";
+function progressFor(ctx) {
+  const progressToken = ctx.mcpReq._meta?.progressToken;
+  if (progressToken === void 0) return void 0;
+  let sent = Promise.resolve();
+  const progress = new ReviewProgress((update) => {
+    sent = sent.then(() => ctx.mcpReq.notify({ method: "notifications/progress", params: { progressToken, ...update } })).catch(() => {
+    });
+  });
+  return { review: progress, sent: () => sent };
+}
 function createServer(repo, evaluatorFactory) {
   const server = new McpServer({ name: "tracecheck", version: releaseVersion });
   const cache = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
@@ -51463,6 +51524,7 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
+    const progress = progressFor(ctx);
     const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
     const { reviewTimeoutMs, request: collectionRequest } = effective;
     const signal = AbortSignal.any([
@@ -51471,22 +51533,29 @@ function createServer(repo, evaluatorFactory) {
     ]);
     const discovery = previewScopes.get(args.snapshot);
     if (!discovery) throw new Error("Preview snapshot is unknown or expired. Run tracecheck_preview again.");
-    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal });
+    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal, onPhase: progress?.review.phase });
     if (plan.snapshot !== args.snapshot) throw new Error("Repository context changed since preview. Run tracecheck_preview again.");
     const settings = jevSettings(process.env, effective.provider);
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     let report = cache.get(key);
     const cached2 = report !== void 0;
     if (!report) {
-      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal, concurrency: settings.concurrency });
+      report = await reviewAll(
+        plan,
+        evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }),
+        { signal, concurrency: settings.concurrency, onProgress: progress?.review.requests }
+      );
       signal.throwIfAborted();
+      progress?.review.checking();
       const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
       if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
       if (!isIncomplete(report)) cache.set(key, report);
+      progress?.review.finished();
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
     const output2 = { cached: cached2, report: compared };
+    await progress?.sent();
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   return server;
@@ -51517,6 +51586,7 @@ var init_mcp = __esm({
     init_collection_options();
     init_project_config();
     init_deadline();
+    init_progress();
     init_version();
     CACHE_LIMIT = 16;
     CACHE_TTL_MS = 3e5;
@@ -51647,6 +51717,7 @@ function toSarif(report) {
 // src/cli.ts
 init_collection_options();
 init_project_config();
+init_progress();
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -51697,7 +51768,8 @@ async function main() {
     "collection-timeout-ms": { type: "string" },
     "review-timeout-ms": { type: "string" },
     sarif: { type: "string" },
-    "fail-on-priorities": { type: "boolean", default: false }
+    "fail-on-priorities": { type: "boolean", default: false },
+    quiet: { type: "boolean", short: "q", default: false }
   } });
   const command = positionals[0];
   if (values.help || !command) {
@@ -51708,7 +51780,7 @@ Usage:
                      [--context TEXT] [collection limits] [--json]
   tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
                      [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--previous FILE] [--json] [--out FILE] [--sarif FILE]
+                     [--previous FILE] [--json] [--out FILE] [--sarif FILE] [--quiet]
   tracecheck verify  --input FILE [--repo PATH] [--out FILE]
   tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
   tracecheck compare --previous FILE --current FILE
@@ -51731,6 +51803,8 @@ Options:
   --json                      Print JSON instead of Markdown (preview, review, assess).
   --out FILE                  Save the review report, verification result, or evaluation as JSON.
   --sarif FILE                review: also write supported findings as SARIF 2.1.0.
+  -q, --quiet                 review: do not print progress lines to stderr. Progress never goes
+                              to stdout, so the report is the same either way.
   --fail-on-priorities        assess: exit 1 when the evaluation lists actionable quality priorities.
   -h, --help                  Show this help.
 
@@ -51818,7 +51892,8 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms"))
   }, controller.signal);
   const { reviewTimeoutMs, request: collectionRequest } = settings;
-  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal });
+  const progress = command === "review" && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${update.message}`)) : void 0;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === "preview") {
     const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)
@@ -51837,10 +51912,16 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   ]);
   const previous = values.previous ? await readPrevious(values.previous) : void 0;
   const provider = jevSettings(process.env, settings.provider);
-  const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }), { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous });
+  const report = await reviewAll(
+    plan,
+    new Jev({ ...provider, signal: reviewSignal }),
+    { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous, onProgress: progress?.requests }
+  );
   reviewSignal.throwIfAborted();
+  progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
+  progress?.finished();
   if (values.out) {
     const destination = resolve5(values.out);
     await mkdir(dirname(destination), { recursive: true });

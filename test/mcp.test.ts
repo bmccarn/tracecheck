@@ -98,6 +98,58 @@ test('MCP validates bounded collection settings, pins preview discovery, and rev
   assert.match(repeated.report.limitations.join('\n'), /single-packet quality result/);
 });
 
+test('MCP review sends strictly increasing progress only when the client asks for it', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await mkdir(join(repo.root, 'changes'), { recursive: true });
+  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index};\n`);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Packet fixture');
+  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  // The second request fails and the first finishes after it, so completions arrive out of plan order.
+  let calls = 0;
+  let releaseFirst!: () => void;
+  const firstHeld = new Promise<void>(resolve => { releaseFirst = resolve; });
+  const server = createServer(repo.root, () => ({ async evaluate(_state, questions) {
+    const call = ++calls;
+    if (call === 1) await firstHeld;
+    if (call === 2) {
+      setImmediate(releaseFirst);
+      throw new Error('Stand-in provider failure.');
+    }
+    return typedFixture(questions);
+  } }));
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'progress-test', version: '1' });
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  let notifications = 0;
+  const receive = clientTransport.onmessage!;
+  clientTransport.onmessage = (message, extra) => {
+    if ('method' in message && message.method === 'notifications/progress') notifications++;
+    receive(message, extra);
+  };
+  const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
+  const { snapshot } = z.object({ snapshot: z.string() }).parse(preview.structuredContent);
+
+  const updates: { progress: number; total?: number; message?: string }[] = [];
+  const review = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } }, { onprogress: update => updates.push(update) });
+  assert.ok(!review.isError, JSON.stringify(review));
+  const { report } = z.object({ report: z.object({ usage: z.object({ requests: z.number() }) }) }).parse(review.structuredContent);
+  assert.equal(calls, 2); assert.equal(report.usage.requests, 1);
+  const total = 4 + 1 + 2 + 2;
+  assert.deepEqual(updates.map(update => [update.message, update.total]), [
+    ['Listing changed files', undefined], ['Reading changed files', undefined], ['Indexing imports', undefined], ['Assembling change packets', undefined],
+    ['Sending 2 provider requests', total], ['Completed provider request 1 of 2', total], ['Completed provider request 2 of 2', total],
+    ['Checking that the repository did not change', total], ['Review complete', total]]);
+  assert.deepEqual(updates.map(update => update.progress), Array.from({ length: total }, (_, index) => index + 1));
+
+  // The failed request left the report incomplete, so this review reaches the evaluator again.
+  notifications = 0;
+  const quiet = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
+  assert.ok(!quiet.isError, JSON.stringify(quiet));
+  assert.equal(calls, 4);
+  assert.equal(notifications, 0, 'no progress notification without a progress token');
+});
+
 test('expiring cache expires entries, purges them before insert, and evicts a live entry only for a new key', () => {
   let now = 0;
   const cache = new ExpiringCache<string>(2, 100, () => now);

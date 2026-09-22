@@ -34,6 +34,7 @@
 - Send independent review requests concurrently (4 at a time by default; set `JEV_CONCURRENCY` or `requestConcurrency` in `.tracecheck.json`). A five-packet review with one second of provider latency now takes about 2.5 seconds instead of 5.5.
 - A request that fails after retries now yields an inconclusive report that keeps the completed decisions and names what was not evaluated, instead of discarding the whole review.
 - Collection reads and screens each file once, and the import index no longer waits on fixed batches.
+- `tracecheck_review` sends progress notifications when the client supplies a progress token, and CLI `review` prints progress to stderr; `--quiet` silences it.
 
 ## 0.3.0 — 2026-09-18
 

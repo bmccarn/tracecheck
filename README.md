@@ -299,8 +299,11 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
 | `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
 | `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
+| `-q`, `--quiet` | Do not print review progress to stderr. Not in 0.3.0. |
 
 `preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file), which is not in 0.3.0. A flag always overrides the file.
+
+Not in 0.3.0. While `review` runs, it prints one progress line per step to stderr: each collection phase, the number of provider requests planned, each finished request (`Tracecheck progress: Completed provider request 3 of 7`), and the final check that the repository did not change. Stdout, `--json`, `--out`, and `--sarif` output are the same as with `--quiet`.
 
 Exit codes:
 
@@ -323,6 +326,8 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, and snapshot token. |
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
+
+Not in 0.3.0. When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A client that resets its request timeout on progress can wait out a long review.
 
 Configure your MCP client with one of these launch commands:
 
