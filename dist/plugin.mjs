@@ -35988,11 +35988,20 @@ function isIdentifier(node2, opts) {
 function isStringLiteral(node2, opts) {
   return isType$1("StringLiteral", node2, opts);
 }
+function isNumericLiteral(node2, opts) {
+  return isType$1("NumericLiteral", node2, opts);
+}
 function isMemberExpression(node2, opts) {
   return isType$1("MemberExpression", node2, opts);
 }
 function isThisExpression(node2, opts) {
   return isType$1("ThisExpression", node2, opts);
+}
+function isThrowStatement(node2, opts) {
+  return isType$1("ThrowStatement", node2, opts);
+}
+function isTryStatement(node2, opts) {
+  return isType$1("TryStatement", node2, opts);
 }
 function isUnaryExpression(node2, opts) {
   return isType$1("UnaryExpression", node2, opts);
@@ -36014,6 +36023,9 @@ function isMetaProperty(node2, opts) {
 }
 function isSuper(node2, opts) {
   return isType$1("Super", node2, opts);
+}
+function isBigIntLiteral(node2, opts) {
+  return isType$1("BigIntLiteral", node2, opts);
 }
 function isPrivateName(node2, opts) {
   return isType$1("PrivateName", node2, opts);
@@ -42992,10 +43004,33 @@ Expected ${val.length + 1} quasis but got ${node2.quasis.length}`);
 
 // src/checks.ts
 function parseSource(path, content) {
-  return parse3(content, { sourceType: "unambiguous", plugins: [
-    .../\.[cm]?tsx?$/.test(path) ? ["typescript"] : [],
-    .../\.[jt]sx$/.test(path) ? ["jsx"] : []
-  ] });
+  const language = /\.[cm]?tsx?$/.test(path) ? ["typescript"] : [];
+  if (/\.(?:[jt]sx|[cm]?js)$/.test(path)) language.push("jsx");
+  let failure2;
+  for (const decorators of decoratorPlugins) {
+    try {
+      return parse3(content, { sourceType: "unambiguous", plugins: [...language, ...decorators] });
+    } catch (error62) {
+      failure2 ??= error62;
+    }
+  }
+  throw failure2;
+}
+function parseErrorCategory(error62) {
+  const code2 = error62?.reasonCode;
+  return typeof code2 === "string" && /^\w+$/.test(code2) ? code2 : "UnknownError";
+}
+function isObviousNonIssue(node2, parents) {
+  if (isBinaryExpression(node2) || isAssignmentExpression(node2)) {
+    return isNumericLiteral(node2.right) && node2.right.value !== 0 || isBigIntLiteral(node2.right) && node2.right.value !== 0n;
+  }
+  if (isCatchClause(node2)) return node2.body.body.some((statement) => isThrowStatement(statement));
+  const chain2 = [...parents, node2];
+  for (let index = chain2.length - 2; index >= 0 && !isFunction(chain2[index]); index--) {
+    const parent = chain2[index];
+    if (isTryStatement(parent) && parent.handler && parent.block === chain2[index + 1]) return true;
+  }
+  return false;
 }
 function findCandidates(path, content, changed) {
   const file3 = parseSource(path, content);
@@ -43003,20 +43038,21 @@ function findCandidates(path, content, changed) {
   const occurrences = /* @__PURE__ */ new Map();
   function visit2(node2, parents) {
     let check2;
-    if (isBinaryExpression(node2) && ["/", "%"].includes(node2.operator)) check2 = "zero-divisor";
+    if (isBinaryExpression(node2) && ["/", "%"].includes(node2.operator) || isAssignmentExpression(node2) && ["/=", "%="].includes(node2.operator)) check2 = "zero-divisor";
     if (isCatchClause(node2)) check2 = "swallowed-failure";
     if (isCallExpression(node2) && isMemberExpression(node2.callee) && !node2.callee.computed && isIdentifier(node2.callee.object, { name: "JSON" }) && isIdentifier(node2.callee.property, { name: "parse" })) check2 = "unhandled-json";
     if (check2) {
-      const container = [...parents].reverse().find((parent) => isFunction(parent)) ?? file3.program;
-      const scope = { start: container.loc.start.line, end: container.loc.end.line };
-      const owner = parents[parents.indexOf(container) - 1];
-      const name = "id" in container && isIdentifier(container.id) ? container.id.name : "key" in container && isIdentifier(container.key) ? container.key.name : owner && isVariableDeclarator(owner) && isIdentifier(owner.id) ? owner.id.name : "<anonymous-or-module>";
+      const container = [...parents].reverse().find((parent) => isFunction(parent));
+      const bounds = container ?? parents[2] ?? node2;
+      const scope = { start: bounds.loc.start.line, end: bounds.loc.end.line };
+      const owner = container && parents[parents.indexOf(container) - 1];
+      const name = container === void 0 ? "<anonymous-or-module>" : "id" in container && isIdentifier(container.id) ? container.id.name : "key" in container && isIdentifier(container.key) ? container.key.name : owner && isVariableDeclarator(owner) && isIdentifier(owner.id) ? owner.id.name : "<anonymous-or-module>";
       const symbol2 = name;
       const quote = content.slice(node2.start, node2.end);
       const key = hash2([path, symbol2, check2, quote.replace(/\s+/g, " ")]);
       const occurrence = occurrences.get(key) ?? 0;
       occurrences.set(key, occurrence + 1);
-      if (changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
+      if (!isObviousNonIssue(node2, parents) && changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
         candidates.push({
           id: hash2([key, occurrence]).slice(0, 24),
           check: check2,
@@ -43038,7 +43074,7 @@ function findCandidates(path, content, changed) {
   visit2(file3, []);
   return candidates;
 }
-var checks;
+var checks, decoratorPlugins;
 var init_checks3 = __esm({
   "src/checks.ts"() {
     "use strict";
@@ -43059,6 +43095,7 @@ var init_checks3 = __esm({
         verification: "Pass malformed JSON through the public caller and assert its documented failure response."
       }
     };
+    decoratorPlugins = [["decorators-legacy", "decoratorAutoAccessors"], ["decorators"]];
   }
 });
 
@@ -43786,8 +43823,8 @@ async function collect(options) {
               candidates.push(candidate);
             }
             if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
-          } catch {
-            noteSource(path, `Source could not be parsed; no candidates collected: ${path}`);
+          } catch (error62) {
+            noteSource(path, `Source could not be parsed (${parseErrorCategory(error62)}); no candidates collected: ${path}`);
           }
         }
       }

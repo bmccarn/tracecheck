@@ -38,6 +38,26 @@ const scenarios = {
     },
     change: { 'pkg/calc.py': 'def mean(values):\n    return sum(values) / len(values)\n' },
   },
+  'jsx-js': {
+    description: 'React component in a plain .js file loses its zero-total guard. Expect one zero-divisor candidate in Progress and no parse failure.',
+    baseline: { 'src/Progress.js': "export function Progress({ done, total }) {\n  if (!total) return <span>none</span>;\n  return <span>{Math.round((done / total) * 100)}%</span>;\n}\n" },
+    change: { 'src/Progress.js': "export function Progress({ done, total }) {\n  return <span>{Math.round((done / total) * 100)}%</span>;\n}\n" },
+  },
+  decorators: {
+    description: 'Decorated TS controller (class, method, and parameter decorators plus a <T>value assertion) gains a catch handler that reports success. Expect one swallowed-failure candidate in create and no parse failure.',
+    baseline: { 'src/users.controller.ts': "import { Body, Controller, Inject, Post } from '@nestjs/common';\nimport { UsersService, type CreateUser } from './users.service';\n\n@Controller('users')\nexport class UsersController {\n  constructor(@Inject(UsersService) private readonly users: UsersService) {}\n\n  @Post()\n  async create(@Body() body: unknown) {\n    const input = <CreateUser>body;\n    return await this.users.create(input);\n  }\n}\n" },
+    change: { 'src/users.controller.ts': "import { Body, Controller, Inject, Post } from '@nestjs/common';\nimport { UsersService, type CreateUser } from './users.service';\n\n@Controller('users')\nexport class UsersController {\n  constructor(@Inject(UsersService) private readonly users: UsersService) {}\n\n  @Post()\n  async create(@Body() body: unknown) {\n    const input = <CreateUser>body;\n    try {\n      return await this.users.create(input);\n    } catch (error) {\n      return { created: true };\n    }\n  }\n}\n" },
+  },
+  noise: {
+    description: 'summarize() gains literal divisors, a rethrowing handler, JSON.parse inside try blocks, a /= division, and a conditional rethrow; an unchanged module-level division sits above it. Expect only the total /= samples.length and conditional-rethrow candidates.',
+    baseline: { 'src/metrics.ts': "import { limits } from './limits.js';\n\nexport const perWorker = limits.total / limits.workers;\n\nexport function summarize(samples: number[], raw: string, retry: boolean) {\n  return { count: samples.length, raw, retry };\n}\n" },
+    change: { 'src/metrics.ts': "import { limits } from './limits.js';\n\nexport const perWorker = limits.total / limits.workers;\n\nexport function summarize(samples: number[], raw: string, retry: boolean) {\n  let total = samples.reduce((sum, value) => sum + value, 0);\n  const half = total / 2;\n  const percent = Math.round(half * 100) % 100;\n  total /= samples.length;\n  let config;\n  try {\n    config = JSON.parse(raw);\n  } catch (error) {\n    console.error(error);\n    throw error;\n  }\n  try {\n    config = JSON.parse(config.next);\n  } catch (error) {\n    if (!retry) throw error;\n  }\n  return { total, half, percent, config };\n}\n" },
+  },
+  'parse-error': {
+    description: 'TS file with a duplicate declaration that no parser setting accepts. Expect a limitation naming the file and the VarRedeclaration error code, without the identifier.',
+    baseline: { 'src/broken.ts': 'export const ready = true;\n' },
+    change: { 'src/broken.ts': 'export const ready = true;\nlet hiddenFixtureName = 1;\nlet hiddenFixtureName = 2;\n' },
+  },
   'module-paths': {
     description: 'TSX module changes; it imports .mjs, .cjs, and directory specifiers backed by .mts, .cts, and index.tsx sources, plus a stylesheet (a dependency) and an image (no edge). A caller imports it as ./app.jsx.',
     baseline: {
