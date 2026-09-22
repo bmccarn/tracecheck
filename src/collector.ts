@@ -73,7 +73,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const recordOmission = (reason: string, path: string) => {
     const entry = omissions.get(reason) ?? { count: 0, samples: [] };
     entry.count++;
-    if (entry.samples.length < 3) entry.samples.push(path);
+    // Name every credential omission so each flagged file can be inspected.
+    if (entry.samples.length < 3 || reason.includes('potential credential')) entry.samples.push(path);
     omissions.set(reason, entry);
   };
   const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
@@ -97,13 +98,14 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     }
     try {
       const raw = await readSource(root, path, signal);
-      if (raw.includes('\0') || hasSecret(raw)) throw new Error('Binary or potential secret-bearing file');
+      if (raw.includes('\0')) throw new Error('Binary file');
+      if (hasSecret(raw)) throw new Error('File with a potential credential');
       let before = baseline;
       let ranges = targets ?? [{ start: 1, end: 80 }];
       let beforeRanges = ranges;
       if (role === 'changed') {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error('Potential secret in base version');
+        if (before && hasSecret(before)) throw new Error('Base version with a potential credential');
         ranges = untracked.includes(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
@@ -151,7 +153,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       return source;
     } catch (error) {
       signal.throwIfAborted();
-      const message = error instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
+      const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
       recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted`);
       return undefined;
@@ -168,11 +170,12 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     }
     try {
       const raw = await readSource(root, path, signal);
-      if (raw.includes('\0') || hasSecret(raw)) throw new Error('Binary or potential secret-bearing file');
+      if (raw.includes('\0')) throw new Error('Binary file');
+      if (hasSecret(raw)) throw new Error('File with a potential credential');
       eligibleChanges.push(path);
     } catch (error) {
       signal.throwIfAborted();
-      const message = error instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
+      const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
       recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted`);
     }

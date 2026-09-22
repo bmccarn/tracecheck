@@ -7,7 +7,7 @@ Verify judges one defect hypothesis the caller selected, against a contract and 
 - `verify-supplied` judges caller-supplied evidence with `provenance: caller_supplied`.
 - `verify-local` checks excerpts against a repository and reports `provenance: local_files_checked`.
 - `verify-anchor` rejects a target quote or line range that does not match the evidence before any provider call.
-- `verify-guards` rejects duplicate IDs, evidence over the UTF-8 byte budget, absolute or `..` paths, and credential-shaped content before inference.
+- `verify-guards` rejects duplicate IDs, evidence over the UTF-8 byte budget, absolute or `..` paths, and credential-shaped content before inference. A credential error names the evidence path or input field, never the value.
 - `verify-mcp` returns the same output from `tracecheck_verify`.
 
 ## How to get to it (user POV)

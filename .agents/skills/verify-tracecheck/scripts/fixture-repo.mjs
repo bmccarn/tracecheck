@@ -7,6 +7,10 @@ import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:f
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+// Credential-shaped values are assembled at runtime so this file never contains a literal secret.
+const fakeCredential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+const lexer = extra => `export type TokenKind = 'StringLiteralExpressionToken' | 'NoSubstitutionTemplateLiteral' | 'IdentifierNameToken';\n\nexport function classify(text: string): TokenKind {\n  let token: TokenKind = 'IdentifierNameToken';\n  if (/^["']/.test(text)) token = 'StringLiteralExpressionToken';\n${extra}  return token;\n}\n`;
+
 const scenarios = {
   'json-regression': {
     description: 'TS decode() loses its try/catch, so malformed JSON now throws. Expect one unhandled-json candidate.',
@@ -125,6 +129,19 @@ const scenarios = {
     },
     indexOnly: Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`),
     change: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+  },
+  credentials: {
+    description: 'A lexer with identifier-shaped token-kind literals and two config files that gain unquoted credentials (.env-style shell exports and YAML). Expect src/lexer.ts collected, and deploy/env.sh and config/app.yml omitted with their paths named.',
+    baseline: {
+      'src/lexer.ts': lexer(''),
+      'deploy/env.sh': 'export APP_ENV=production\n',
+      'config/app.yml': 'database:\n  host: db.internal\n',
+    },
+    change: {
+      'src/lexer.ts': lexer("  else if (text.startsWith('`')) token = 'NoSubstitutionTemplateLiteral';\n"),
+      'deploy/env.sh': `export APP_ENV=production\nexport API_TOKEN=${fakeCredential}\n`,
+      'config/app.yml': `database:\n  host: db.internal\n  password: ${fakeCredential}\n`,
+    },
   },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',

@@ -32,18 +32,26 @@ test('collects a guard removal, retains old code, and changes snapshot when cont
   assert.notEqual((await collect({ repo: repo.root })).snapshot, plan.snapshot);
 });
 
-test('untracked files require opt-in; secrets, deleted files and symlinks are visible omissions', async t => {
+test('untracked files require opt-in; credentials, deleted files and symlinks are visible omissions', async t => {
   const repo = await repository(); t.after(repo.cleanup);
+  // Assembled at runtime so the repository never contains a literal secret.
+  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
   await writeFile(join(repo.root, 'new.ts'), 'export const ratio = (a: number,b: number) => a/b;');
-  await writeFile(join(repo.root, 'secret.ts'), 'const apiKey = "abcdefghijklmnopqrstuvwxyz123456";');
+  await writeFile(join(repo.root, 'secret.ts'), `const apiKey = "${credential}";`);
+  await writeFile(join(repo.root, 'deploy.sh'), `export API_TOKEN=${credential}\n`);
+  await writeFile(join(repo.root, 'config.yml'), `database:\n  password: ${credential}\n`);
+  await writeFile(join(repo.root, 'settings.toml'), `api_key = ${credential}\n`);
+  await writeFile(join(repo.root, 'lexer.ts'), "export const token = 'StringLiteralExpressionToken';\n");
   await symlink('/etc/hosts', join(repo.root, 'outside.ts'));
   const preview = await collect({ repo: repo.root });
   assert.equal(preview.candidates.length, 0);
   assert.match(preview.limitations.join('\n'), /untracked/);
   const included = await collect({ repo: repo.root, includeUntracked: true });
   assert.equal(included.candidates.length, 1);
-  assert.ok(!JSON.stringify(included).includes('abcdefghijklmnopqrstuvwxyz123456'));
-  assert.match(included.limitations.join('\n'), /potential secret-bearing/);
+  assert.ok(!JSON.stringify(included).includes(credential));
+  // Every credential omission is named, not only the first three samples.
+  assert.match(included.limitations.join('\n'), /omitted 4 file\(s\): File with a potential credential omitted \(config\.yml, deploy\.sh, secret\.ts, settings\.toml\)/);
+  assert.equal(included.sources.find(source => source.path === 'lexer.ts')?.role, 'changed');
   assert.match(included.limitations.join('\n'), /Symlink/);
   repo.git('rm', 'average.ts');
   assert.match((await collect({ repo: repo.root })).limitations.join('\n'), /Deleted/);
@@ -259,7 +267,9 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   await writeFile(join(repo.root, 'ratio.ts'), ratioModule.replace('  if (!b) return 0;\n', ''));
   repo.git('mv', 'notes.ts', 'notes.txt');
   repo.git('mv', 'keys.ts', 'credentials.ts');
-  await writeFile(join(repo.root, 'credentials.ts'), `${padding('key')}const apiKey = "abcdefghijklmnopqrstuvwxyz123456";\n`);
+  // Assembled at runtime so the repository never contains a literal secret.
+  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+  await writeFile(join(repo.root, 'credentials.ts'), `${padding('key')}const apiKey = "${credential}";\n`);
   const plan = await collect({ repo: repo.root });
   const limitations = plan.limitations.join('\n');
 
@@ -268,8 +278,8 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   assert.equal(fromGenerated.before, undefined);
   assert.match(limitations, /Renamed from unsupported or generated path dist\/ratio\.ts; reviewed without a baseline \(ratio\.ts\)/);
   assert.match(limitations, /Unsupported or generated file \(notes\.ts -> notes\.txt\)/);
-  assert.match(limitations, /potential secret-bearing file omitted \(keys\.ts -> credentials\.ts\)/);
-  assert.ok(!JSON.stringify(plan).includes('abcdefghijklmnopqrstuvwxyz123456'));
+  assert.match(limitations, /File with a potential credential omitted \(keys\.ts -> credentials\.ts\)/);
+  assert.ok(!JSON.stringify(plan).includes(credential));
 });
 
 test('streams a tracked-file listing larger than the old 8 MiB output buffer', async t => {
