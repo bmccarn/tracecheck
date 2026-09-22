@@ -63,7 +63,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const known = new Set([...tracked, ...(options.includeUntracked ? untracked : [])]);
   const changePaths = [...new Set([...changed, ...(options.includeUntracked ? untracked : [])])].sort();
   const limitations: string[] = [];
-  if (changePaths.length) limitations.push('Import/caller discovery is heuristic; unresolved imports, aliases, dynamic imports, and external contracts may be missing.');
+  if (changePaths.length) limitations.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
   if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
 
   const loaded = new Map<string, Loaded>();
