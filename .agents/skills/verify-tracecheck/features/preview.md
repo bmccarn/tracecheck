@@ -7,7 +7,7 @@ Preview collects the working-tree change against a base commit without contactin
 - `preview-packets` groups every supported changed file into packets and prints a snapshot.
 - `preview-sources` collects changed files with baselines plus related dependencies, callers, and tests.
 - `preview-candidates` selects division, catch-handler, and `JSON.parse` candidates in changed JS/TS functions.
-- `preview-gaps` reports omitted files, parse failures, budget limits, and heuristic-discovery limitations.
+- `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, and heuristic-discovery limitations.
 - `preview-options` applies `--base`, `--include-untracked`, and the collection limits.
 - `preview-mcp` returns the same scope from `tracecheck_preview` and registers the snapshot for review.
 
@@ -27,6 +27,7 @@ Preconditions:
 - **Structured output.** Run `$S/capture.sh "$RUN" preview-json -- node dist/plugin.mjs preview --repo "$ROOT" --json`. Then `jq '{snapshot, packets: [.packets[] | .changedPaths], sources: [.sources[] | {path, role, hasBaseline: (.before != null)}], candidates: [.candidates[] | {check, path, symbol}], limitations}' "$RUN/preview-json.stdout"`. Expect `src/stats.ts` as `changed` with a baseline, `src/report.ts` as `caller`, `test/stats.test.ts` as `test`, and one `zero-divisor` candidate in `mean`.
 - **No change.** Use the `clean` fixture. Preview exits `0` and reports one packet with no sources and no candidates, so a review makes no provider request.
 - **Rename.** Use the `rename` fixture. Inspect whether `new.ts` has a baseline and what `limitations` say.
+- **Parsing.** Use the `jsx-js` and `decorators` fixtures. Each yields one candidate (`zero-divisor` in `Progress`, `swallowed-failure` in `create`) and no `Source could not be parsed` limitation. The `parse-error` fixture yields `Source could not be parsed (VarRedeclaration); no candidates collected: src/broken.ts`, and no limitation quotes the redeclared identifier.
 - **Python imports.** Use the `python-import` fixture. Inspect whether `pkg/report.py` appears as a caller and `tests/test_calc.py` as a test.
 - **MCP entry.** Write `[{"tool":"tracecheck_preview","arguments":{}}]` to `$RUN/calls.json` and run `node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"`. The record `01-tracecheck_preview.json` has `isError: false` and `structuredContent.snapshot` equal to the CLI snapshot for the same fixture, settings, and task.
 

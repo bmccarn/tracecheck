@@ -42992,10 +42992,21 @@ Expected ${val.length + 1} quasis but got ${node2.quasis.length}`);
 
 // src/checks.ts
 function parseSource(path, content) {
-  return parse3(content, { sourceType: "unambiguous", plugins: [
-    .../\.[cm]?tsx?$/.test(path) ? ["typescript"] : [],
-    .../\.[jt]sx$/.test(path) ? ["jsx"] : []
-  ] });
+  const language = /\.[cm]?tsx?$/.test(path) ? ["typescript"] : [];
+  if (/\.(?:[jt]sx|[cm]?js)$/.test(path)) language.push("jsx");
+  let failure2;
+  for (const decorators of decoratorPlugins) {
+    try {
+      return parse3(content, { sourceType: "unambiguous", plugins: [...language, ...decorators] });
+    } catch (error62) {
+      failure2 ??= error62;
+    }
+  }
+  throw failure2;
+}
+function parseErrorCategory(error62) {
+  const code2 = error62?.reasonCode;
+  return typeof code2 === "string" && /^\w+$/.test(code2) ? code2 : "UnknownError";
 }
 function findCandidates(path, content, changed) {
   const file3 = parseSource(path, content);
@@ -43038,7 +43049,7 @@ function findCandidates(path, content, changed) {
   visit2(file3, []);
   return candidates;
 }
-var checks;
+var checks, decoratorPlugins;
 var init_checks3 = __esm({
   "src/checks.ts"() {
     "use strict";
@@ -43059,6 +43070,7 @@ var init_checks3 = __esm({
         verification: "Pass malformed JSON through the public caller and assert its documented failure response."
       }
     };
+    decoratorPlugins = [["decorators-legacy", "decoratorAutoAccessors"], ["decorators"]];
   }
 });
 
@@ -43766,8 +43778,8 @@ async function collect(options) {
               candidates.push(candidate);
             }
             if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
-          } catch {
-            noteSource(path, `Source could not be parsed; no candidates collected: ${path}`);
+          } catch (error62) {
+            noteSource(path, `Source could not be parsed (${parseErrorCategory(error62)}); no candidates collected: ${path}`);
           }
         }
       }

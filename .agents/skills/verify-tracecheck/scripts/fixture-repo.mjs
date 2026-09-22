@@ -38,6 +38,21 @@ const scenarios = {
     },
     change: { 'pkg/calc.py': 'def mean(values):\n    return sum(values) / len(values)\n' },
   },
+  'jsx-js': {
+    description: 'React component in a plain .js file loses its zero-total guard. Expect one zero-divisor candidate in Progress and no parse failure.',
+    baseline: { 'src/Progress.js': "export function Progress({ done, total }) {\n  if (!total) return <span>none</span>;\n  return <span>{Math.round((done / total) * 100)}%</span>;\n}\n" },
+    change: { 'src/Progress.js': "export function Progress({ done, total }) {\n  return <span>{Math.round((done / total) * 100)}%</span>;\n}\n" },
+  },
+  decorators: {
+    description: 'Decorated TS controller (class, method, and parameter decorators plus a <T>value assertion) gains a catch handler that reports success. Expect one swallowed-failure candidate in create and no parse failure.',
+    baseline: { 'src/users.controller.ts': "import { Body, Controller, Inject, Post } from '@nestjs/common';\nimport { UsersService, type CreateUser } from './users.service';\n\n@Controller('users')\nexport class UsersController {\n  constructor(@Inject(UsersService) private readonly users: UsersService) {}\n\n  @Post()\n  async create(@Body() body: unknown) {\n    const input = <CreateUser>body;\n    return await this.users.create(input);\n  }\n}\n" },
+    change: { 'src/users.controller.ts': "import { Body, Controller, Inject, Post } from '@nestjs/common';\nimport { UsersService, type CreateUser } from './users.service';\n\n@Controller('users')\nexport class UsersController {\n  constructor(@Inject(UsersService) private readonly users: UsersService) {}\n\n  @Post()\n  async create(@Body() body: unknown) {\n    const input = <CreateUser>body;\n    try {\n      return await this.users.create(input);\n    } catch (error) {\n      return { created: true };\n    }\n  }\n}\n" },
+  },
+  'parse-error': {
+    description: 'TS file with a duplicate declaration that no parser setting accepts. Expect a limitation naming the file and the VarRedeclaration error code, without the identifier.',
+    baseline: { 'src/broken.ts': 'export const ready = true;\n' },
+    change: { 'src/broken.ts': 'export const ready = true;\nlet hiddenFixtureName = 1;\nlet hiddenFixtureName = 2;\n' },
+  },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },

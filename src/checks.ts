@@ -1,4 +1,4 @@
-import { parse } from '@babel/parser';
+import { parse, type ParserPlugin } from '@babel/parser';
 import * as t from '@babel/types';
 import { hash, type Candidate, type Range } from './domain.js';
 
@@ -19,11 +19,26 @@ const checks = {
   },
 } as const;
 
+// Legacy decorators cover TypeScript experimentalDecorators, including parameter
+// decorators; standard decorators also allow `export @dec class`.
+const decoratorPlugins: ParserPlugin[][] = [['decorators-legacy', 'decoratorAutoAccessors'], ['decorators']];
+
 export function parseSource(path: string, content: string) {
-  return parse(content, { sourceType: 'unambiguous', plugins: [
-    ...(/\.[cm]?tsx?$/.test(path) ? ['typescript' as const] : []),
-    ...(/\.[jt]sx$/.test(path) ? ['jsx' as const] : []),
-  ] });
+  const language: ParserPlugin[] = /\.[cm]?tsx?$/.test(path) ? ['typescript'] : [];
+  // JSX stays off for .ts, .mts, and .cts so `<T>value` type assertions parse.
+  if (/\.(?:[jt]sx|[cm]?js)$/.test(path)) language.push('jsx');
+  let failure: unknown;
+  for (const decorators of decoratorPlugins) {
+    try { return parse(content, { sourceType: 'unambiguous', plugins: [...language, ...decorators] }); }
+    catch (error) { failure ??= error; }
+  }
+  throw failure;
+}
+
+/** Names a parse failure by its error code; parser messages can quote source text. */
+export function parseErrorCategory(error: unknown) {
+  const code = (error as { reasonCode?: unknown } | undefined)?.reasonCode;
+  return typeof code === 'string' && /^\w+$/.test(code) ? code : 'UnknownError';
 }
 
 export function findCandidates(path: string, content: string, changed: Range[]): Candidate[] {
