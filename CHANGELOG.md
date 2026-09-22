@@ -30,6 +30,7 @@
 - Stream Git file listings so repositories with very large path lists collect successfully, and derive listing timeouts from the collection budget instead of a fixed 10 seconds.
 - Ignore `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and similar variables that would redirect collection to another repository.
 - Report a working-tree change during collection as a retryable error, add limitations for changed files with no textual hunks, and group coverage counts correctly for paths that contain `:`.
+- Refresh the docs for the published 0.3.0 release, mark features that are only on `main`, and ship only runtime documentation in the npm package.
 
 ## 0.3.0 — 2026-09-18
 
