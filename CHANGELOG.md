@@ -8,6 +8,7 @@
 - Recognize the context-limit error that OpenRouter relays from TypeSafe, so over-limit requests get the same "split the review" guidance.
 - Link Python callers and tests through parenthesized, comma-separated, and aliased imports.
 - Resolve NodeNext module paths (`.mjs` to `.mts`, `.cjs` to `.cts`, `.jsx` to `.tsx`, and directory `index` files), and stop creating edges to unsupported files such as images.
+- Point both in-repo marketplace catalogs at the current stable release, update them during release preparation, and fail the release gates when a catalog ref does not match.
 
 ## 0.3.0 — 2026-09-18
 
