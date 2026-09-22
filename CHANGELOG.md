@@ -31,6 +31,9 @@
 - Ignore `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and similar variables that would redirect collection to another repository.
 - Report a working-tree change during collection as a retryable error, add limitations for changed files with no textual hunks, and group coverage counts correctly for paths that contain `:`.
 - Refresh the docs for the published 0.3.0 release, mark features that are only on `main`, and ship only runtime documentation in the npm package.
+- Send independent review requests concurrently (4 at a time by default; set `JEV_CONCURRENCY` or `requestConcurrency` in `.tracecheck.json`). A five-packet review with one second of provider latency now takes about 2.5 seconds instead of 5.5.
+- A request that fails after retries now yields an inconclusive report that keeps the completed decisions and names what was not evaluated, instead of discarding the whole review.
+- Collection reads and screens each file once, and the import index no longer waits on fixed batches.
 
 ## 0.3.0 — 2026-09-18
 
