@@ -100,10 +100,17 @@ async function choiceFixture() {
   return { questions, response: await fixtureEvaluator().evaluate({}, questions) };
 }
 
-/** A fetch that never answers and rejects with a generic abort once its signal fires, as fetch does. */
+/**
+ * A fetch that never answers and rejects with a generic abort once its signal fires, as fetch does.
+ * A pending socket keeps the event loop alive; the interval stands in for it so unref'd deadlines can fire.
+ */
 const hangingFetch = (onCall: () => void) => (async (_url: unknown, options?: RequestInit) => {
   onCall();
-  return new Promise<globalThis.Response>((_, reject) => options!.signal!.addEventListener('abort', () => reject(new DOMException('This operation was aborted', 'AbortError'))));
+  const socket = setInterval(() => {}, 1_000);
+  return new Promise<globalThis.Response>((_, reject) => options!.signal!.addEventListener('abort', () => {
+    clearInterval(socket);
+    reject(new DOMException('This operation was aborted', 'AbortError'));
+  }));
 }) as typeof fetch;
 
 test('retries server errors and gives up after three attempts', async () => {
