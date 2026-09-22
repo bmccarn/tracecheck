@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Creates a disposable Git repository with a committed baseline and an uncommitted change.
+// Creates a disposable Git repository with a committed baseline, an optional follow-up commit, and an uncommitted change.
 // Usage: node .agents/skills/verify-tracecheck/scripts/fixture-repo.mjs <scenario> [--list]
 // Prints JSON: { scenario, root, description, changed }. The caller removes `root` when done.
 import { execFileSync } from 'node:child_process';
@@ -148,6 +148,16 @@ const scenarios = {
     baseline: { 'index.ts': 'export const answer = 42;\n' },
     change: {},
   },
+  'project-config': {
+    description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets base HEAD~1, a task, and maxIndexFiles 1. With the file, preview reports src/stats.ts changed; --base HEAD reports no change.',
+    baseline: {
+      '.tracecheck.json': JSON.stringify({ base: 'HEAD~1', task: 'mean() must return 0 for an empty list; report.ts relies on it.', collection: { maxIndexFiles: 1 } }, null, 2) + '\n',
+      'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n',
+      'src/report.ts': "import { mean } from './stats.js';\n\nexport function summary(values: number[]) {\n  return `mean=${mean(values)}`;\n}\n",
+    },
+    committed: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+    change: {},
+  },
 };
 
 const [scenarioName] = process.argv.slice(2);
@@ -183,6 +193,7 @@ try {
     execFileSync('git', ['-C', root, 'update-index', '-z', '--skip-worktree', '--stdin'], { input: scenario.indexOnly.map(path => `${path}\0`).join(''), env: gitEnv });
     git('commit', '-q', '-m', 'Index-only paths');
   }
+  if (scenario.committed) { write(scenario.committed); git('add', '-A'); git('commit', '-q', '-m', 'Fixture follow-up'); }
   for (const [from, to] of scenario.moves ?? []) git('mv', from, to);
   write(scenario.change);
   for (const [path, mode] of Object.entries(scenario.chmod ?? {})) chmodSync(join(root, path), mode);
