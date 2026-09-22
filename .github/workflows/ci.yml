@@ -2,19 +2,39 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate:
+    name: Validate (Node ${{ matrix.node-version }})
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # The oldest supported 22.x release and the current LTS line. engines.node follows the bundled Babel 8 range.
+        node-version:
+          - 22.18.0
+          - 24.x
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: 22.18.0
+          node-version: ${{ matrix.node-version }}
           cache: npm
       - run: npm ci
-      - run: npm run release:check
+      - name: Check that the committed bundle matches a fresh build
+        run: node scripts/build.mjs --check
+      - name: Run the offline demo
+        run: npm run demo
+      - name: Type-check, test, and verify the package
+        run: npm run release:check

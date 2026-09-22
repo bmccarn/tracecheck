@@ -25,7 +25,7 @@ async function readJson(path) {
 const pkg = await readJson('package.json');
 const release = resolve('release');
 await mkdir(release, { recursive: true });
-// Lifecycle scripts already ran in package:check. Pack exactly the distribution allowlist.
+// The caller already built dist/plugin.mjs (package:check, or the test run in release:check). Pack exactly the distribution allowlist.
 const { stdout } = await run(npm, ['pack', '--ignore-scripts', '--json', '--pack-destination', release]);
 const [pack] = parseJson(stdout, 'npm pack output');
 const files = new Set(pack.files.map(file => file.path));
