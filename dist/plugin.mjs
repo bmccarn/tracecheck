@@ -199,9 +199,9 @@ function putProp(target, key, value) {
   else
     target[key] = value;
 }
-function mirrorShape(target, source, keys2, wrap) {
+function mirrorShape(target, source, keys, wrap) {
   const raw = sourceShape(source);
-  for (const key of keys2) {
+  for (const key of keys) {
     const desc = Object.getOwnPropertyDescriptor(raw, key);
     if (!desc.enumerable)
       continue;
@@ -242,12 +242,12 @@ function getElementAtPath(obj, path) {
   return path.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
-  const keys2 = Object.keys(promisesObj);
-  const promises = keys2.map((key) => promisesObj[key]);
+  const keys = Object.keys(promisesObj);
+  const promises = keys.map((key) => promisesObj[key]);
   return Promise.all(promises).then((results) => {
     const resolvedObj = {};
-    for (let i = 0; i < keys2.length; i++) {
-      resolvedObj[keys2[i]] = results[i];
+    for (let i = 0; i < keys.length; i++) {
+      resolvedObj[keys[i]] = results[i];
     }
     return resolvedObj;
   });
@@ -388,15 +388,15 @@ function pick(schema, mask) {
 }
 function maskedKeys(schema, mask) {
   const raw = sourceShape(schema);
-  const keys2 = [];
+  const keys = [];
   for (const key of Reflect.ownKeys(mask)) {
     if (!Object.getOwnPropertyDescriptor(raw, key)?.enumerable) {
       throw new Error(`Unrecognized key: "${String(key)}"`);
     }
     if (mask[key])
-      keys2.push(key);
+      keys.push(key);
   }
-  return keys2;
+  return keys;
 }
 function omit(schema, mask) {
   const currDef = schema._zod.def;
@@ -438,8 +438,8 @@ function safeExtend(schema, shape) {
   }
   return clone(schema, mergeDefs(schema._zod.def, { shape: extended(schema, shape) }));
 }
-function merge(a, b2) {
-  if (!b2?._zod?.def) {
+function merge(a, b) {
+  if (!b?._zod?.def) {
     throw new Error("Invalid input to merge: expected an object schema. To merge a plain shape, use `.extend()`.");
   }
   if (a._zod.def.checks?.length) {
@@ -447,13 +447,13 @@ function merge(a, b2) {
   }
   const newShape = {};
   mirrorShape(newShape, a, Reflect.ownKeys(sourceShape(a)));
-  mirrorShape(newShape, b2, Reflect.ownKeys(sourceShape(b2)));
+  mirrorShape(newShape, b, Reflect.ownKeys(sourceShape(b)));
   const def = mergeDefs(a._zod.def, {
     shape: newShape,
     get catchall() {
-      return b2._zod.def.catchall;
+      return b._zod.def.catchall;
     },
-    checks: b2._zod.def.checks ?? []
+    checks: b._zod.def.checks ?? []
   });
   return clone(a, def);
 }
@@ -641,7 +641,7 @@ function hexToUint8Array(hex3) {
   return bytes;
 }
 function uint8ArrayToHex(bytes) {
-  return Array.from(bytes).map((b2) => b2.toString(16).padStart(2, "0")).join("");
+  return Array.from(bytes).map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 function members(proto, table) {
   for (const key in table) {
@@ -1138,7 +1138,7 @@ function toDotPath(_path) {
 }
 function prettifyError(error62) {
   const lines = [];
-  const issues = [...error62.issues].sort((a, b2) => (a.path ?? []).length - (b2.path ?? []).length);
+  const issues = [...error62.issues].sort((a, b) => (a.path ?? []).length - (b.path ?? []).length);
   for (const issue2 of issues) {
     lines.push(`\u2716 ${issue2.message}`);
     if (issue2.path?.length)
@@ -2272,10 +2272,10 @@ function handlePropertyResult(result, final, key, input2, optin, optout) {
   }
 }
 function normalizeDef(def) {
-  const keys2 = Object.keys(def.shape);
+  const keys = Object.keys(def.shape);
   const ownSymbols = Object.getOwnPropertySymbols(def.shape);
   const symbolKeys = ownSymbols.length ? ownSymbols : NO_SYMBOL_KEYS;
-  const allKeys = symbolKeys.length ? [...keys2, ...symbolKeys] : keys2;
+  const allKeys = symbolKeys.length ? [...keys, ...symbolKeys] : keys;
   for (const k of allKeys) {
     if (!def.shape?.[k]?._zod?.traits?.has("$ZodType")) {
       throw new Error(`Invalid element at key "${String(k)}": expected a Zod schema`);
@@ -2287,8 +2287,8 @@ function normalizeDef(def) {
     allKeys,
     symbolKeys,
     // string-only: handleCatchall matches it against `for...in`, which never yields a symbol
-    keySet: new Set(keys2),
-    numKeys: keys2.length,
+    keySet: new Set(keys),
+    numKeys: keys.length,
     optionalKeys: new Set(okeys)
   };
 }
@@ -2419,23 +2419,23 @@ function discriminatorMap(def) {
   }
   return map2;
 }
-function mergeValues(a, b2) {
-  if (a === b2) {
+function mergeValues(a, b) {
+  if (a === b) {
     return { valid: true, data: a };
   }
-  if (a instanceof Date && b2 instanceof Date && +a === +b2) {
+  if (a instanceof Date && b instanceof Date && +a === +b) {
     return { valid: true, data: a };
   }
-  if (isPlainObject(a) && isPlainObject(b2)) {
-    const bKeys = Object.keys(b2);
+  if (isPlainObject(a) && isPlainObject(b)) {
+    const bKeys = Object.keys(b);
     const sharedKeys = Object.keys(a).filter((key) => bKeys.indexOf(key) !== -1);
-    const newObj = { ...a, ...b2 };
+    const newObj = { ...a, ...b };
     if (Object.prototype.hasOwnProperty.call(newObj, "__proto__"))
       delete newObj.__proto__;
     for (const key of sharedKeys) {
       if (key === "__proto__")
         continue;
-      const sharedValue = mergeValues(a[key], b2[key]);
+      const sharedValue = mergeValues(a[key], b[key]);
       if (!sharedValue.valid) {
         return {
           valid: false,
@@ -2446,14 +2446,14 @@ function mergeValues(a, b2) {
     }
     return { valid: true, data: newObj };
   }
-  if (Array.isArray(a) && Array.isArray(b2)) {
-    if (a.length !== b2.length) {
+  if (Array.isArray(a) && Array.isArray(b)) {
+    if (a.length !== b.length) {
       return { valid: false, mergeErrorPath: [] };
     }
     const newArray = [];
     for (let index = 0; index < a.length; index++) {
       const itemA = a[index];
-      const itemB = b2[index];
+      const itemB = b[index];
       const sharedValue = mergeValues(itemA, itemB);
       if (!sharedValue.valid) {
         return {
@@ -2472,19 +2472,19 @@ function handleIntersectionResults(result, left, right) {
   let unrecIssue;
   const keyIssues = /* @__PURE__ */ new Map();
   const collect2 = (iss, side) => {
-    let keys2;
+    let keys;
     if (iss.code === "unrecognized_keys" && !iss.path?.length) {
       unrecIssue ?? (unrecIssue = iss);
-      keys2 = iss.keys;
+      keys = iss.keys;
     } else if (iss.code === "invalid_key" && iss.origin === "record" && iss.path?.length === 1) {
       const k = String(iss.path[0]);
       if (!keyIssues.has(k))
         keyIssues.set(k, iss);
-      keys2 = [k];
+      keys = [k];
     } else {
       return false;
     }
-    for (const k of keys2) {
+    for (const k of keys) {
       if (!unrecKeys.has(k))
         unrecKeys.set(k, {});
       unrecKeys.get(k)[side] = true;
@@ -3662,7 +3662,7 @@ var init_schemas = __esm({
     $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("$ZodDiscriminatedUnion", (inst, def) => {
       def.inclusive = false;
       $ZodUnion.init(inst, def);
-      const _super2 = inst._zod.parse;
+      const _super = inst._zod.parse;
       defineLazyInternal(inst, "propValues", (zod) => {
         const propValues = {};
         let undefinedCount = 0;
@@ -3709,7 +3709,7 @@ var init_schemas = __esm({
           return opt._zod.run(payload, ctx);
         }
         if (def.unionFallback || ctx.direction === "backward") {
-          return _super2(payload, ctx);
+          return _super(payload, ctx);
         }
         payload.issues.push({
           code: "invalid_union",
@@ -13561,13 +13561,13 @@ function generateObjectCheck(doc, ctx, schema, accessor, buildsValue = true) {
   const def = schema._zod.def;
   doc.write(`if (typeof ${accessor} !== "object" || ${accessor} === null || Array.isArray(${accessor})) return INVALID;`);
   const shape = def.shape;
-  const keys2 = Object.keys(shape);
+  const keys = Object.keys(shape);
   const symbolKeys = Object.getOwnPropertySymbols(shape);
-  const allKeys = symbolKeys.length ? [...keys2, ...symbolKeys] : keys2;
+  const allKeys = symbolKeys.length ? [...keys, ...symbolKeys] : keys;
   const keyExpr = (k) => typeof k === "symbol" ? addConstant(ctx, k) : esc(k);
   const propKey = (k) => typeof k === "symbol" ? `[${keyExpr(k)}]` : esc(k);
   const propShape = shape;
-  if (keys2.includes("__proto__")) {
+  if (keys.includes("__proto__")) {
     throw new ZodCompileUnsupportedError('object shape key "__proto__"');
   }
   const propOutputs = /* @__PURE__ */ new Map();
@@ -13609,7 +13609,7 @@ function generateObjectCheck(doc, ctx, schema, accessor, buildsValue = true) {
   if (catchall) {
     const catchallType = catchall._zod.def.type;
     if (catchallType === "never") {
-      const condition = keys2.map((k) => `k !== ${esc(k)}`).join(" && ") || "true";
+      const condition = keys.map((k) => `k !== ${esc(k)}`).join(" && ") || "true";
       doc.write(`for (const k in ${accessor}) {`);
       doc.indented((d) => {
         d.write(`if (${condition}) return INVALID;`);
@@ -13625,7 +13625,7 @@ function generateObjectCheck(doc, ctx, schema, accessor, buildsValue = true) {
   const hasConditionalKeys = allKeys.some((k) => mayOmitUndefined(propShape[k]) || dropsWhenAbsent(propShape[k]));
   if (!buildsValue) {
     if (unknownKeysMode === "schema") {
-      const knownSet = keys2.length > 0 ? addConstant(ctx, new Set(keys2)) : null;
+      const knownSet = keys.length > 0 ? addConstant(ctx, new Set(keys)) : null;
       doc.write(`for (const k in ${accessor}) {`);
       doc.indented((d) => {
         d.write(`if (k === "__proto__") continue;`);
@@ -13657,7 +13657,7 @@ function generateObjectCheck(doc, ctx, schema, accessor, buildsValue = true) {
     }
   }
   if (unknownKeysMode !== "none") {
-    const knownSet = keys2.length > 0 ? addConstant(ctx, new Set(keys2)) : null;
+    const knownSet = keys.length > 0 ? addConstant(ctx, new Set(keys)) : null;
     doc.write(`for (const k in ${accessor}) {`);
     doc.indented((d) => {
       d.write(`if (k === "__proto__") continue;`);
@@ -15737,8 +15737,8 @@ function compactTypeUnion(schema) {
     if (!option || typeof option !== "object")
       return;
     compactTypeUnion(option);
-    const keys2 = Object.keys(option);
-    if (keys2.length !== 1 || keys2[0] !== "type")
+    const keys = Object.keys(option);
+    if (keys.length !== 1 || keys[0] !== "type")
       return;
     const type = option.type;
     for (const member of Array.isArray(type) ? type : [type]) {
@@ -15825,7 +15825,7 @@ function foldIntersection(json2) {
       return;
     const rest = allOf.filter((m) => m !== union2);
     const branches = union2[keyword].map((branch) => foldObjects([...rest, branch]));
-    if (branches.some((b2) => !b2))
+    if (branches.some((b) => !b))
       return;
     folded = { [keyword]: branches };
   }
@@ -16576,14 +16576,14 @@ var init_json_schema_processors = __esm({
         ...params,
         path: [...params.path, "allOf", 0]
       });
-      const b2 = processSchema(def.right, ctx, {
+      const b = processSchema(def.right, ctx, {
         ...params,
         path: [...params.path, "allOf", 1]
       });
       const isSimpleIntersection = (val) => "allOf" in val && Object.keys(val).length === 1;
       const allOf = [
         ...isSimpleIntersection(a) ? a.allOf : [a],
-        ...isSimpleIntersection(b2) ? b2.allOf : [b2]
+        ...isSimpleIntersection(b) ? b.allOf : [b]
       ];
       json2.allOf = allOf;
       ctx.intersections.push(allOf);
@@ -18822,11 +18822,11 @@ var init_schemas2 = __esm({
       inst._zod.processJSONSchema = (ctx, json2, params) => enumProcessor(inst, ctx, json2, params);
       inst.enum = def.entries;
       inst.options = [...inst._zod.values];
-      const keys2 = new Set(Object.keys(def.entries));
+      const keys = new Set(Object.keys(def.entries));
       inst.extract = (values, params) => {
         const newEntries = {};
         for (const value of values) {
-          if (keys2.has(value)) {
+          if (keys.has(value)) {
             newEntries[value] = def.entries[value];
           } else
             throw new Error(`Key ${value} not found in enum`);
@@ -18841,7 +18841,7 @@ var init_schemas2 = __esm({
       inst.exclude = (values, params) => {
         const newEntries = { ...def.entries };
         for (const value of values) {
-          if (keys2.has(value)) {
+          if (keys.has(value)) {
             delete newEntries[value];
           } else
             throw new Error(`Key ${value} not found in enum`);
@@ -19136,8 +19136,8 @@ function checkObjectGuards(objectSchema, guards) {
     const value = payload.value;
     if (typeof value !== "object" || value === null || Array.isArray(value))
       return;
-    const keys2 = Object.getOwnPropertyNames(value);
-    if (guards.minProperties !== void 0 && keys2.length < guards.minProperties) {
+    const keys = Object.getOwnPropertyNames(value);
+    if (guards.minProperties !== void 0 && keys.length < guards.minProperties) {
       payload.issues.push({
         origin: "object",
         code: "too_small",
@@ -19149,7 +19149,7 @@ function checkObjectGuards(objectSchema, guards) {
         continue: true
       });
     }
-    if (guards.maxProperties !== void 0 && keys2.length > guards.maxProperties) {
+    if (guards.maxProperties !== void 0 && keys.length > guards.maxProperties) {
       payload.issues.push({
         origin: "object",
         code: "too_big",
@@ -19162,7 +19162,7 @@ function checkObjectGuards(objectSchema, guards) {
       });
     }
     if (guards.keySchema) {
-      for (const key of keys2) {
+      for (const key of keys) {
         const result = guards.keySchema.safeParse(key);
         if (result.success)
           continue;
@@ -19203,9 +19203,9 @@ function canonicalKey(value, seen) {
       }
       return `a${parts2.length}:[${parts2.join(",")}]`;
     }
-    const keys2 = Object.keys(value).sort();
+    const keys = Object.keys(value).sort();
     const parts = [];
-    for (const k of keys2) {
+    for (const k of keys) {
       const key = canonicalKey(value[k], seen);
       if (key === null)
         return null;
@@ -19865,10 +19865,10 @@ function visit(schema, fnOrHandlers) {
     switch (kind) {
       case "object": {
         const oldShape = def.shape;
-        const keys2 = Object.keys(oldShape);
+        const keys = Object.keys(oldShape);
         let changed = false;
         const newShape = {};
-        for (const k of keys2) {
+        for (const k of keys) {
           const mapped = run(oldShape[k]);
           if (mapped !== oldShape[k])
             changed = true;
@@ -20529,7 +20529,7 @@ async function assess(raw, evaluator, signal) {
   const started = Date.now();
   const input2 = qualityInputSchema.parse(raw);
   const { previousEvaluation, scope: requestedScope, ...state } = input2;
-  const scope = requestedScope ?? hash2({ task: input2.task, paths: input2.files?.map((file3) => file3.path).sort() });
+  const scope = requestedScope ?? hash2({ task: input2.task, paths: input2.files?.map((file2) => file2.path).sort() });
   signal?.throwIfAborted();
   const response = await evaluator.evaluate(state, qualityQuestions());
   signal?.throwIfAborted();
@@ -20575,7 +20575,7 @@ function transformQuality(response, scope, snapshot, previous) {
       } } : {}
     };
   }
-  const priorities = dimensions.filter((dimension) => metrics[dimension.key]?.weakness?.actionable).sort((a, b2) => b2.importance - a.importance || (metrics[a.key].score ?? 10) - (metrics[b2.key].score ?? 10)).slice(0, 5).map((dimension) => ({
+  const priorities = dimensions.filter((dimension) => metrics[dimension.key]?.weakness?.actionable).sort((a, b) => b.importance - a.importance || (metrics[a.key].score ?? 10) - (metrics[b.key].score ?? 10)).slice(0, 5).map((dimension) => ({
     metric: dimension.key,
     importance: dimension.importance,
     reason: metrics[dimension.key].weakness.description,
@@ -20697,7 +20697,7 @@ var init_quality = __esm({
       scope: external_exports.string().min(1).optional().describe("Stable identity for this review scope, such as repository and feature name."),
       previousEvaluation: previousEvaluationSchema.optional()
     }).strict().superRefine((input2, ctx) => {
-      if (!input2.task && !input2.diff && !input2.repositoryContext && !input2.files?.some((file3) => file3.content.trim())) {
+      if (!input2.task && !input2.diff && !input2.repositoryContext && !input2.files?.some((file2) => file2.content.trim())) {
         ctx.addIssue({ code: "custom", message: "Supply current task, diff, file content, or repository context." });
       }
     });
@@ -21193,15 +21193,15 @@ function hasSecret(text) {
   return false;
 }
 function assertSafeOutbound(value) {
-  const visit2 = (item, field, file3) => {
+  const visit2 = (item, field, file2) => {
     if (typeof item === "string") {
       if (!hasSecret(item)) return;
-      const location = file3 === void 0 ? `field ${field || "input"}` : `${file3} (field ${field})`;
+      const location = file2 === void 0 ? `field ${field || "input"}` : `${file2} (field ${field})`;
       throw new Error(`Potential credential in ${location}. Remove it before sending this request.`);
     }
-    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file3));
+    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file2));
     else if (item && typeof item === "object") {
-      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file3;
+      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file2;
       for (const [key, entry] of Object.entries(item)) visit2(entry, field ? `${field}.${key}` : key, path);
     }
   };
@@ -21213,25 +21213,25 @@ async function readSource(root, path, signal, maxBytes = 256e3) {
   const physical = await realpath(absolute);
   const inside2 = relative(root, physical);
   if (inside2 === ".." || inside2.startsWith("../") || inside2.startsWith("..\\") || isAbsolute(inside2) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
-  const file3 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const file2 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
-    const before = await file3.stat();
+    const before = await file2.stat();
     if (!before.isFile() || before.size > maxBytes) throw new Error("Nonregular or oversized file");
     const buffer = Buffer.alloc(before.size + 1);
     let size = 0;
     while (size < buffer.length) {
       signal?.throwIfAborted();
-      const read = await file3.read(buffer, size, buffer.length - size, null);
+      const read = await file2.read(buffer, size, buffer.length - size, null);
       if (!read.bytesRead) break;
       size += read.bytesRead;
     }
-    const after = await file3.stat();
+    const after = await file2.stat();
     if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
     const current = await lstat(physical);
     if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error("File changed during collection");
     return buffer.subarray(0, size).toString("utf8");
   } finally {
-    await file3.close();
+    await file2.close();
   }
 }
 var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE;
@@ -22698,11 +22698,11 @@ var init_lib = __esm({
         return new Position(loc.line, loc.column);
       }
       parse() {
-        const file3 = super.parse();
+        const file2 = super.parse();
         if (this.optionFlags & 512) {
-          file3.tokens = file3.tokens.map(toESTreeLocation);
+          file2.tokens = file2.tokens.map(toESTreeLocation);
         }
-        return toESTreeLocation(file3);
+        return toESTreeLocation(file2);
       }
       parseRegExpLiteral({
         pattern,
@@ -22747,17 +22747,17 @@ var init_lib = __esm({
         return this.estreeParseLiteral(value);
       }
       estreeParseChainExpression(node2, endNode) {
-        const chain2 = this.startNodeAtNode(node2);
-        chain2.expression = node2;
-        return this.finishNodeAtNode(chain2, "ChainExpression", endNode);
+        const chain = this.startNodeAtNode(node2);
+        chain.expression = node2;
+        return this.finishNodeAtNode(chain, "ChainExpression", endNode);
       }
-      directiveToStmt(directive2) {
-        const expression = directive2.value;
-        delete directive2.value;
+      directiveToStmt(directive) {
+        const expression = directive.value;
+        delete directive.value;
         this.castNodeTo(expression, "Literal");
         expression.raw = expression.extra.raw;
         expression.value = expression.extra.expressionValue;
-        const stmt = this.castNodeTo(directive2, "ExpressionStatement");
+        const stmt = this.castNodeTo(directive, "ExpressionStatement");
         stmt.expression = expression;
         stmt.directive = expression.extra.rawValue;
         delete expression.extra;
@@ -24146,9 +24146,9 @@ var init_lib = __esm({
       flowParseTypeParameter(requireDefault = false) {
         const nodeStartLoc = this.state.startLoc;
         const node2 = this.startNode();
-        const variance2 = this.flowParseVariance();
+        const variance = this.flowParseVariance();
         node2.name = this.flowParseRestrictedIdentifierName();
-        node2.variance = variance2;
+        node2.variance = variance;
         node2.bound = this.flowParseTypeParameterBound();
         if (this.match(25)) {
           this.eat(25);
@@ -24172,9 +24172,9 @@ var init_lib = __esm({
         }
         let defaultRequired = false;
         do {
-          const typeParameter2 = this.flowParseTypeParameter(defaultRequired);
-          node2.params.push(typeParameter2);
-          if (typeParameter2.default) {
+          const typeParameter = this.flowParseTypeParameter(defaultRequired);
+          node2.params.push(typeParameter);
+          if (typeParameter.default) {
             defaultRequired = true;
           }
           if (!this.match(44)) {
@@ -24264,7 +24264,7 @@ var init_lib = __esm({
       flowParseObjectPropertyKey() {
         return this.match(131) || this.match(130) ? super.parseExprAtom() : this.parseIdentifier(true);
       }
-      flowParseObjectTypeIndexer(node2, isStatic, variance2) {
+      flowParseObjectTypeIndexer(node2, isStatic, variance) {
         node2.static = isStatic;
         if (this.lookahead().type === 10) {
           node2.id = this.parseIdentifier(true);
@@ -24275,7 +24275,7 @@ var init_lib = __esm({
         }
         this.expect(1);
         node2.value = this.flowParseTypeInitialiser();
-        node2.variance = variance2;
+        node2.variance = variance;
         return this.finishNode(node2, "ObjectTypeIndexer");
       }
       flowParseObjectTypeInternalSlot(node2, isStatic) {
@@ -24378,25 +24378,25 @@ var init_lib = __esm({
               isStatic = true;
             }
           }
-          const variance2 = this.flowParseVariance();
+          const variance = this.flowParseVariance();
           if (this.eat(0)) {
             if (protoStartLoc != null) {
               this.unexpected(protoStartLoc);
             }
             if (this.eat(0)) {
-              if (variance2) {
-                this.unexpected(variance2.start);
+              if (variance) {
+                this.unexpected(variance.start);
               }
               nodeStart.internalSlots.push(this.flowParseObjectTypeInternalSlot(node2, isStatic));
             } else {
-              nodeStart.indexers.push(this.flowParseObjectTypeIndexer(node2, isStatic, variance2));
+              nodeStart.indexers.push(this.flowParseObjectTypeIndexer(node2, isStatic, variance));
             }
           } else if (this.match(6) || this.match(43)) {
             if (protoStartLoc != null) {
               this.unexpected(protoStartLoc);
             }
-            if (variance2) {
-              this.unexpected(variance2.start);
+            if (variance) {
+              this.unexpected(variance.start);
             }
             nodeStart.callProperties.push(this.flowParseObjectTypeCallProperty(node2, isStatic));
           } else {
@@ -24408,7 +24408,7 @@ var init_lib = __esm({
                 this.next();
               }
             }
-            const propOrInexact = this.flowParseObjectTypeProperty(node2, isStatic, protoStartLoc, variance2, kind, allowSpread, allowInexact ?? !exact);
+            const propOrInexact = this.flowParseObjectTypeProperty(node2, isStatic, protoStartLoc, variance, kind, allowSpread, allowInexact ?? !exact);
             if (propOrInexact === null) {
               inexact = true;
               inexactStartLoc = this.state.lastTokStartLoc;
@@ -24429,7 +24429,7 @@ var init_lib = __esm({
         this.state.inType = oldInType;
         return out;
       }
-      flowParseObjectTypeProperty(node2, isStatic, protoStartLoc, variance2, kind, allowSpread, allowInexact) {
+      flowParseObjectTypeProperty(node2, isStatic, protoStartLoc, variance, kind, allowSpread, allowInexact) {
         if (this.eat(17)) {
           const isInexactToken = this.match(8) || this.match(9) || this.match(4) || this.match(5);
           if (isInexactToken) {
@@ -24438,8 +24438,8 @@ var init_lib = __esm({
             } else if (!allowInexact) {
               this.raise(FlowErrors.InexactInsideExact, this.state.lastTokStartLoc);
             }
-            if (variance2) {
-              this.raise(FlowErrors.InexactVariance, variance2);
+            if (variance) {
+              this.raise(FlowErrors.InexactVariance, variance);
             }
             return null;
           }
@@ -24449,8 +24449,8 @@ var init_lib = __esm({
           if (protoStartLoc != null) {
             this.unexpected(protoStartLoc);
           }
-          if (variance2) {
-            this.raise(FlowErrors.SpreadVariance, variance2);
+          if (variance) {
+            this.raise(FlowErrors.SpreadVariance, variance);
           }
           node2.argument = this.flowParseType();
           return this.finishNode(node2, "ObjectTypeSpreadProperty");
@@ -24465,8 +24465,8 @@ var init_lib = __esm({
             if (protoStartLoc != null) {
               this.unexpected(protoStartLoc);
             }
-            if (variance2) {
-              this.unexpected(variance2.start);
+            if (variance) {
+              this.unexpected(variance.start);
             }
             node2.value = this.flowParseObjectTypeMethodish(this.startNodeAtNode(node2));
             if (kind === "get" || kind === "set") {
@@ -24481,7 +24481,7 @@ var init_lib = __esm({
               optional2 = true;
             }
             node2.value = this.flowParseTypeInitialiser();
-            node2.variance = variance2;
+            node2.variance = variance;
           }
           node2.optional = optional2;
           return this.finishNode(node2, "ObjectTypeProperty");
@@ -24547,7 +24547,7 @@ var init_lib = __esm({
       flowParseFunctionTypeParam(first) {
         let name = null;
         let optional2 = false;
-        let typeAnnotation2;
+        let typeAnnotation;
         const node2 = this.startNode();
         const lh = this.lookahead();
         const isThis = this.state.type === 74;
@@ -24562,13 +24562,13 @@ var init_lib = __esm({
               this.raise(FlowErrors.ThisParamMayNotBeOptional, node2);
             }
           }
-          typeAnnotation2 = this.flowParseTypeInitialiser();
+          typeAnnotation = this.flowParseTypeInitialiser();
         } else {
-          typeAnnotation2 = this.flowParseType();
+          typeAnnotation = this.flowParseType();
         }
         node2.name = name;
         node2.optional = optional2;
-        node2.typeAnnotation = typeAnnotation2;
+        node2.typeAnnotation = typeAnnotation;
         return this.finishNode(node2, "FunctionTypeParam");
       }
       reinterpretTypeAsFunctionTypeParam(type) {
@@ -24858,18 +24858,18 @@ var init_lib = __esm({
         return node2.expression;
       }
       flowParseVariance() {
-        let variance2 = null;
+        let variance = null;
         if (this.match(49)) {
-          variance2 = this.startNode();
+          variance = this.startNode();
           if (this.state.value === "+") {
-            variance2.kind = "plus";
+            variance.kind = "plus";
           } else {
-            variance2.kind = "minus";
+            variance.kind = "minus";
           }
           this.next();
-          return this.finishNode(variance2, "Variance");
+          return this.finishNode(variance, "Variance");
         }
-        return variance2;
+        return variance;
       }
       parseFunctionBody(node2, allowExpressionBody, isMethod = false) {
         if (allowExpressionBody) {
@@ -25138,17 +25138,17 @@ var init_lib = __esm({
           node2.typeParameters = this.flowParseTypeParameterDeclaration();
         }
       }
-      parseClassMember(classBody2, member, state) {
+      parseClassMember(classBody, member, state) {
         const {
           startLoc
         } = this.state;
         if (this.isContextual(121)) {
-          if (super.parseClassMemberFromModifier(classBody2, member)) {
+          if (super.parseClassMemberFromModifier(classBody, member)) {
             return;
           }
           member.declare = true;
         }
-        super.parseClassMember(classBody2, member, state);
+        super.parseClassMember(classBody, member, state);
         if (member.declare) {
           if (member.type !== "ClassProperty" && member.type !== "ClassPrivateProperty" && member.type !== "PropertyDefinition") {
             this.raise(FlowErrors.DeclareClassElement, startLoc);
@@ -25249,7 +25249,7 @@ var init_lib = __esm({
       isNonstaticConstructor(method) {
         return !this.match(10) && super.isNonstaticConstructor(method);
       }
-      pushClassMethod(classBody2, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
+      pushClassMethod(classBody, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
         if (method.variance) {
           this.unexpected(method.variance.start);
         }
@@ -25257,7 +25257,7 @@ var init_lib = __esm({
         if (this.match(43)) {
           method.typeParameters = this.flowParseTypeParameterDeclaration();
         }
-        super.pushClassMethod(classBody2, method, isGenerator, isAsync, isConstructor, allowsDirectSuper);
+        super.pushClassMethod(classBody, method, isGenerator, isAsync, isConstructor, allowsDirectSuper);
         if (method.params && isConstructor) {
           const params = method.params;
           if (params.length > 0 && this.isThisParam(params[0])) {
@@ -25270,7 +25270,7 @@ var init_lib = __esm({
           }
         }
       }
-      pushClassPrivateMethod(classBody2, method, isGenerator, isAsync) {
+      pushClassPrivateMethod(classBody, method, isGenerator, isAsync) {
         if (method.variance) {
           this.unexpected(method.variance.start);
         }
@@ -25278,7 +25278,7 @@ var init_lib = __esm({
         if (this.match(43)) {
           method.typeParameters = this.flowParseTypeParameterDeclaration();
         }
-        super.pushClassPrivateMethod(classBody2, method, isGenerator, isAsync);
+        super.pushClassPrivateMethod(classBody, method, isGenerator, isAsync);
       }
       flowParseClassImplements() {
         const node2 = this.startNode();
@@ -25663,8 +25663,8 @@ var init_lib = __esm({
         }
         super.readToken_pipe_amp(code2);
       }
-      parseTopLevel(file3, program2) {
-        const fileNode = super.parseTopLevel(file3, program2);
+      parseTopLevel(file2, program) {
+        const fileNode = super.parseTopLevel(file2, program);
         if (this.state.hasFlowComment) {
           this.raise(FlowErrors.UnterminatedFlowComment, this.state.curPosition());
         }
@@ -29146,8 +29146,8 @@ var init_lib = __esm({
           this.declareNameFromIdentifier(at, bindingType);
         }
       }
-      declareNameFromIdentifier(identifier2, binding) {
-        this.scope.declareName(identifier2.name, binding, identifier2.start);
+      declareNameFromIdentifier(identifier, binding) {
+        this.scope.declareName(identifier.name, binding, identifier.start);
       }
       checkToRestConversion(node2, allowPattern) {
         switch (node2.type) {
@@ -30763,12 +30763,12 @@ var init_lib = __esm({
         if (!this.match(2)) {
           this.unexpected(null, 2);
         }
-        const program2 = this.startNodeAt(this.state.endLoc);
+        const program = this.startNodeAt(this.state.endLoc);
         this.next();
         const revertScopes = this.initializeScopes(true);
         this.enterInitialScopes();
         try {
-          node2.body = this.parseProgram(program2, 4, "module");
+          node2.body = this.parseProgram(program, 4, "module");
         } finally {
           revertScopes();
         }
@@ -30804,18 +30804,18 @@ var init_lib = __esm({
     loneSurrogate = /[\uD800-\uDFFF]/u;
     keywordRelationalOperator = /in(?:stanceof)?/y;
     StatementParser = class extends ExpressionParser {
-      parseTopLevel(file3, program2) {
-        file3.program = this.parseProgram(program2, 135, this.options.sourceType === "module" ? "module" : "script");
-        file3.comments = this.comments;
+      parseTopLevel(file2, program) {
+        file2.program = this.parseProgram(program, 135, this.options.sourceType === "module" ? "module" : "script");
+        file2.comments = this.comments;
         if (this.optionFlags & 512) {
-          file3.tokens = createExportedTokens(this.tokens);
+          file2.tokens = createExportedTokens(this.tokens);
         }
-        return this.finishNode(file3, "File");
+        return this.finishNode(file2, "File");
       }
-      parseProgram(program2, end, sourceType) {
-        program2.sourceType = sourceType;
-        program2.interpreter = this.parseInterpreterDirective();
-        this.parseBlockBody(program2, true, true, end);
+      parseProgram(program, end, sourceType) {
+        program.sourceType = sourceType;
+        program.interpreter = this.parseInterpreterDirective();
+        this.parseBlockBody(program, true, true, end);
         if (this.inModule) {
           if (!(this.optionFlags & 64) && this.scope.undefinedExports.size > 0) {
             for (const [localName, at] of Array.from(this.scope.undefinedExports)) {
@@ -30824,28 +30824,28 @@ var init_lib = __esm({
               });
             }
           }
-          this.addExtra(program2, "topLevelAwait", this.state.hasTopLevelAwait);
+          this.addExtra(program, "topLevelAwait", this.state.hasTopLevelAwait);
         }
         let finishedProgram;
         if (end === 135) {
-          finishedProgram = this.finishNode(program2, "Program");
+          finishedProgram = this.finishNode(program, "Program");
         } else {
-          finishedProgram = this.finishNodeAt(program2, "Program", createPositionWithColumnOffset(this.state.startLoc, -1));
+          finishedProgram = this.finishNodeAt(program, "Program", createPositionWithColumnOffset(this.state.startLoc, -1));
         }
         return finishedProgram;
       }
       stmtToDirective(stmt) {
-        const directive2 = this.castNodeTo(stmt, "Directive");
-        const directiveLiteral2 = this.castNodeTo(stmt.expression, "DirectiveLiteral");
-        const expressionValue = directiveLiteral2.value;
-        const raw = this.input.slice(this.offsetToSourcePos(directiveLiteral2.start), this.offsetToSourcePos(directiveLiteral2.end));
-        const val = directiveLiteral2.value = raw.slice(1, -1);
-        this.addExtra(directiveLiteral2, "raw", raw);
-        this.addExtra(directiveLiteral2, "rawValue", val);
-        this.addExtra(directiveLiteral2, "expressionValue", expressionValue);
-        directive2.value = directiveLiteral2;
+        const directive = this.castNodeTo(stmt, "Directive");
+        const directiveLiteral = this.castNodeTo(stmt.expression, "DirectiveLiteral");
+        const expressionValue = directiveLiteral.value;
+        const raw = this.input.slice(this.offsetToSourcePos(directiveLiteral.start), this.offsetToSourcePos(directiveLiteral.end));
+        const val = directiveLiteral.value = raw.slice(1, -1);
+        this.addExtra(directiveLiteral, "raw", raw);
+        this.addExtra(directiveLiteral, "rawValue", val);
+        this.addExtra(directiveLiteral, "expressionValue", expressionValue);
+        directive.value = directiveLiteral;
         delete stmt.expression;
-        return directive2;
+        return directive;
       }
       parseInterpreterDirective() {
         if (!this.match(24)) {
@@ -31497,9 +31497,9 @@ var init_lib = __esm({
           const stmt = topLevel ? this.parseModuleItem() : this.parseStatementListItem();
           if (directives && !parsedNonDirective) {
             if (this.isValidDirective(stmt)) {
-              const directive2 = this.stmtToDirective(stmt);
-              directives.push(directive2);
-              if (!hasStrictModeDirective && directive2.value.value === "use strict") {
+              const directive = this.stmtToDirective(stmt);
+              directives.push(directive);
+              if (!hasStrictModeDirective && directive.value.value === "use strict") {
                 hasStrictModeDirective = true;
                 this.setStrict(true);
               }
@@ -31600,8 +31600,8 @@ var init_lib = __esm({
       }
       parseFunction(node2, flags = 0) {
         const hangingDeclaration = flags & 2;
-        const isDeclaration2 = !!(flags & 1);
-        const requireId = isDeclaration2 && !(flags & 4);
+        const isDeclaration = !!(flags & 1);
+        const requireId = isDeclaration && !(flags & 4);
         const isAsync = !!(flags & 8);
         this.initFunction(node2, isAsync);
         if (this.match(51)) {
@@ -31611,19 +31611,19 @@ var init_lib = __esm({
           this.next();
           node2.generator = true;
         }
-        if (isDeclaration2) {
+        if (isDeclaration) {
           node2.id = this.parseFunctionId(requireId);
         }
         this.scope.enter(514);
         this.prodParam.enter(functionFlags(isAsync, node2.generator));
-        if (!isDeclaration2) {
+        if (!isDeclaration) {
           node2.id = this.parseFunctionId();
         }
         this.parseFunctionParams(node2, false);
-        this.parseFunctionBodyAndFinish(node2, isDeclaration2 ? "FunctionDeclaration" : "FunctionExpression");
+        this.parseFunctionBodyAndFinish(node2, isDeclaration ? "FunctionDeclaration" : "FunctionExpression");
         this.prodParam.exit();
         this.scope.exit();
-        if (isDeclaration2 && !hangingDeclaration) {
+        if (isDeclaration && !hangingDeclaration) {
           this.registerFunctionStatementId(node2);
         }
         return node2;
@@ -31669,8 +31669,8 @@ var init_lib = __esm({
           hadSuperClass
         };
         let decorators = [];
-        const classBody2 = this.startNode();
-        classBody2.body = [];
+        const classBody = this.startNode();
+        classBody.body = [];
         this.expect(2);
         while (!this.match(4)) {
           if (this.eat(9)) {
@@ -31689,7 +31689,7 @@ var init_lib = __esm({
             this.resetStartLocationFromNode(member, decorators[0]);
             decorators = [];
           }
-          this.parseClassMember(classBody2, member, state);
+          this.parseClassMember(classBody, member, state);
         }
         this.state.strict = oldStrict;
         this.next();
@@ -31697,9 +31697,9 @@ var init_lib = __esm({
           throw this.raise(Errors.TrailingDecorator, this.state.startLoc);
         }
         this.classScope.exit();
-        return this.finishNode(classBody2, "ClassBody");
+        return this.finishNode(classBody, "ClassBody");
       }
-      parseClassMemberFromModifier(classBody2, member) {
+      parseClassMemberFromModifier(classBody, member) {
         const key = this.parseIdentifier(true);
         if (this.isClassMethod()) {
           const method = member;
@@ -31707,33 +31707,33 @@ var init_lib = __esm({
           method.computed = false;
           method.key = key;
           method.static = false;
-          this.pushClassMethod(classBody2, method, false, false, false, false);
+          this.pushClassMethod(classBody, method, false, false, false, false);
           return true;
         } else if (this.isClassProperty()) {
           const prop = member;
           prop.computed = false;
           prop.key = key;
           prop.static = false;
-          classBody2.body.push(this.parseClassProperty(prop));
+          classBody.body.push(this.parseClassProperty(prop));
           return true;
         }
         this.resetPreviousNodeTrailingComments(key);
         return false;
       }
-      parseClassMember(classBody2, member, state) {
+      parseClassMember(classBody, member, state) {
         const isStatic = this.isContextual(102);
         if (isStatic) {
-          if (this.parseClassMemberFromModifier(classBody2, member)) {
+          if (this.parseClassMemberFromModifier(classBody, member)) {
             return;
           }
           if (this.eat(2)) {
-            this.parseClassStaticBlock(classBody2, member);
+            this.parseClassStaticBlock(classBody, member);
             return;
           }
         }
-        this.parseClassMemberWithIsStatic(classBody2, member, state, isStatic);
+        this.parseClassMemberWithIsStatic(classBody, member, state, isStatic);
       }
-      parseClassMemberWithIsStatic(classBody2, member, state, isStatic) {
+      parseClassMemberWithIsStatic(classBody, member, state, isStatic) {
         const publicMethod = member;
         const privateMethod = member;
         const publicProp = member;
@@ -31745,17 +31745,17 @@ var init_lib = __esm({
         this.parsePropertyNamePrefixOperator(member);
         if (this.eat(51)) {
           method.kind = "method";
-          const isPrivateName2 = this.match(134);
+          const isPrivateName = this.match(134);
           this.parseClassElementName(method);
           this.parsePostMemberNameModifiers(method);
-          if (isPrivateName2) {
-            this.pushClassPrivateMethod(classBody2, privateMethod, true, false);
+          if (isPrivateName) {
+            this.pushClassPrivateMethod(classBody, privateMethod, true, false);
             return;
           }
           if (this.isNonstaticConstructor(publicMethod)) {
             this.raise(Errors.ConstructorIsGenerator, publicMethod.key);
           }
-          this.pushClassMethod(classBody2, publicMethod, true, false, false, false);
+          this.pushClassMethod(classBody, publicMethod, true, false, false, false);
           return;
         }
         const isContextual = !this.state.containsEsc && tokenIsIdentifier(this.state.type);
@@ -31767,7 +31767,7 @@ var init_lib = __esm({
         if (this.isClassMethod()) {
           method.kind = "method";
           if (isPrivate) {
-            this.pushClassPrivateMethod(classBody2, privateMethod, false, false);
+            this.pushClassPrivateMethod(classBody, privateMethod, false, false);
             return;
           }
           const isConstructor = this.isNonstaticConstructor(publicMethod);
@@ -31786,12 +31786,12 @@ var init_lib = __esm({
             state.hadConstructor = true;
             allowsDirectSuper = state.hadSuperClass;
           }
-          this.pushClassMethod(classBody2, publicMethod, false, false, isConstructor, allowsDirectSuper);
+          this.pushClassMethod(classBody, publicMethod, false, false, isConstructor, allowsDirectSuper);
         } else if (this.isClassProperty()) {
           if (isPrivate) {
-            this.pushClassPrivateProperty(classBody2, privateProp);
+            this.pushClassPrivateProperty(classBody, privateProp);
           } else {
-            this.pushClassProperty(classBody2, publicProp);
+            this.pushClassProperty(classBody, publicProp);
           }
         } else if (maybeContextualKw === "async" && !this.isLineTerminator()) {
           this.resetPreviousNodeTrailingComments(key);
@@ -31804,12 +31804,12 @@ var init_lib = __esm({
           this.parseClassElementName(method);
           this.parsePostMemberNameModifiers(publicMember);
           if (isPrivate2) {
-            this.pushClassPrivateMethod(classBody2, privateMethod, isGenerator, true);
+            this.pushClassPrivateMethod(classBody, privateMethod, isGenerator, true);
           } else {
             if (this.isNonstaticConstructor(publicMethod)) {
               this.raise(Errors.ConstructorIsAsync, publicMethod.key);
             }
-            this.pushClassMethod(classBody2, publicMethod, isGenerator, true, false, false);
+            this.pushClassMethod(classBody, publicMethod, isGenerator, true, false, false);
           }
         } else if ((maybeContextualKw === "get" || maybeContextualKw === "set") && !(this.match(51) && this.isLineTerminator())) {
           this.resetPreviousNodeTrailingComments(key);
@@ -31817,12 +31817,12 @@ var init_lib = __esm({
           const isPrivate2 = this.match(134);
           this.parseClassElementName(publicMethod);
           if (isPrivate2) {
-            this.pushClassPrivateMethod(classBody2, privateMethod, false, false);
+            this.pushClassPrivateMethod(classBody, privateMethod, false, false);
           } else {
             if (this.isNonstaticConstructor(publicMethod)) {
               this.raise(Errors.ConstructorIsAccessor, publicMethod.key);
             }
-            this.pushClassMethod(classBody2, publicMethod, false, false, false, false);
+            this.pushClassMethod(classBody, publicMethod, false, false, false, false);
           }
           this.checkGetterSetterParams(publicMethod);
         } else if (maybeContextualKw === "accessor" && !this.isLineTerminator()) {
@@ -31830,12 +31830,12 @@ var init_lib = __esm({
           this.resetPreviousNodeTrailingComments(key);
           const isPrivate2 = this.match(134);
           this.parseClassElementName(publicProp);
-          this.pushClassAccessorProperty(classBody2, accessorProp, isPrivate2);
+          this.pushClassAccessorProperty(classBody, accessorProp, isPrivate2);
         } else if (this.isLineTerminator()) {
           if (isPrivate) {
-            this.pushClassPrivateProperty(classBody2, privateProp);
+            this.pushClassPrivateProperty(classBody, privateProp);
           } else {
-            this.pushClassProperty(classBody2, publicProp);
+            this.pushClassProperty(classBody, publicProp);
           }
         } else {
           this.unexpected();
@@ -31860,7 +31860,7 @@ var init_lib = __esm({
         this.parsePropertyName(member);
         return member.key;
       }
-      parseClassStaticBlock(classBody2, member) {
+      parseClassStaticBlock(classBody, member) {
         this.scope.enter(576 | 128 | 16);
         const oldLabels = this.state.labels;
         this.state.labels = [];
@@ -31870,38 +31870,38 @@ var init_lib = __esm({
         this.prodParam.exit();
         this.scope.exit();
         this.state.labels = oldLabels;
-        classBody2.body.push(this.finishNode(member, "StaticBlock"));
+        classBody.body.push(this.finishNode(member, "StaticBlock"));
         if (member.decorators?.length) {
           this.raise(Errors.DecoratorStaticBlock, member);
         }
       }
-      pushClassProperty(classBody2, prop) {
+      pushClassProperty(classBody, prop) {
         if (!prop.computed && this.nameIsConstructor(prop.key)) {
           this.raise(Errors.ConstructorClassField, prop.key);
         }
-        classBody2.body.push(this.parseClassProperty(prop));
+        classBody.body.push(this.parseClassProperty(prop));
       }
-      pushClassPrivateProperty(classBody2, prop) {
+      pushClassPrivateProperty(classBody, prop) {
         const node2 = this.parseClassPrivateProperty(prop);
-        classBody2.body.push(node2);
+        classBody.body.push(node2);
         this.classScope.declarePrivateName(this.getPrivateNameSV(node2.key), 0, node2.key.start);
       }
-      pushClassAccessorProperty(classBody2, prop, isPrivate) {
+      pushClassAccessorProperty(classBody, prop, isPrivate) {
         if (!isPrivate && !prop.computed && this.nameIsConstructor(prop.key)) {
           this.raise(Errors.ConstructorClassField, prop.key);
         }
         const node2 = this.parseClassAccessorProperty(prop);
-        classBody2.body.push(node2);
+        classBody.body.push(node2);
         if (isPrivate) {
           this.classScope.declarePrivateName(this.getPrivateNameSV(node2.key), 0, node2.key.start);
         }
       }
-      pushClassMethod(classBody2, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
-        classBody2.body.push(this.parseMethod(method, isGenerator, isAsync, isConstructor, allowsDirectSuper, "ClassMethod", true));
+      pushClassMethod(classBody, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
+        classBody.body.push(this.parseMethod(method, isGenerator, isAsync, isConstructor, allowsDirectSuper, "ClassMethod", true));
       }
-      pushClassPrivateMethod(classBody2, method, isGenerator, isAsync) {
+      pushClassPrivateMethod(classBody, method, isGenerator, isAsync) {
         const node2 = this.parseMethod(method, isGenerator, isAsync, false, false, "ClassPrivateMethod", true);
-        classBody2.body.push(node2);
+        classBody.body.push(node2);
         const kind = node2.kind === "get" ? node2.static ? 6 : 2 : node2.kind === "set" ? node2.static ? 5 : 1 : 0;
         this.declareClassPrivateMethodInScope(node2, kind);
       }
@@ -32455,8 +32455,8 @@ var init_lib = __esm({
           const importedIsString = this.match(130);
           const isMaybeTypeOnly = this.isContextual(126);
           specifier.imported = this.parseModuleExportName();
-          const importSpecifier2 = this.parseImportSpecifier(specifier, importedIsString, node2.importKind === "type" || node2.importKind === "typeof", isMaybeTypeOnly, void 0);
-          node2.specifiers.push(importSpecifier2);
+          const importSpecifier = this.parseImportSpecifier(specifier, importedIsString, node2.importKind === "type" || node2.importKind === "typeof", isMaybeTypeOnly, void 0);
+          node2.specifiers.push(importSpecifier);
         }
       }
       parseImportSpecifier(specifier, importedIsString, isInTypeOnlyImport, isMaybeTypeOnly, bindingType) {
@@ -33375,10 +33375,10 @@ var init_lib = __esm({
       tsParseInferType() {
         const node2 = this.startNode();
         this.expectContextual(111);
-        const typeParameter2 = this.startNode();
-        typeParameter2.name = this.tsParseTypeParameterName();
-        typeParameter2.constraint = this.tsTryParse(() => this.tsParseConstraintForInferType());
-        node2.typeParameter = this.finishNode(typeParameter2, "TSTypeParameter");
+        const typeParameter = this.startNode();
+        typeParameter.name = this.tsParseTypeParameterName();
+        typeParameter.constraint = this.tsTryParse(() => this.tsParseConstraintForInferType());
+        node2.typeParameter = this.finishNode(typeParameter, "TSTypeParameter");
         return this.finishNode(node2, "TSInferType");
       }
       tsParseConstraintForInferType() {
@@ -34456,7 +34456,7 @@ var init_lib = __esm({
       tsIsStartOfStaticBlocks() {
         return this.isContextual(102) && this.lookaheadCharCode() === 123;
       }
-      parseClassMember(classBody2, member, state) {
+      parseClassMember(classBody, member, state) {
         this.tsParseModifiers(ClassMemberModifiers, TSErrors.InvalidModifierOnTypeParameterPositions, member, true);
         const callParseClassMemberWithIsStatic = () => {
           if (this.tsIsStartOfStaticBlocks()) {
@@ -34465,9 +34465,9 @@ var init_lib = __esm({
             if (this.tsHasSomeModifiers(member, ["declare", "private", "public", "protected", "override", "abstract", "readonly", "static"])) {
               this.raise(TSErrors.StaticBlockCannotHaveModifier, this.state.curPosition());
             }
-            super.parseClassStaticBlock(classBody2, member);
+            super.parseClassStaticBlock(classBody, member);
           } else {
-            this.parseClassMemberWithIsStatic(classBody2, member, state, !!member.static);
+            this.parseClassMemberWithIsStatic(classBody, member, state, !!member.static);
           }
         };
         if (member.declare) {
@@ -34487,10 +34487,10 @@ var init_lib = __esm({
           }
         }
       }
-      parseClassMemberWithIsStatic(classBody2, member, state, isStatic) {
+      parseClassMemberWithIsStatic(classBody, member, state, isStatic) {
         const idx = this.tsTryParseIndexSignature(member);
         if (idx) {
-          classBody2.body.push(idx);
+          classBody.body.push(idx);
           if (member.abstract) {
             this.raise(TSErrors.IndexSignatureHasAbstract, member);
           }
@@ -34515,7 +34515,7 @@ var init_lib = __esm({
             this.raise(TSErrors.OverrideNotInSubClass, member);
           }
         }
-        super.parseClassMemberWithIsStatic(classBody2, member, state, isStatic);
+        super.parseClassMemberWithIsStatic(classBody, member, state, isStatic);
       }
       parsePostMemberNameModifiers(methodOrProp) {
         const optional2 = this.eat(13);
@@ -34574,8 +34574,8 @@ var init_lib = __esm({
         if (isDeclare && (this.isContextual(121) || !this.shouldParseExportDeclaration())) {
           throw this.raise(TSErrors.ExpectedAmbientAfterExportDeclare, this.state.startLoc);
         }
-        const isIdentifier2 = tokenIsIdentifier(this.state.type);
-        const declaration = isIdentifier2 && this.tsTryParseExportDeclaration() || super.parseExportDeclaration(node2);
+        const isIdentifier = tokenIsIdentifier(this.state.type);
+        const declaration = isIdentifier && this.tsTryParseExportDeclaration() || super.parseExportDeclaration(node2);
         if (!declaration) return null;
         if (declaration.type === "TSInterfaceDeclaration" || declaration.type === "TSTypeAliasDeclaration" || isDeclare) {
           node2.exportKind = "type";
@@ -34647,7 +34647,7 @@ var init_lib = __esm({
         }
         return super.parseClassAccessorProperty(node2);
       }
-      pushClassMethod(classBody2, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
+      pushClassMethod(classBody, method, isGenerator, isAsync, isConstructor, allowsDirectSuper) {
         const typeParameters = this.tsTryParseTypeParameters(this.tsParseConstModifier);
         if (typeParameters && isConstructor) {
           this.raise(TSErrors.ConstructorHasTypeParameters, typeParameters);
@@ -34662,12 +34662,12 @@ var init_lib = __esm({
           });
         }
         if (typeParameters) method.typeParameters = typeParameters;
-        super.pushClassMethod(classBody2, method, isGenerator, isAsync, isConstructor, allowsDirectSuper);
+        super.pushClassMethod(classBody, method, isGenerator, isAsync, isConstructor, allowsDirectSuper);
       }
-      pushClassPrivateMethod(classBody2, method, isGenerator, isAsync) {
+      pushClassPrivateMethod(classBody, method, isGenerator, isAsync) {
         const typeParameters = this.tsTryParseTypeParameters(this.tsParseConstModifier);
         if (typeParameters) method.typeParameters = typeParameters;
-        super.pushClassPrivateMethod(classBody2, method, isGenerator, isAsync);
+        super.pushClassPrivateMethod(classBody, method, isGenerator, isAsync);
       }
       declareClassPrivateMethodInScope(node2, kind) {
         if (node2.type === "TSDeclareMethod") return;
@@ -34680,10 +34680,10 @@ var init_lib = __esm({
         super.parseClassSuper(node2);
         if (node2.superClass) {
           if (node2.superClass.type === "TSInstantiationExpression") {
-            const tsInstantiationExpression2 = node2.superClass;
-            const superClass2 = tsInstantiationExpression2.expression;
+            const tsInstantiationExpression = node2.superClass;
+            const superClass2 = tsInstantiationExpression.expression;
             this.takeSurroundingComments(superClass2, superClass2.start, superClass2.end);
-            const superTypeArguments = tsInstantiationExpression2.typeArguments;
+            const superTypeArguments = tsInstantiationExpression.typeArguments;
             this.takeSurroundingComments(superTypeArguments, superTypeArguments.start, superTypeArguments.end);
             node2.superClass = superClass2;
             node2.superTypeArguments = superTypeArguments;
@@ -35335,12 +35335,12 @@ var init_lib = __esm({
         }
       }
       finishPlaceholder(node2, expectedNode) {
-        let placeholder2 = node2;
-        if (!placeholder2.expectedNode || !placeholder2.type) {
-          placeholder2 = this.finishNode(placeholder2, "Placeholder");
+        let placeholder = node2;
+        if (!placeholder.expectedNode || !placeholder.type) {
+          placeholder = this.finishNode(placeholder, "Placeholder");
         }
-        placeholder2.expectedNode = expectedNode;
-        return placeholder2;
+        placeholder.expectedNode = expectedNode;
+        return placeholder;
       }
       getTokenFromCode(code2) {
         if (code2 === 37 && this.input.charCodeAt(this.state.pos + 1) === 37) {
@@ -35426,13 +35426,13 @@ var init_lib = __esm({
         const type = isStatement ? "ClassDeclaration" : "ClassExpression";
         this.next();
         const oldStrict = this.state.strict;
-        const placeholder2 = this.parsePlaceholder("Identifier");
-        if (placeholder2) {
+        const placeholder = this.parsePlaceholder("Identifier");
+        if (placeholder) {
           if (this.match(77) || this.match(129) || this.match(2)) {
-            node2.id = placeholder2;
+            node2.id = placeholder;
           } else if (optionalId || !isStatement) {
             node2.id = null;
-            node2.body = this.finishPlaceholder(placeholder2, "ClassBody");
+            node2.body = this.finishPlaceholder(placeholder, "ClassBody");
             return this.finishNode(node2, type);
           } else {
             throw this.raise(PlaceholderErrors.ClassNameIsRequired, this.state.startLoc);
@@ -35445,18 +35445,18 @@ var init_lib = __esm({
         return this.finishNode(node2, type);
       }
       parseExport(node2, decorators) {
-        const placeholder2 = this.parsePlaceholder("Identifier");
-        if (!placeholder2) return super.parseExport(node2, decorators);
+        const placeholder = this.parsePlaceholder("Identifier");
+        if (!placeholder) return super.parseExport(node2, decorators);
         const node22 = node2;
         if (!this.isContextual(94) && !this.match(8)) {
           node22.specifiers = [];
           node22.source = null;
-          node22.declaration = this.finishPlaceholder(placeholder2, "Declaration");
+          node22.declaration = this.finishPlaceholder(placeholder, "Declaration");
           return this.finishNode(node22, "ExportNamedDeclaration");
         }
         this.expectPlugin("exportDefaultFrom");
         const specifier = this.startNode();
-        specifier.exported = placeholder2;
+        specifier.exported = placeholder;
         node22.specifiers = [this.finishNode(specifier, "ExportDefaultSpecifier")];
         return super.parseExport(node22, decorators);
       }
@@ -35480,16 +35480,16 @@ var init_lib = __esm({
       checkNamedExport() {
       }
       parseImport(node2) {
-        const placeholder2 = this.parsePlaceholder("Identifier");
-        if (!placeholder2) return super.parseImport(node2);
+        const placeholder = this.parsePlaceholder("Identifier");
+        if (!placeholder) return super.parseImport(node2);
         node2.specifiers = [];
         if (!this.isContextual(94) && !this.match(8)) {
-          node2.source = this.finishPlaceholder(placeholder2, "StringLiteral");
+          node2.source = this.finishPlaceholder(placeholder, "StringLiteral");
           this.semicolon();
           return this.finishNode(node2, "ImportDeclaration");
         }
-        const specifier = this.startNodeAtNode(placeholder2);
-        specifier.local = placeholder2;
+        const specifier = this.startNodeAtNode(placeholder);
+        specifier.local = placeholder;
         node2.specifiers.push(this.finishNode(specifier, "ImportDefaultSpecifier"));
         if (this.eat(8)) {
           const hasStarImport = this.maybeParseStarImportSpecifier(node2);
@@ -35517,10 +35517,10 @@ var init_lib = __esm({
           this.next();
           if (tokenIsIdentifier(this.state.type)) {
             const name = this.parseIdentifierName();
-            const identifier2 = this.createIdentifier(node2, name);
-            this.castNodeTo(identifier2, "V8IntrinsicIdentifier");
+            const identifier = this.createIdentifier(node2, name);
+            this.castNodeTo(identifier, "V8IntrinsicIdentifier");
             if (this.match(6)) {
-              return identifier2;
+              return identifier;
             }
           }
           this.unexpected(v8IntrinsicStartLoc);
@@ -35603,11 +35603,11 @@ var init_lib = __esm({
       }
       parse() {
         this.enterInitialScopes();
-        const file3 = this.startNode();
-        const program2 = this.startNode();
+        const file2 = this.startNode();
+        const program = this.startNode();
         this.nextToken();
-        file3.errors = [];
-        const result = this.parseTopLevel(file3, program2);
+        file2.errors = [];
+        const result = this.parseTopLevel(file2, program);
         result.errors = this.state.errors;
         result.comments.length = this.state.commentsLen;
         return result;
@@ -35615,7474 +35615,6 @@ var init_lib = __esm({
     };
     tokTypes = generateExportedTokenTypes(tt);
     parserClassCache = /* @__PURE__ */ new Map();
-  }
-});
-
-// node_modules/@babel/helper-validator-identifier/lib/identifier.js
-function isInSupplementarySet2(code2, set2) {
-  let pos = 65536;
-  for (let i = 0, length = set2.length; i < length; i += 2) {
-    pos += set2[i];
-    if (pos > code2) return false;
-    pos += set2[i + 1];
-    if (pos >= code2) return true;
-  }
-  return false;
-}
-function isIdentifierStart2(code2) {
-  if (code2 < 65) return code2 === 36;
-  if (code2 <= 90) return true;
-  if (code2 < 97) return code2 === 95;
-  if (code2 <= 122) return true;
-  if (code2 <= 65535) {
-    return code2 >= 170 && bmpIdentifierStart2.test(String.fromCharCode(code2));
-  }
-  return !isNaN(code2) && code2 <= 1114111 && (bmpIdentifierStart2.test(String.fromCodePoint(code2)) || isInSupplementarySet2(code2, supplementaryIdentifierStartCodes2));
-}
-function isIdentifierChar2(code2) {
-  if (code2 < 48) return code2 === 36;
-  if (code2 < 58) return true;
-  if (code2 < 65) return false;
-  if (code2 <= 90) return true;
-  if (code2 < 97) return code2 === 95;
-  if (code2 <= 122) return true;
-  if (code2 <= 65535) {
-    return code2 >= 170 && bmpIdentifier2.test(String.fromCharCode(code2));
-  }
-  return !isNaN(code2) && code2 <= 1114111 && (bmpIdentifier2.test(String.fromCodePoint(code2)) || isInSupplementarySet2(code2, supplementaryIdentifierStartCodes2) || isInSupplementarySet2(code2, supplementaryIdentifierCodes2));
-}
-function isIdentifierName(name) {
-  let isFirst = true;
-  for (let i = 0; i < name.length; i++) {
-    let cp = name.charCodeAt(i);
-    if ((cp & 64512) === 55296 && i + 1 < name.length) {
-      const trail = name.charCodeAt(++i);
-      if ((trail & 64512) === 56320) {
-        cp = 65536 + ((cp & 1023) << 10) + (trail & 1023);
-      }
-    }
-    if (isFirst) {
-      isFirst = false;
-      if (!isIdentifierStart2(cp)) {
-        return false;
-      }
-    } else if (!isIdentifierChar2(cp)) {
-      return false;
-    }
-  }
-  return !isFirst;
-}
-var bmpIdentifierStart2, bmpIdentifier2, supplementaryIdentifierStartCodes2, supplementaryIdentifierCodes2;
-var init_identifier = __esm({
-  "node_modules/@babel/helper-validator-identifier/lib/identifier.js"() {
-    bmpIdentifierStart2 = /[\p{ID_Start}\u088f\u0c5c\u0cdc\ua7ce\ua7cf\ua7d2\ua7d4\ua7f1]/u;
-    bmpIdentifier2 = /[\p{ID_Continue}\u088f\u0c5c\u0cdc\ua7ce\ua7cf\ua7d2\ua7d4\ua7f1\u1acf-\u1add\u1ae0-\u1aeb]/u;
-    supplementaryIdentifierStartCodes2 = [2368, 25, 1388, 2, 3817, 43, 20677, 24, 3, 24, 287, 4, 6146, 7, 1290, 21, 98, 114, 22734, 30, 2, 2, 2, 1, 2, 6, 3, 4, 10, 1, 53307, 5, 5987, 11, 21763, 4297];
-    supplementaryIdentifierCodes2 = [3834, 1, 3173, 7, 633, 9, 51450, 0, 3, 0, 8, 1, 6, 0];
-  }
-});
-
-// node_modules/@babel/helper-validator-identifier/lib/index.js
-function isReservedWord2(word, inModule) {
-  return inModule && word === "await" || word === "enum";
-}
-function isStrictReservedWord2(word, inModule) {
-  return isReservedWord2(word, inModule) || reservedWordsStrictSet2.has(word);
-}
-function isKeyword2(word) {
-  return keywords2.has(word);
-}
-var reservedWords2, keywords2, reservedWordsStrictSet2, reservedWordsStrictBindSet2;
-var init_lib2 = __esm({
-  "node_modules/@babel/helper-validator-identifier/lib/index.js"() {
-    init_identifier();
-    reservedWords2 = {
-      keyword: ["break", "case", "catch", "continue", "debugger", "default", "do", "else", "finally", "for", "function", "if", "return", "switch", "throw", "try", "var", "const", "while", "with", "new", "this", "super", "class", "extends", "export", "import", "null", "true", "false", "in", "instanceof", "typeof", "void", "delete"],
-      strict: ["implements", "interface", "let", "package", "private", "protected", "public", "static", "yield"],
-      strictBind: ["eval", "arguments"]
-    };
-    keywords2 = new Set(reservedWords2.keyword);
-    reservedWordsStrictSet2 = new Set(reservedWords2.strict);
-    reservedWordsStrictBindSet2 = new Set(reservedWords2.strictBind);
-  }
-});
-
-// node_modules/@babel/helper-string-parser/lib/index.js
-function readStringContents2(type, input2, pos, lineStart, curLine, errors) {
-  const initialPos = pos;
-  const initialLineStart = lineStart;
-  const initialCurLine = curLine;
-  let out = "";
-  let firstInvalidLoc = null;
-  let chunkStart = pos;
-  const {
-    length
-  } = input2;
-  for (; ; ) {
-    if (pos >= length) {
-      errors.unterminated(initialPos, initialLineStart, initialCurLine);
-      out += input2.slice(chunkStart, pos);
-      break;
-    }
-    const ch = input2.charCodeAt(pos);
-    if (isStringEnd2(type, ch, input2, pos)) {
-      out += input2.slice(chunkStart, pos);
-      break;
-    }
-    if (ch === 92) {
-      out += input2.slice(chunkStart, pos);
-      const res = readEscapedChar2(input2, pos, lineStart, curLine, type === "template", errors);
-      if (res.ch === null && !firstInvalidLoc) {
-        firstInvalidLoc = {
-          pos,
-          lineStart,
-          curLine
-        };
-      } else {
-        out += res.ch;
-      }
-      ({
-        pos,
-        lineStart,
-        curLine
-      } = res);
-      chunkStart = pos;
-    } else if (ch === 8232 || ch === 8233) {
-      ++pos;
-      ++curLine;
-      lineStart = pos;
-    } else if (ch === 10 || ch === 13) {
-      if (type === "template") {
-        out += input2.slice(chunkStart, pos) + "\n";
-        ++pos;
-        if (ch === 13 && input2.charCodeAt(pos) === 10) {
-          ++pos;
-        }
-        ++curLine;
-        chunkStart = lineStart = pos;
-      } else {
-        errors.unterminated(initialPos, initialLineStart, initialCurLine);
-      }
-    } else {
-      ++pos;
-    }
-  }
-  return {
-    pos,
-    str: out,
-    firstInvalidLoc,
-    lineStart,
-    curLine
-  };
-}
-function isStringEnd2(type, ch, input2, pos) {
-  if (type === "template") {
-    return ch === 96 || ch === 36 && input2.charCodeAt(pos + 1) === 123;
-  }
-  return ch === (type === "double" ? 34 : 39);
-}
-function readEscapedChar2(input2, pos, lineStart, curLine, inTemplate, errors) {
-  const throwOnInvalid = !inTemplate;
-  pos++;
-  const res = (ch2) => ({
-    pos,
-    ch: ch2,
-    lineStart,
-    curLine
-  });
-  const ch = input2.charCodeAt(pos++);
-  switch (ch) {
-    case 110:
-      return res("\n");
-    case 114:
-      return res("\r");
-    case 120: {
-      let code2;
-      ({
-        code: code2,
-        pos
-      } = readHexChar2(input2, pos, lineStart, curLine, 2, false, throwOnInvalid, errors));
-      return res(code2 === null ? null : String.fromCharCode(code2));
-    }
-    case 117: {
-      let code2;
-      ({
-        code: code2,
-        pos
-      } = readCodePoint2(input2, pos, lineStart, curLine, throwOnInvalid, errors));
-      return res(code2 === null ? null : String.fromCodePoint(code2));
-    }
-    case 116:
-      return res("	");
-    case 98:
-      return res("\b");
-    case 118:
-      return res("\v");
-    case 102:
-      return res("\f");
-    case 13:
-      if (input2.charCodeAt(pos) === 10) {
-        ++pos;
-      }
-    case 10:
-      lineStart = pos;
-      ++curLine;
-    case 8232:
-    case 8233:
-      return res("");
-    case 56:
-    case 57:
-      if (inTemplate) {
-        return res(null);
-      } else {
-        errors.strictNumericEscape(pos - 1, lineStart, curLine);
-      }
-    default:
-      if (ch >= 48 && ch <= 55) {
-        const startPos = pos - 1;
-        const match = /^[0-7]+/.exec(input2.slice(startPos, pos + 2));
-        let octalStr = match[0];
-        let octal = parseInt(octalStr, 8);
-        if (octal > 255) {
-          octalStr = octalStr.slice(0, -1);
-          octal = parseInt(octalStr, 8);
-        }
-        pos += octalStr.length - 1;
-        const next = input2.charCodeAt(pos);
-        if (octalStr !== "0" || next === 56 || next === 57) {
-          if (inTemplate) {
-            return res(null);
-          } else {
-            errors.strictNumericEscape(startPos, lineStart, curLine);
-          }
-        }
-        return res(String.fromCharCode(octal));
-      }
-      return res(String.fromCharCode(ch));
-  }
-}
-function readHexChar2(input2, pos, lineStart, curLine, len, forceLen, throwOnInvalid, errors) {
-  const initialPos = pos;
-  let n;
-  ({
-    n,
-    pos
-  } = readInt2(input2, pos, lineStart, curLine, 16, len, forceLen, false, errors, !throwOnInvalid));
-  if (n === null) {
-    if (throwOnInvalid) {
-      errors.invalidEscapeSequence(initialPos, lineStart, curLine);
-    } else {
-      pos = initialPos - 1;
-    }
-  }
-  return {
-    code: n,
-    pos
-  };
-}
-function readInt2(input2, pos, lineStart, curLine, radix, len, forceLen, allowNumSeparator, errors, bailOnError) {
-  const start = pos;
-  const forbiddenSiblings = radix === 16 ? forbiddenNumericSeparatorSiblings2.hex : forbiddenNumericSeparatorSiblings2.decBinOct;
-  const isAllowedSibling = radix === 16 ? isAllowedNumericSeparatorSibling2.hex : radix === 10 ? isAllowedNumericSeparatorSibling2.dec : radix === 8 ? isAllowedNumericSeparatorSibling2.oct : isAllowedNumericSeparatorSibling2.bin;
-  let invalid = false;
-  let total = 0;
-  for (let i = 0, e = len == null ? Infinity : len; i < e; ++i) {
-    const code2 = input2.charCodeAt(pos);
-    let val;
-    if (code2 === 95 && allowNumSeparator !== "bail") {
-      const prev = input2.charCodeAt(pos - 1);
-      const next = input2.charCodeAt(pos + 1);
-      if (!allowNumSeparator) {
-        if (bailOnError) return {
-          n: null,
-          pos
-        };
-        errors.numericSeparatorInEscapeSequence(pos, lineStart, curLine);
-      } else if (Number.isNaN(next) || !isAllowedSibling(next) || forbiddenSiblings.has(prev) || forbiddenSiblings.has(next)) {
-        if (bailOnError) return {
-          n: null,
-          pos
-        };
-        errors.unexpectedNumericSeparator(pos, lineStart, curLine);
-      }
-      ++pos;
-      continue;
-    }
-    if (code2 >= 97) {
-      val = code2 - 97 + 10;
-    } else if (code2 >= 65) {
-      val = code2 - 65 + 10;
-    } else if (_isDigit2(code2)) {
-      val = code2 - 48;
-    } else {
-      val = Infinity;
-    }
-    if (val >= radix) {
-      if (val <= 9 && bailOnError) {
-        return {
-          n: null,
-          pos
-        };
-      } else if (val <= 9 && errors.invalidDigit(pos, lineStart, curLine, radix)) {
-        val = 0;
-      } else if (forceLen) {
-        val = 0;
-        invalid = true;
-      } else {
-        break;
-      }
-    }
-    ++pos;
-    total = total * radix + val;
-  }
-  if (pos === start || len != null && pos - start !== len || invalid) {
-    return {
-      n: null,
-      pos
-    };
-  }
-  return {
-    n: total,
-    pos
-  };
-}
-function readCodePoint2(input2, pos, lineStart, curLine, throwOnInvalid, errors) {
-  const ch = input2.charCodeAt(pos);
-  let code2;
-  if (ch === 123) {
-    ++pos;
-    ({
-      code: code2,
-      pos
-    } = readHexChar2(input2, pos, lineStart, curLine, input2.indexOf("}", pos) - pos, true, throwOnInvalid, errors));
-    ++pos;
-    if (code2 !== null && code2 > 1114111) {
-      if (throwOnInvalid) {
-        errors.invalidCodePoint(pos, lineStart, curLine);
-      } else {
-        return {
-          code: null,
-          pos
-        };
-      }
-    }
-  } else {
-    ({
-      code: code2,
-      pos
-    } = readHexChar2(input2, pos, lineStart, curLine, 4, false, throwOnInvalid, errors));
-  }
-  return {
-    code: code2,
-    pos
-  };
-}
-var _isDigit2, forbiddenNumericSeparatorSiblings2, isAllowedNumericSeparatorSibling2;
-var init_lib3 = __esm({
-  "node_modules/@babel/helper-string-parser/lib/index.js"() {
-    _isDigit2 = function isDigit2(code2) {
-      return code2 >= 48 && code2 <= 57;
-    };
-    forbiddenNumericSeparatorSiblings2 = {
-      decBinOct: /* @__PURE__ */ new Set([46, 66, 69, 79, 95, 98, 101, 111]),
-      hex: /* @__PURE__ */ new Set([46, 88, 95, 120])
-    };
-    isAllowedNumericSeparatorSibling2 = {
-      bin: (ch) => ch === 48 || ch === 49,
-      oct: (ch) => ch >= 48 && ch <= 55,
-      dec: (ch) => ch >= 48 && ch <= 57,
-      hex: (ch) => ch >= 48 && ch <= 57 || ch >= 65 && ch <= 70 || ch >= 97 && ch <= 102
-    };
-  }
-});
-
-// node_modules/@babel/types/lib/index.js
-function shallowEqual(actual, expected) {
-  const keys2 = Object.keys(expected);
-  for (const key of keys2) {
-    if (actual[key] !== expected[key]) {
-      return false;
-    }
-  }
-  return true;
-}
-function isType$1(type, node2, opts) {
-  return node2?.type === type && (opts == null || shallowEqual(node2, opts));
-}
-function deprecationWarning(oldName, newName, prefix2 = "", cacheKey = oldName) {
-  if (warnings.has(cacheKey)) return;
-  warnings.add(cacheKey);
-  const {
-    internal,
-    trace
-  } = captureShortStackTrace(1, 2);
-  if (internal) {
-    return;
-  }
-  console.warn(`${prefix2}\`${oldName}\` has been deprecated, please migrate to \`${newName}\`
-${trace}`);
-}
-function captureShortStackTrace(skip, length) {
-  const {
-    stackTraceLimit,
-    prepareStackTrace
-  } = Error;
-  let stackTrace;
-  Error.stackTraceLimit = 1 + skip + length;
-  Error.prepareStackTrace = function(err, stack) {
-    stackTrace = stack;
-  };
-  new Error().stack;
-  Error.stackTraceLimit = stackTraceLimit;
-  Error.prepareStackTrace = prepareStackTrace;
-  if (!stackTrace) return {
-    internal: false,
-    trace: ""
-  };
-  const shortStackTrace = stackTrace.slice(1 + skip, 1 + skip + length);
-  return {
-    internal: /[\\/]@babel[\\/]/.test(shortStackTrace[1].getFileName()),
-    trace: shortStackTrace.map((frame) => `    at ${frame}`).join("\n")
-  };
-}
-function isAssignmentExpression(node2, opts) {
-  return isType$1("AssignmentExpression", node2, opts);
-}
-function isBinaryExpression(node2, opts) {
-  return isType$1("BinaryExpression", node2, opts);
-}
-function isCallExpression(node2, opts) {
-  return isType$1("CallExpression", node2, opts);
-}
-function isCatchClause(node2, opts) {
-  return isType$1("CatchClause", node2, opts);
-}
-function isFile(node2, opts) {
-  return isType$1("File", node2, opts);
-}
-function isFunctionDeclaration(node2, opts) {
-  return isType$1("FunctionDeclaration", node2, opts);
-}
-function isFunctionExpression(node2, opts) {
-  return isType$1("FunctionExpression", node2, opts);
-}
-function isIdentifier(node2, opts) {
-  return isType$1("Identifier", node2, opts);
-}
-function isStringLiteral(node2, opts) {
-  return isType$1("StringLiteral", node2, opts);
-}
-function isNumericLiteral(node2, opts) {
-  return isType$1("NumericLiteral", node2, opts);
-}
-function isMemberExpression(node2, opts) {
-  return isType$1("MemberExpression", node2, opts);
-}
-function isThisExpression(node2, opts) {
-  return isType$1("ThisExpression", node2, opts);
-}
-function isThrowStatement(node2, opts) {
-  return isType$1("ThrowStatement", node2, opts);
-}
-function isTryStatement(node2, opts) {
-  return isType$1("TryStatement", node2, opts);
-}
-function isUnaryExpression(node2, opts) {
-  return isType$1("UnaryExpression", node2, opts);
-}
-function isUpdateExpression(node2, opts) {
-  return isType$1("UpdateExpression", node2, opts);
-}
-function isVariableDeclarator(node2, opts) {
-  return isType$1("VariableDeclarator", node2, opts);
-}
-function isClassExpression(node2, opts) {
-  return isType$1("ClassExpression", node2, opts);
-}
-function isExportAllDeclaration(node2, opts) {
-  return isType$1("ExportAllDeclaration", node2, opts);
-}
-function isMetaProperty(node2, opts) {
-  return isType$1("MetaProperty", node2, opts);
-}
-function isSuper(node2, opts) {
-  return isType$1("Super", node2, opts);
-}
-function isBigIntLiteral(node2, opts) {
-  return isType$1("BigIntLiteral", node2, opts);
-}
-function isPrivateName(node2, opts) {
-  return isType$1("PrivateName", node2, opts);
-}
-function isFunction(node2, opts) {
-  if (!node2) return false;
-  switch (node2.type) {
-    case "FunctionDeclaration":
-    case "FunctionExpression":
-    case "ObjectMethod":
-    case "ArrowFunctionExpression":
-    case "ClassMethod":
-    case "ClassPrivateMethod":
-      break;
-    default:
-      return false;
-  }
-  return opts == null || shallowEqual(node2, opts);
-}
-function isDeclaration(node2, opts) {
-  if (!node2) return false;
-  switch (node2.type) {
-    case "FunctionDeclaration":
-    case "VariableDeclaration":
-    case "ClassDeclaration":
-    case "ExportAllDeclaration":
-    case "ExportDefaultDeclaration":
-    case "ExportNamedDeclaration":
-    case "ImportDeclaration":
-    case "DeclareClass":
-    case "DeclareFunction":
-    case "DeclareInterface":
-    case "DeclareModule":
-    case "DeclareModuleExports":
-    case "DeclareTypeAlias":
-    case "DeclareOpaqueType":
-    case "DeclareVariable":
-    case "DeclareExportDeclaration":
-    case "DeclareExportAllDeclaration":
-    case "InterfaceDeclaration":
-    case "OpaqueType":
-    case "TypeAlias":
-    case "EnumDeclaration":
-    case "TSDeclareFunction":
-    case "TSInterfaceDeclaration":
-    case "TSTypeAliasDeclaration":
-    case "TSEnumDeclaration":
-    case "TSModuleDeclaration":
-    case "TSImportEqualsDeclaration":
-      break;
-    case "Placeholder":
-      if (node2.expectedNode === "Declaration") break;
-    default:
-      return false;
-  }
-  return opts == null || shallowEqual(node2, opts);
-}
-function isExportDeclaration(node2, opts) {
-  if (!node2) return false;
-  switch (node2.type) {
-    case "ExportAllDeclaration":
-    case "ExportDefaultDeclaration":
-    case "ExportNamedDeclaration":
-      break;
-    default:
-      return false;
-  }
-  return opts == null || shallowEqual(node2, opts);
-}
-function isMemberExpressionLike(node2) {
-  return isMemberExpression(node2) || isMetaProperty(node2);
-}
-function matchesPattern(member, match, allowPartial) {
-  if (!isMemberExpressionLike(member)) return false;
-  const parts = Array.isArray(match) ? match : match.split(".");
-  const nodes = [];
-  let node2;
-  for (node2 = member; isMemberExpressionLike(node2); node2 = node2.object ?? node2.meta) {
-    nodes.push(node2.property);
-  }
-  nodes.push(node2);
-  if (nodes.length < parts.length) return false;
-  if (!allowPartial && nodes.length > parts.length) return false;
-  for (let i = 0, j = nodes.length - 1; i < parts.length; i++, j--) {
-    const node3 = nodes[j];
-    let value;
-    if (isIdentifier(node3)) {
-      value = node3.name;
-    } else if (isStringLiteral(node3)) {
-      value = node3.value;
-    } else if (isThisExpression(node3)) {
-      value = "this";
-    } else if (isSuper(node3)) {
-      value = "super";
-    } else if (isPrivateName(node3)) {
-      value = "#" + node3.id.name;
-    } else {
-      return false;
-    }
-    if (parts[i] !== value) return false;
-  }
-  return true;
-}
-function buildMatchMemberExpression(match, allowPartial) {
-  const parts = match.split(".");
-  return (member) => matchesPattern(member, parts, allowPartial);
-}
-function isType(nodeType, targetType) {
-  if (nodeType === targetType) return true;
-  if (nodeType == null) return false;
-  if (ALIAS_KEYS[targetType]) return false;
-  const aliases = FLIPPED_ALIAS_KEYS[targetType];
-  if (aliases?.includes(nodeType)) return true;
-  return false;
-}
-function isPlaceholderType(placeholderType, targetType) {
-  if (placeholderType === targetType) return true;
-  const aliases = PLACEHOLDERS_ALIAS[placeholderType];
-  if (aliases?.includes(targetType)) return true;
-  return false;
-}
-function is(type, node2, opts) {
-  if (!node2) return false;
-  const matches = isType(node2.type, type);
-  if (!matches) {
-    if (!opts && node2.type === "Placeholder" && type in FLIPPED_ALIAS_KEYS) {
-      return isPlaceholderType(node2.expectedNode, type);
-    }
-    return false;
-  }
-  if (opts === void 0) {
-    return true;
-  } else {
-    return shallowEqual(node2, opts);
-  }
-}
-function isValidIdentifier(name, reserved = true) {
-  if (typeof name !== "string") return false;
-  if (reserved) {
-    if (isKeyword2(name) || isStrictReservedWord2(name, true)) {
-      return false;
-    }
-  }
-  return isIdentifierName(name);
-}
-function getType(val) {
-  if (Array.isArray(val)) {
-    return "array";
-  } else if (val === null) {
-    return "null";
-  } else {
-    return typeof val;
-  }
-}
-function combine(fn, ...validators) {
-  return Object.assign(fn, ...validators);
-}
-function validate$2(validate3) {
-  return {
-    validate: validate3
-  };
-}
-function validateType(...typeNames) {
-  return validate$2(assertNodeType(...typeNames));
-}
-function validateOptional(validate3) {
-  return {
-    validate: validate3,
-    optional: true
-  };
-}
-function validateDefault(validate3, defaultValue) {
-  return {
-    validate: validate3,
-    default: defaultValue,
-    optional: false
-  };
-}
-function validateOptionalType(...typeNames) {
-  return {
-    validate: assertNodeType(...typeNames),
-    optional: true
-  };
-}
-function arrayOf(elementType) {
-  return chain(assertValueType("array"), assertEach(elementType));
-}
-function arrayOfType(...typeNames) {
-  return arrayOf(assertNodeType(...typeNames));
-}
-function validateArrayOfType(...typeNames) {
-  return validate$2(arrayOfType(...typeNames));
-}
-function assertEach(callback) {
-  const childValidator = validateChild;
-  function validator(node2, key, val) {
-    if (!Array.isArray(val)) return;
-    let i = 0;
-    const subKey = {
-      toString() {
-        return `${key}[${i}]`;
-      }
-    };
-    for (; i < val.length; i++) {
-      const v = val[i];
-      callback(node2, subKey, v);
-      childValidator(node2, subKey, v);
-    }
-  }
-  validator.each = callback;
-  return validator;
-}
-function assertOneOf(...values) {
-  function validate3(node2, key, val) {
-    if (!values.includes(val)) {
-      throw new TypeError(`Property ${key} expected value to be one of ${JSON.stringify(values)} but got ${JSON.stringify(val)}`);
-    }
-  }
-  validate3.oneOf = values;
-  return validate3;
-}
-function assertNodeType(...types2) {
-  const expandedTypes = /* @__PURE__ */ new Set();
-  allExpandedTypes.push({
-    types: types2,
-    set: expandedTypes
-  });
-  function validate3(node2, key, val) {
-    const valType = val?.type;
-    if (valType != null) {
-      if (expandedTypes.has(valType)) {
-        validateChild(node2, key, val);
-        return;
-      }
-      if (valType === "Placeholder") {
-        for (const type of types2) {
-          if (is(type, val)) {
-            validateChild(node2, key, val);
-            return;
-          }
-        }
-      }
-    }
-    throw new TypeError(`Property ${key} of ${node2.type} expected node to be of a type ${JSON.stringify(types2)} but instead got ${JSON.stringify(valType)}`);
-  }
-  validate3.oneOfNodeTypes = types2;
-  return validate3;
-}
-function assertNodeOrValueType(...types2) {
-  function validate3(node2, key, val) {
-    const primitiveType = getType(val);
-    for (const type of types2) {
-      if (primitiveType === type || is(type, val)) {
-        validateChild(node2, key, val);
-        return;
-      }
-    }
-    throw new TypeError(`Property ${key} of ${node2.type} expected node to be of a type ${JSON.stringify(types2)} but instead got ${JSON.stringify(val?.type)}`);
-  }
-  validate3.oneOfNodeOrValueTypes = types2;
-  return validate3;
-}
-function assertValueType(type) {
-  function validate3(node2, key, val) {
-    if (getType(val) === type) {
-      return;
-    }
-    throw new TypeError(`Property ${key} expected type of ${type} but got ${getType(val)}`);
-  }
-  validate3.type = type;
-  return validate3;
-}
-function assertShape(shape) {
-  const keys2 = Object.keys(shape);
-  function validate3(node2, key, val) {
-    const errors = [];
-    for (const property of keys2) {
-      try {
-        validateField(node2, property, val[property], shape[property]);
-      } catch (error62) {
-        if (error62 instanceof TypeError) {
-          errors.push(error62.message);
-          continue;
-        }
-        throw error62;
-      }
-    }
-    if (errors.length) {
-      throw new TypeError(`Property ${key} of ${node2.type} expected to have the following:
-${errors.join("\n")}`);
-    }
-  }
-  validate3.shapeOf = shape;
-  return validate3;
-}
-function assertOptionalChainStart() {
-  function validate3(node2) {
-    let current = node2;
-    while (node2) {
-      const {
-        type
-      } = current;
-      if (type === "OptionalCallExpression") {
-        if (current.optional) return;
-        current = current.callee;
-        continue;
-      }
-      if (type === "OptionalMemberExpression") {
-        if (current.optional) return;
-        current = current.object;
-        continue;
-      }
-      break;
-    }
-    throw new TypeError(`Non-optional ${node2.type} must chain from an optional OptionalMemberExpression or OptionalCallExpression. Found chain from ${current?.type}`);
-  }
-  return validate3;
-}
-function chain(...fns) {
-  function validate3(...args) {
-    for (const fn of fns) {
-      fn(...args);
-    }
-  }
-  validate3.chainOf = fns;
-  if (fns.length >= 2 && "type" in fns[0] && fns[0].type === "array" && !("each" in fns[1])) {
-    throw new Error(`An assertValueType("array") validator can only be followed by an assertEach(...) validator.`);
-  }
-  return validate3;
-}
-function defineAliasedType(...aliases) {
-  return (type, opts = {}) => {
-    let defined2 = opts.aliases;
-    if (!defined2) {
-      if (opts.inherits) defined2 = store[opts.inherits].aliases?.slice();
-      defined2 ??= [];
-      opts.aliases = defined2;
-    }
-    const additional = aliases.filter((a) => !defined2.includes(a));
-    defined2.unshift(...additional);
-    defineType$5(type, opts);
-  };
-}
-function defineType$5(type, opts = {}) {
-  const inherits = opts.inherits && store[opts.inherits] || {};
-  const visitor = opts.visitor || inherits.visitor || [];
-  const aliases = opts.aliases || inherits.aliases || [];
-  const builder = opts.builder || inherits.builder || opts.visitor || [];
-  let fields = opts.fields;
-  if (!fields) {
-    fields = {};
-    if (inherits.fields) {
-      const keys2 = Object.getOwnPropertyNames(inherits.fields);
-      for (const key of keys2) {
-        const field = inherits.fields[key];
-        const def = field.default;
-        if (Array.isArray(def) ? def.length > 0 : def && typeof def === "object") {
-          throw new Error("field defaults can only be primitives or empty arrays currently");
-        }
-        fields[key] = {
-          default: Array.isArray(def) ? [] : def,
-          optional: field.optional,
-          deprecated: field.deprecated,
-          validate: field.validate
-        };
-      }
-    }
-  }
-  for (const k of Object.keys(opts)) {
-    if (!validTypeOpts.has(k)) {
-      throw new Error(`Unknown type option "${k}" on ${type}`);
-    }
-  }
-  if (opts.deprecatedAlias) {
-    DEPRECATED_KEYS[opts.deprecatedAlias] = type;
-  }
-  for (const key of visitor.concat(builder)) {
-    fields[key] = fields[key] || {};
-  }
-  for (const key of Object.keys(fields)) {
-    const field = fields[key];
-    if (field.default === null) {
-      field.optional ??= true;
-    }
-    if (field.default === void 0) {
-      field.default = null;
-      field.optional ??= false;
-    } else if (!field.validate && field.default != null) {
-      field.validate = assertValueType(getType(field.default));
-    }
-    for (const k of Object.keys(field)) {
-      if (!validFieldKeys.has(k)) {
-        throw new Error(`Unknown field key "${k}" on ${type}.${key}`);
-      }
-    }
-  }
-  VISITOR_KEYS[type] = opts.visitor = visitor;
-  BUILDER_KEYS[type] = opts.builder = builder;
-  NODE_FIELDS$1[type] = opts.fields = fields;
-  ALIAS_KEYS[type] = opts.aliases = aliases;
-  aliases.forEach((alias2) => {
-    FLIPPED_ALIAS_KEYS[alias2] = FLIPPED_ALIAS_KEYS[alias2] || [];
-    FLIPPED_ALIAS_KEYS[alias2].push(type);
-  });
-  if (opts.validate) {
-    NODE_PARENT_VALIDATIONS[type] = opts.validate;
-  }
-  if (opts.unionShape) {
-    NODE_UNION_SHAPES__PRIVATE[type] = opts.unionShape;
-  }
-  store[type] = opts;
-}
-function validate$1(node2, key, val) {
-  if (!node2) return;
-  const fields = NODE_FIELDS$1[node2.type];
-  if (!fields) return;
-  const field = fields[key];
-  validateField(node2, key, val, field);
-  validateChild(node2, key, val);
-}
-function validateInternal(field, node2, key, val, maybeNode) {
-  if (!field?.validate) return;
-  if (field.optional && val == null) return;
-  field.validate(node2, key, val);
-  if (maybeNode) {
-    const type = val.type;
-    if (type == null) return;
-    NODE_PARENT_VALIDATIONS[type]?.(node2, key, val);
-  }
-}
-function validateField(node2, key, val, field) {
-  if (!field?.validate) return;
-  if (field.optional && val == null) return;
-  field.validate(node2, key, val);
-}
-function validateChild(node2, key, val) {
-  const type = val?.type;
-  if (type == null) return;
-  NODE_PARENT_VALIDATIONS[type]?.(node2, key, val);
-}
-function arrayExpression(elements) {
-  const node2 = {
-    type: "ArrayExpression",
-    elements
-  };
-  const defs = NODE_FIELDS.ArrayExpression;
-  validate2(defs.elements, node2, "elements", elements, 1);
-  return node2;
-}
-function assignmentExpression(operator, left, right) {
-  const node2 = {
-    type: "AssignmentExpression",
-    operator,
-    left,
-    right
-  };
-  const defs = NODE_FIELDS.AssignmentExpression;
-  validate2(defs.operator, node2, "operator", operator);
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function binaryExpression(operator, left, right) {
-  const node2 = {
-    type: "BinaryExpression",
-    operator,
-    left,
-    right
-  };
-  const defs = NODE_FIELDS.BinaryExpression;
-  validate2(defs.operator, node2, "operator", operator);
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function interpreterDirective(value) {
-  const node2 = {
-    type: "InterpreterDirective",
-    value
-  };
-  const defs = NODE_FIELDS.InterpreterDirective;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function directive(value) {
-  const node2 = {
-    type: "Directive",
-    value
-  };
-  const defs = NODE_FIELDS.Directive;
-  validate2(defs.value, node2, "value", value, 1);
-  return node2;
-}
-function directiveLiteral(value) {
-  const node2 = {
-    type: "DirectiveLiteral",
-    value
-  };
-  const defs = NODE_FIELDS.DirectiveLiteral;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function blockStatement(body, directives = []) {
-  const node2 = {
-    type: "BlockStatement",
-    body,
-    directives
-  };
-  const defs = NODE_FIELDS.BlockStatement;
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.directives, node2, "directives", directives, 1);
-  return node2;
-}
-function breakStatement(label = null) {
-  const node2 = {
-    type: "BreakStatement",
-    label
-  };
-  const defs = NODE_FIELDS.BreakStatement;
-  validate2(defs.label, node2, "label", label, 1);
-  return node2;
-}
-function callExpression(callee, _arguments) {
-  const node2 = {
-    type: "CallExpression",
-    callee,
-    arguments: _arguments
-  };
-  const defs = NODE_FIELDS.CallExpression;
-  validate2(defs.callee, node2, "callee", callee, 1);
-  validate2(defs.arguments, node2, "arguments", _arguments, 1);
-  return node2;
-}
-function catchClause(param = null, body) {
-  const node2 = {
-    type: "CatchClause",
-    param,
-    body
-  };
-  const defs = NODE_FIELDS.CatchClause;
-  validate2(defs.param, node2, "param", param, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function conditionalExpression(test, consequent, alternate) {
-  const node2 = {
-    type: "ConditionalExpression",
-    test,
-    consequent,
-    alternate
-  };
-  const defs = NODE_FIELDS.ConditionalExpression;
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.consequent, node2, "consequent", consequent, 1);
-  validate2(defs.alternate, node2, "alternate", alternate, 1);
-  return node2;
-}
-function continueStatement(label = null) {
-  const node2 = {
-    type: "ContinueStatement",
-    label
-  };
-  const defs = NODE_FIELDS.ContinueStatement;
-  validate2(defs.label, node2, "label", label, 1);
-  return node2;
-}
-function debuggerStatement() {
-  return {
-    type: "DebuggerStatement"
-  };
-}
-function doWhileStatement(test, body) {
-  const node2 = {
-    type: "DoWhileStatement",
-    test,
-    body
-  };
-  const defs = NODE_FIELDS.DoWhileStatement;
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function emptyStatement() {
-  return {
-    type: "EmptyStatement"
-  };
-}
-function expressionStatement(expression) {
-  const node2 = {
-    type: "ExpressionStatement",
-    expression
-  };
-  const defs = NODE_FIELDS.ExpressionStatement;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function file2(program2, comments = null, tokens = null) {
-  const node2 = {
-    type: "File",
-    program: program2,
-    comments,
-    tokens
-  };
-  const defs = NODE_FIELDS.File;
-  validate2(defs.program, node2, "program", program2, 1);
-  validate2(defs.comments, node2, "comments", comments, 1);
-  validate2(defs.tokens, node2, "tokens", tokens);
-  return node2;
-}
-function forInStatement(left, right, body) {
-  const node2 = {
-    type: "ForInStatement",
-    left,
-    right,
-    body
-  };
-  const defs = NODE_FIELDS.ForInStatement;
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function forStatement(init = null, test = null, update = null, body) {
-  const node2 = {
-    type: "ForStatement",
-    init,
-    test,
-    update,
-    body
-  };
-  const defs = NODE_FIELDS.ForStatement;
-  validate2(defs.init, node2, "init", init, 1);
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.update, node2, "update", update, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function functionDeclaration(id = null, params, body, generator = false, async = false) {
-  const node2 = {
-    type: "FunctionDeclaration",
-    id,
-    params,
-    body,
-    generator,
-    async
-  };
-  const defs = NODE_FIELDS.FunctionDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.generator, node2, "generator", generator);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function functionExpression(id = null, params, body, generator = false, async = false) {
-  const node2 = {
-    type: "FunctionExpression",
-    id,
-    params,
-    body,
-    generator,
-    async
-  };
-  const defs = NODE_FIELDS.FunctionExpression;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.generator, node2, "generator", generator);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function identifier(name) {
-  const node2 = {
-    type: "Identifier",
-    name
-  };
-  const defs = NODE_FIELDS.Identifier;
-  validate2(defs.name, node2, "name", name);
-  return node2;
-}
-function ifStatement(test, consequent, alternate = null) {
-  const node2 = {
-    type: "IfStatement",
-    test,
-    consequent,
-    alternate
-  };
-  const defs = NODE_FIELDS.IfStatement;
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.consequent, node2, "consequent", consequent, 1);
-  validate2(defs.alternate, node2, "alternate", alternate, 1);
-  return node2;
-}
-function labeledStatement(label, body) {
-  const node2 = {
-    type: "LabeledStatement",
-    label,
-    body
-  };
-  const defs = NODE_FIELDS.LabeledStatement;
-  validate2(defs.label, node2, "label", label, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function stringLiteral(value) {
-  const node2 = {
-    type: "StringLiteral",
-    value
-  };
-  const defs = NODE_FIELDS.StringLiteral;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function numericLiteral(value) {
-  const node2 = {
-    type: "NumericLiteral",
-    value
-  };
-  const defs = NODE_FIELDS.NumericLiteral;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function nullLiteral() {
-  return {
-    type: "NullLiteral"
-  };
-}
-function booleanLiteral(value) {
-  const node2 = {
-    type: "BooleanLiteral",
-    value
-  };
-  const defs = NODE_FIELDS.BooleanLiteral;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function regExpLiteral(pattern, flags = "") {
-  const node2 = {
-    type: "RegExpLiteral",
-    pattern,
-    flags
-  };
-  const defs = NODE_FIELDS.RegExpLiteral;
-  validate2(defs.pattern, node2, "pattern", pattern);
-  validate2(defs.flags, node2, "flags", flags);
-  return node2;
-}
-function logicalExpression(operator, left, right) {
-  const node2 = {
-    type: "LogicalExpression",
-    operator,
-    left,
-    right
-  };
-  const defs = NODE_FIELDS.LogicalExpression;
-  validate2(defs.operator, node2, "operator", operator);
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function memberExpression(object2, property, computed = false) {
-  const node2 = {
-    type: "MemberExpression",
-    object: object2,
-    property,
-    computed
-  };
-  const defs = NODE_FIELDS.MemberExpression;
-  validate2(defs.object, node2, "object", object2, 1);
-  validate2(defs.property, node2, "property", property, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  return node2;
-}
-function newExpression(callee, _arguments) {
-  const node2 = {
-    type: "NewExpression",
-    callee,
-    arguments: _arguments
-  };
-  const defs = NODE_FIELDS.NewExpression;
-  validate2(defs.callee, node2, "callee", callee, 1);
-  validate2(defs.arguments, node2, "arguments", _arguments, 1);
-  return node2;
-}
-function program(body, directives = [], sourceType = "script", interpreter = null) {
-  const node2 = {
-    type: "Program",
-    body,
-    directives,
-    sourceType,
-    interpreter
-  };
-  const defs = NODE_FIELDS.Program;
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.directives, node2, "directives", directives, 1);
-  validate2(defs.sourceType, node2, "sourceType", sourceType);
-  validate2(defs.interpreter, node2, "interpreter", interpreter, 1);
-  return node2;
-}
-function objectExpression(properties) {
-  const node2 = {
-    type: "ObjectExpression",
-    properties
-  };
-  const defs = NODE_FIELDS.ObjectExpression;
-  validate2(defs.properties, node2, "properties", properties, 1);
-  return node2;
-}
-function objectMethod(kind, key, params, body, computed = false, generator = false, async = false) {
-  const node2 = {
-    type: "ObjectMethod",
-    kind,
-    key,
-    params,
-    body,
-    computed,
-    generator,
-    async
-  };
-  const defs = NODE_FIELDS.ObjectMethod;
-  validate2(defs.kind, node2, "kind", kind);
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.generator, node2, "generator", generator);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function objectProperty(key, value, computed = false, shorthand = false) {
-  const node2 = {
-    type: "ObjectProperty",
-    key,
-    value,
-    computed,
-    shorthand
-  };
-  const defs = NODE_FIELDS.ObjectProperty;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.shorthand, node2, "shorthand", shorthand);
-  return node2;
-}
-function restElement(argument) {
-  const node2 = {
-    type: "RestElement",
-    argument
-  };
-  const defs = NODE_FIELDS.RestElement;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function returnStatement(argument = null) {
-  const node2 = {
-    type: "ReturnStatement",
-    argument
-  };
-  const defs = NODE_FIELDS.ReturnStatement;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function sequenceExpression(expressions) {
-  const node2 = {
-    type: "SequenceExpression",
-    expressions
-  };
-  const defs = NODE_FIELDS.SequenceExpression;
-  validate2(defs.expressions, node2, "expressions", expressions, 1);
-  return node2;
-}
-function parenthesizedExpression(expression) {
-  const node2 = {
-    type: "ParenthesizedExpression",
-    expression
-  };
-  const defs = NODE_FIELDS.ParenthesizedExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function switchCase(test = null, consequent) {
-  const node2 = {
-    type: "SwitchCase",
-    test,
-    consequent
-  };
-  const defs = NODE_FIELDS.SwitchCase;
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.consequent, node2, "consequent", consequent, 1);
-  return node2;
-}
-function switchStatement(discriminant, cases) {
-  const node2 = {
-    type: "SwitchStatement",
-    discriminant,
-    cases
-  };
-  const defs = NODE_FIELDS.SwitchStatement;
-  validate2(defs.discriminant, node2, "discriminant", discriminant, 1);
-  validate2(defs.cases, node2, "cases", cases, 1);
-  return node2;
-}
-function thisExpression() {
-  return {
-    type: "ThisExpression"
-  };
-}
-function throwStatement(argument) {
-  const node2 = {
-    type: "ThrowStatement",
-    argument
-  };
-  const defs = NODE_FIELDS.ThrowStatement;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function tryStatement(block, handler = null, finalizer = null) {
-  const node2 = {
-    type: "TryStatement",
-    block,
-    handler,
-    finalizer
-  };
-  const defs = NODE_FIELDS.TryStatement;
-  validate2(defs.block, node2, "block", block, 1);
-  validate2(defs.handler, node2, "handler", handler, 1);
-  validate2(defs.finalizer, node2, "finalizer", finalizer, 1);
-  return node2;
-}
-function unaryExpression(operator, argument, prefix2 = true) {
-  const node2 = {
-    type: "UnaryExpression",
-    operator,
-    argument,
-    prefix: prefix2
-  };
-  const defs = NODE_FIELDS.UnaryExpression;
-  validate2(defs.operator, node2, "operator", operator);
-  validate2(defs.argument, node2, "argument", argument, 1);
-  validate2(defs.prefix, node2, "prefix", prefix2);
-  return node2;
-}
-function updateExpression(operator, argument, prefix2 = false) {
-  const node2 = {
-    type: "UpdateExpression",
-    operator,
-    argument,
-    prefix: prefix2
-  };
-  const defs = NODE_FIELDS.UpdateExpression;
-  validate2(defs.operator, node2, "operator", operator);
-  validate2(defs.argument, node2, "argument", argument, 1);
-  validate2(defs.prefix, node2, "prefix", prefix2);
-  return node2;
-}
-function variableDeclaration(kind, declarations) {
-  const node2 = {
-    type: "VariableDeclaration",
-    kind,
-    declarations
-  };
-  const defs = NODE_FIELDS.VariableDeclaration;
-  validate2(defs.kind, node2, "kind", kind);
-  validate2(defs.declarations, node2, "declarations", declarations, 1);
-  return node2;
-}
-function variableDeclarator(id, init = null) {
-  const node2 = {
-    type: "VariableDeclarator",
-    id,
-    init
-  };
-  const defs = NODE_FIELDS.VariableDeclarator;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.init, node2, "init", init, 1);
-  return node2;
-}
-function whileStatement(test, body) {
-  const node2 = {
-    type: "WhileStatement",
-    test,
-    body
-  };
-  const defs = NODE_FIELDS.WhileStatement;
-  validate2(defs.test, node2, "test", test, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function withStatement(object2, body) {
-  const node2 = {
-    type: "WithStatement",
-    object: object2,
-    body
-  };
-  const defs = NODE_FIELDS.WithStatement;
-  validate2(defs.object, node2, "object", object2, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function assignmentPattern(left, right) {
-  const node2 = {
-    type: "AssignmentPattern",
-    left,
-    right
-  };
-  const defs = NODE_FIELDS.AssignmentPattern;
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function arrayPattern(elements) {
-  const node2 = {
-    type: "ArrayPattern",
-    elements
-  };
-  const defs = NODE_FIELDS.ArrayPattern;
-  validate2(defs.elements, node2, "elements", elements, 1);
-  return node2;
-}
-function arrowFunctionExpression(params, body, async = false) {
-  const node2 = {
-    type: "ArrowFunctionExpression",
-    params,
-    body,
-    async
-  };
-  const defs = NODE_FIELDS.ArrowFunctionExpression;
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function classBody(body) {
-  const node2 = {
-    type: "ClassBody",
-    body
-  };
-  const defs = NODE_FIELDS.ClassBody;
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function classExpression(id = null, superClass = null, body, decorators = null) {
-  const node2 = {
-    type: "ClassExpression",
-    id,
-    superClass,
-    body,
-    decorators
-  };
-  const defs = NODE_FIELDS.ClassExpression;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.superClass, node2, "superClass", superClass, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.decorators, node2, "decorators", decorators, 1);
-  return node2;
-}
-function classDeclaration(id = null, superClass = null, body, decorators = null) {
-  const node2 = {
-    type: "ClassDeclaration",
-    id,
-    superClass,
-    body,
-    decorators
-  };
-  const defs = NODE_FIELDS.ClassDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.superClass, node2, "superClass", superClass, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.decorators, node2, "decorators", decorators, 1);
-  return node2;
-}
-function exportAllDeclaration(source, attributes = null) {
-  const node2 = {
-    type: "ExportAllDeclaration",
-    source,
-    attributes
-  };
-  const defs = NODE_FIELDS.ExportAllDeclaration;
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  return node2;
-}
-function exportDefaultDeclaration(declaration) {
-  const node2 = {
-    type: "ExportDefaultDeclaration",
-    declaration
-  };
-  const defs = NODE_FIELDS.ExportDefaultDeclaration;
-  validate2(defs.declaration, node2, "declaration", declaration, 1);
-  return node2;
-}
-function exportNamedDeclaration(declaration = null, specifiers = [], source = null, attributes = null) {
-  const node2 = {
-    type: "ExportNamedDeclaration",
-    declaration,
-    specifiers,
-    source,
-    attributes
-  };
-  const defs = NODE_FIELDS.ExportNamedDeclaration;
-  validate2(defs.declaration, node2, "declaration", declaration, 1);
-  validate2(defs.specifiers, node2, "specifiers", specifiers, 1);
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  return node2;
-}
-function exportSpecifier(local, exported) {
-  const node2 = {
-    type: "ExportSpecifier",
-    local,
-    exported
-  };
-  const defs = NODE_FIELDS.ExportSpecifier;
-  validate2(defs.local, node2, "local", local, 1);
-  validate2(defs.exported, node2, "exported", exported, 1);
-  return node2;
-}
-function forOfStatement(left, right, body, _await = false) {
-  const node2 = {
-    type: "ForOfStatement",
-    left,
-    right,
-    body,
-    await: _await
-  };
-  const defs = NODE_FIELDS.ForOfStatement;
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.await, node2, "await", _await);
-  return node2;
-}
-function importDeclaration(specifiers, source, attributes = null) {
-  const node2 = {
-    type: "ImportDeclaration",
-    specifiers,
-    source,
-    attributes
-  };
-  const defs = NODE_FIELDS.ImportDeclaration;
-  validate2(defs.specifiers, node2, "specifiers", specifiers, 1);
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  return node2;
-}
-function importDefaultSpecifier(local) {
-  const node2 = {
-    type: "ImportDefaultSpecifier",
-    local
-  };
-  const defs = NODE_FIELDS.ImportDefaultSpecifier;
-  validate2(defs.local, node2, "local", local, 1);
-  return node2;
-}
-function importNamespaceSpecifier(local) {
-  const node2 = {
-    type: "ImportNamespaceSpecifier",
-    local
-  };
-  const defs = NODE_FIELDS.ImportNamespaceSpecifier;
-  validate2(defs.local, node2, "local", local, 1);
-  return node2;
-}
-function importSpecifier(local, imported) {
-  const node2 = {
-    type: "ImportSpecifier",
-    local,
-    imported
-  };
-  const defs = NODE_FIELDS.ImportSpecifier;
-  validate2(defs.local, node2, "local", local, 1);
-  validate2(defs.imported, node2, "imported", imported, 1);
-  return node2;
-}
-function metaProperty(meta3, property) {
-  const node2 = {
-    type: "MetaProperty",
-    meta: meta3,
-    property
-  };
-  const defs = NODE_FIELDS.MetaProperty;
-  validate2(defs.meta, node2, "meta", meta3, 1);
-  validate2(defs.property, node2, "property", property, 1);
-  return node2;
-}
-function classMethod(kind = "method", key, params, body, computed = false, _static = false, generator = false, async = false) {
-  const node2 = {
-    type: "ClassMethod",
-    kind,
-    key,
-    params,
-    body,
-    computed,
-    static: _static,
-    generator,
-    async
-  };
-  const defs = NODE_FIELDS.ClassMethod;
-  validate2(defs.kind, node2, "kind", kind);
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.static, node2, "static", _static);
-  validate2(defs.generator, node2, "generator", generator);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function objectPattern(properties) {
-  const node2 = {
-    type: "ObjectPattern",
-    properties
-  };
-  const defs = NODE_FIELDS.ObjectPattern;
-  validate2(defs.properties, node2, "properties", properties, 1);
-  return node2;
-}
-function spreadElement(argument) {
-  const node2 = {
-    type: "SpreadElement",
-    argument
-  };
-  const defs = NODE_FIELDS.SpreadElement;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function _super() {
-  return {
-    type: "Super"
-  };
-}
-function taggedTemplateExpression(tag, quasi) {
-  const node2 = {
-    type: "TaggedTemplateExpression",
-    tag,
-    quasi
-  };
-  const defs = NODE_FIELDS.TaggedTemplateExpression;
-  validate2(defs.tag, node2, "tag", tag, 1);
-  validate2(defs.quasi, node2, "quasi", quasi, 1);
-  return node2;
-}
-function templateElement(value, tail = false) {
-  const node2 = {
-    type: "TemplateElement",
-    value,
-    tail
-  };
-  const defs = NODE_FIELDS.TemplateElement;
-  validate2(defs.value, node2, "value", value);
-  validate2(defs.tail, node2, "tail", tail);
-  return node2;
-}
-function templateLiteral2(quasis, expressions) {
-  const node2 = {
-    type: "TemplateLiteral",
-    quasis,
-    expressions
-  };
-  const defs = NODE_FIELDS.TemplateLiteral;
-  validate2(defs.quasis, node2, "quasis", quasis, 1);
-  validate2(defs.expressions, node2, "expressions", expressions, 1);
-  return node2;
-}
-function yieldExpression(argument = null, delegate = false) {
-  const node2 = {
-    type: "YieldExpression",
-    argument,
-    delegate
-  };
-  const defs = NODE_FIELDS.YieldExpression;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  validate2(defs.delegate, node2, "delegate", delegate);
-  return node2;
-}
-function awaitExpression(argument) {
-  const node2 = {
-    type: "AwaitExpression",
-    argument
-  };
-  const defs = NODE_FIELDS.AwaitExpression;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function importExpression(source, options = null) {
-  const node2 = {
-    type: "ImportExpression",
-    source,
-    options
-  };
-  const defs = NODE_FIELDS.ImportExpression;
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.options, node2, "options", options, 1);
-  return node2;
-}
-function _import() {
-  return {
-    type: "Import"
-  };
-}
-function bigIntLiteral(value) {
-  const node2 = {
-    type: "BigIntLiteral",
-    value
-  };
-  const defs = NODE_FIELDS.BigIntLiteral;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function exportNamespaceSpecifier(exported) {
-  const node2 = {
-    type: "ExportNamespaceSpecifier",
-    exported
-  };
-  const defs = NODE_FIELDS.ExportNamespaceSpecifier;
-  validate2(defs.exported, node2, "exported", exported, 1);
-  return node2;
-}
-function optionalMemberExpression(object2, property, computed = false, optional2) {
-  const node2 = {
-    type: "OptionalMemberExpression",
-    object: object2,
-    property,
-    computed,
-    optional: optional2
-  };
-  const defs = NODE_FIELDS.OptionalMemberExpression;
-  validate2(defs.object, node2, "object", object2, 1);
-  validate2(defs.property, node2, "property", property, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.optional, node2, "optional", optional2);
-  return node2;
-}
-function optionalCallExpression(callee, _arguments, optional2) {
-  const node2 = {
-    type: "OptionalCallExpression",
-    callee,
-    arguments: _arguments,
-    optional: optional2
-  };
-  const defs = NODE_FIELDS.OptionalCallExpression;
-  validate2(defs.callee, node2, "callee", callee, 1);
-  validate2(defs.arguments, node2, "arguments", _arguments, 1);
-  validate2(defs.optional, node2, "optional", optional2);
-  return node2;
-}
-function classProperty(key, value = null, typeAnnotation2 = null, decorators = null, computed = false, _static = false) {
-  const node2 = {
-    type: "ClassProperty",
-    key,
-    value,
-    typeAnnotation: typeAnnotation2,
-    decorators,
-    computed,
-    static: _static
-  };
-  const defs = NODE_FIELDS.ClassProperty;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  validate2(defs.decorators, node2, "decorators", decorators, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.static, node2, "static", _static);
-  return node2;
-}
-function classPrivateProperty(key, value = null, decorators = null, _static = false) {
-  const node2 = {
-    type: "ClassPrivateProperty",
-    key,
-    value,
-    decorators,
-    static: _static
-  };
-  const defs = NODE_FIELDS.ClassPrivateProperty;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.decorators, node2, "decorators", decorators, 1);
-  validate2(defs.static, node2, "static", _static);
-  return node2;
-}
-function classPrivateMethod(kind = "method", key, params, body, _static = false) {
-  const node2 = {
-    type: "ClassPrivateMethod",
-    kind,
-    key,
-    params,
-    body,
-    static: _static,
-    async: false,
-    computed: false,
-    generator: false
-  };
-  const defs = NODE_FIELDS.ClassPrivateMethod;
-  validate2(defs.kind, node2, "kind", kind);
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.static, node2, "static", _static);
-  return node2;
-}
-function privateName(id) {
-  const node2 = {
-    type: "PrivateName",
-    id
-  };
-  const defs = NODE_FIELDS.PrivateName;
-  validate2(defs.id, node2, "id", id, 1);
-  return node2;
-}
-function staticBlock(body) {
-  const node2 = {
-    type: "StaticBlock",
-    body
-  };
-  const defs = NODE_FIELDS.StaticBlock;
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function importAttribute(key, value) {
-  const node2 = {
-    type: "ImportAttribute",
-    key,
-    value
-  };
-  const defs = NODE_FIELDS.ImportAttribute;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  return node2;
-}
-function anyTypeAnnotation() {
-  return {
-    type: "AnyTypeAnnotation"
-  };
-}
-function arrayTypeAnnotation(elementType) {
-  const node2 = {
-    type: "ArrayTypeAnnotation",
-    elementType
-  };
-  const defs = NODE_FIELDS.ArrayTypeAnnotation;
-  validate2(defs.elementType, node2, "elementType", elementType, 1);
-  return node2;
-}
-function booleanTypeAnnotation() {
-  return {
-    type: "BooleanTypeAnnotation"
-  };
-}
-function booleanLiteralTypeAnnotation(value) {
-  const node2 = {
-    type: "BooleanLiteralTypeAnnotation",
-    value
-  };
-  const defs = NODE_FIELDS.BooleanLiteralTypeAnnotation;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function nullLiteralTypeAnnotation() {
-  return {
-    type: "NullLiteralTypeAnnotation"
-  };
-}
-function classImplements(id, typeParameters = null) {
-  const node2 = {
-    type: "ClassImplements",
-    id,
-    typeParameters
-  };
-  const defs = NODE_FIELDS.ClassImplements;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  return node2;
-}
-function declareClass(id, typeParameters = null, _extends = null, body) {
-  const node2 = {
-    type: "DeclareClass",
-    id,
-    typeParameters,
-    extends: _extends,
-    body
-  };
-  const defs = NODE_FIELDS.DeclareClass;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.extends, node2, "extends", _extends, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function declareFunction(id) {
-  const node2 = {
-    type: "DeclareFunction",
-    id
-  };
-  const defs = NODE_FIELDS.DeclareFunction;
-  validate2(defs.id, node2, "id", id, 1);
-  return node2;
-}
-function declareInterface(id, typeParameters = null, _extends = null, body) {
-  const node2 = {
-    type: "DeclareInterface",
-    id,
-    typeParameters,
-    extends: _extends,
-    body
-  };
-  const defs = NODE_FIELDS.DeclareInterface;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.extends, node2, "extends", _extends, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function declareModule(id, body, kind = null) {
-  const node2 = {
-    type: "DeclareModule",
-    id,
-    body,
-    kind
-  };
-  const defs = NODE_FIELDS.DeclareModule;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.kind, node2, "kind", kind);
-  return node2;
-}
-function declareModuleExports(typeAnnotation2) {
-  const node2 = {
-    type: "DeclareModuleExports",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.DeclareModuleExports;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function declareTypeAlias(id, typeParameters = null, right) {
-  const node2 = {
-    type: "DeclareTypeAlias",
-    id,
-    typeParameters,
-    right
-  };
-  const defs = NODE_FIELDS.DeclareTypeAlias;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function declareOpaqueType(id, typeParameters = null, supertype = null) {
-  const node2 = {
-    type: "DeclareOpaqueType",
-    id,
-    typeParameters,
-    supertype
-  };
-  const defs = NODE_FIELDS.DeclareOpaqueType;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.supertype, node2, "supertype", supertype, 1);
-  return node2;
-}
-function declareVariable(id) {
-  const node2 = {
-    type: "DeclareVariable",
-    id
-  };
-  const defs = NODE_FIELDS.DeclareVariable;
-  validate2(defs.id, node2, "id", id, 1);
-  return node2;
-}
-function declareExportDeclaration(declaration = null, specifiers = null, source = null, attributes = null) {
-  const node2 = {
-    type: "DeclareExportDeclaration",
-    declaration,
-    specifiers,
-    source,
-    attributes
-  };
-  const defs = NODE_FIELDS.DeclareExportDeclaration;
-  validate2(defs.declaration, node2, "declaration", declaration, 1);
-  validate2(defs.specifiers, node2, "specifiers", specifiers, 1);
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  return node2;
-}
-function declareExportAllDeclaration(source, attributes = null) {
-  const node2 = {
-    type: "DeclareExportAllDeclaration",
-    source,
-    attributes
-  };
-  const defs = NODE_FIELDS.DeclareExportAllDeclaration;
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  return node2;
-}
-function declaredPredicate(value) {
-  const node2 = {
-    type: "DeclaredPredicate",
-    value
-  };
-  const defs = NODE_FIELDS.DeclaredPredicate;
-  validate2(defs.value, node2, "value", value, 1);
-  return node2;
-}
-function existsTypeAnnotation() {
-  return {
-    type: "ExistsTypeAnnotation"
-  };
-}
-function functionTypeAnnotation(typeParameters = null, params, rest = null, returnType) {
-  const node2 = {
-    type: "FunctionTypeAnnotation",
-    typeParameters,
-    params,
-    rest,
-    returnType
-  };
-  const defs = NODE_FIELDS.FunctionTypeAnnotation;
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.rest, node2, "rest", rest, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function functionTypeParam(name = null, typeAnnotation2) {
-  const node2 = {
-    type: "FunctionTypeParam",
-    name,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.FunctionTypeParam;
-  validate2(defs.name, node2, "name", name, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function genericTypeAnnotation(id, typeParameters = null) {
-  const node2 = {
-    type: "GenericTypeAnnotation",
-    id,
-    typeParameters
-  };
-  const defs = NODE_FIELDS.GenericTypeAnnotation;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  return node2;
-}
-function inferredPredicate() {
-  return {
-    type: "InferredPredicate"
-  };
-}
-function interfaceExtends(id, typeParameters = null) {
-  const node2 = {
-    type: "InterfaceExtends",
-    id,
-    typeParameters
-  };
-  const defs = NODE_FIELDS.InterfaceExtends;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  return node2;
-}
-function interfaceDeclaration(id, typeParameters = null, _extends = null, body) {
-  const node2 = {
-    type: "InterfaceDeclaration",
-    id,
-    typeParameters,
-    extends: _extends,
-    body
-  };
-  const defs = NODE_FIELDS.InterfaceDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.extends, node2, "extends", _extends, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function interfaceTypeAnnotation(_extends = null, body) {
-  const node2 = {
-    type: "InterfaceTypeAnnotation",
-    extends: _extends,
-    body
-  };
-  const defs = NODE_FIELDS.InterfaceTypeAnnotation;
-  validate2(defs.extends, node2, "extends", _extends, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function intersectionTypeAnnotation(types2) {
-  const node2 = {
-    type: "IntersectionTypeAnnotation",
-    types: types2
-  };
-  const defs = NODE_FIELDS.IntersectionTypeAnnotation;
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function mixedTypeAnnotation() {
-  return {
-    type: "MixedTypeAnnotation"
-  };
-}
-function emptyTypeAnnotation() {
-  return {
-    type: "EmptyTypeAnnotation"
-  };
-}
-function nullableTypeAnnotation(typeAnnotation2) {
-  const node2 = {
-    type: "NullableTypeAnnotation",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.NullableTypeAnnotation;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function numberLiteralTypeAnnotation(value) {
-  const node2 = {
-    type: "NumberLiteralTypeAnnotation",
-    value
-  };
-  const defs = NODE_FIELDS.NumberLiteralTypeAnnotation;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function bigIntLiteralTypeAnnotation(value) {
-  const node2 = {
-    type: "BigIntLiteralTypeAnnotation",
-    value
-  };
-  const defs = NODE_FIELDS.BigIntLiteralTypeAnnotation;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function numberTypeAnnotation() {
-  return {
-    type: "NumberTypeAnnotation"
-  };
-}
-function objectTypeAnnotation(properties, indexers = [], callProperties = [], internalSlots = [], exact = false) {
-  const node2 = {
-    type: "ObjectTypeAnnotation",
-    properties,
-    indexers,
-    callProperties,
-    internalSlots,
-    exact
-  };
-  const defs = NODE_FIELDS.ObjectTypeAnnotation;
-  validate2(defs.properties, node2, "properties", properties, 1);
-  validate2(defs.indexers, node2, "indexers", indexers, 1);
-  validate2(defs.callProperties, node2, "callProperties", callProperties, 1);
-  validate2(defs.internalSlots, node2, "internalSlots", internalSlots, 1);
-  validate2(defs.exact, node2, "exact", exact);
-  return node2;
-}
-function objectTypeInternalSlot(id, value, optional2, _static, method) {
-  const node2 = {
-    type: "ObjectTypeInternalSlot",
-    id,
-    value,
-    optional: optional2,
-    static: _static,
-    method
-  };
-  const defs = NODE_FIELDS.ObjectTypeInternalSlot;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.optional, node2, "optional", optional2);
-  validate2(defs.static, node2, "static", _static);
-  validate2(defs.method, node2, "method", method);
-  return node2;
-}
-function objectTypeCallProperty(value) {
-  const node2 = {
-    type: "ObjectTypeCallProperty",
-    value,
-    static: false
-  };
-  const defs = NODE_FIELDS.ObjectTypeCallProperty;
-  validate2(defs.value, node2, "value", value, 1);
-  return node2;
-}
-function objectTypeIndexer(id = null, key, value, variance2 = null) {
-  const node2 = {
-    type: "ObjectTypeIndexer",
-    id,
-    key,
-    value,
-    variance: variance2,
-    static: false
-  };
-  const defs = NODE_FIELDS.ObjectTypeIndexer;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.variance, node2, "variance", variance2, 1);
-  return node2;
-}
-function objectTypeProperty(key, value, variance2 = null) {
-  const node2 = {
-    type: "ObjectTypeProperty",
-    key,
-    value,
-    variance: variance2,
-    kind: "init",
-    method: false,
-    optional: false,
-    proto: false,
-    static: false
-  };
-  const defs = NODE_FIELDS.ObjectTypeProperty;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.variance, node2, "variance", variance2, 1);
-  return node2;
-}
-function objectTypeSpreadProperty(argument) {
-  const node2 = {
-    type: "ObjectTypeSpreadProperty",
-    argument
-  };
-  const defs = NODE_FIELDS.ObjectTypeSpreadProperty;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function opaqueType(id, typeParameters = null, supertype = null, impltype) {
-  const node2 = {
-    type: "OpaqueType",
-    id,
-    typeParameters,
-    supertype,
-    impltype
-  };
-  const defs = NODE_FIELDS.OpaqueType;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.supertype, node2, "supertype", supertype, 1);
-  validate2(defs.impltype, node2, "impltype", impltype, 1);
-  return node2;
-}
-function qualifiedTypeIdentifier(id, qualification) {
-  const node2 = {
-    type: "QualifiedTypeIdentifier",
-    id,
-    qualification
-  };
-  const defs = NODE_FIELDS.QualifiedTypeIdentifier;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.qualification, node2, "qualification", qualification, 1);
-  return node2;
-}
-function stringLiteralTypeAnnotation(value) {
-  const node2 = {
-    type: "StringLiteralTypeAnnotation",
-    value
-  };
-  const defs = NODE_FIELDS.StringLiteralTypeAnnotation;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function stringTypeAnnotation() {
-  return {
-    type: "StringTypeAnnotation"
-  };
-}
-function symbolTypeAnnotation() {
-  return {
-    type: "SymbolTypeAnnotation"
-  };
-}
-function thisTypeAnnotation() {
-  return {
-    type: "ThisTypeAnnotation"
-  };
-}
-function tupleTypeAnnotation(types2) {
-  const node2 = {
-    type: "TupleTypeAnnotation",
-    types: types2
-  };
-  const defs = NODE_FIELDS.TupleTypeAnnotation;
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function typeofTypeAnnotation(argument) {
-  const node2 = {
-    type: "TypeofTypeAnnotation",
-    argument
-  };
-  const defs = NODE_FIELDS.TypeofTypeAnnotation;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function typeAlias(id, typeParameters = null, right) {
-  const node2 = {
-    type: "TypeAlias",
-    id,
-    typeParameters,
-    right
-  };
-  const defs = NODE_FIELDS.TypeAlias;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function typeAnnotation(typeAnnotation2) {
-  const node2 = {
-    type: "TypeAnnotation",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TypeAnnotation;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function typeCastExpression(expression, typeAnnotation2) {
-  const node2 = {
-    type: "TypeCastExpression",
-    expression,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TypeCastExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function typeParameter(name, bound = null, _default3 = null, variance2 = null) {
-  const node2 = {
-    type: "TypeParameter",
-    name,
-    bound,
-    default: _default3,
-    variance: variance2
-  };
-  const defs = NODE_FIELDS.TypeParameter;
-  validate2(defs.name, node2, "name", name);
-  validate2(defs.bound, node2, "bound", bound, 1);
-  validate2(defs.default, node2, "default", _default3, 1);
-  validate2(defs.variance, node2, "variance", variance2, 1);
-  return node2;
-}
-function typeParameterDeclaration(params) {
-  const node2 = {
-    type: "TypeParameterDeclaration",
-    params
-  };
-  const defs = NODE_FIELDS.TypeParameterDeclaration;
-  validate2(defs.params, node2, "params", params, 1);
-  return node2;
-}
-function typeParameterInstantiation(params) {
-  const node2 = {
-    type: "TypeParameterInstantiation",
-    params
-  };
-  const defs = NODE_FIELDS.TypeParameterInstantiation;
-  validate2(defs.params, node2, "params", params, 1);
-  return node2;
-}
-function unionTypeAnnotation(types2) {
-  const node2 = {
-    type: "UnionTypeAnnotation",
-    types: types2
-  };
-  const defs = NODE_FIELDS.UnionTypeAnnotation;
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function variance(kind) {
-  const node2 = {
-    type: "Variance",
-    kind
-  };
-  const defs = NODE_FIELDS.Variance;
-  validate2(defs.kind, node2, "kind", kind);
-  return node2;
-}
-function voidTypeAnnotation() {
-  return {
-    type: "VoidTypeAnnotation"
-  };
-}
-function enumDeclaration(id, body) {
-  const node2 = {
-    type: "EnumDeclaration",
-    id,
-    body
-  };
-  const defs = NODE_FIELDS.EnumDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function enumBooleanBody(members2) {
-  const node2 = {
-    type: "EnumBooleanBody",
-    members: members2,
-    explicitType: false,
-    hasUnknownMembers: false
-  };
-  const defs = NODE_FIELDS.EnumBooleanBody;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function enumNumberBody(members2) {
-  const node2 = {
-    type: "EnumNumberBody",
-    members: members2,
-    explicitType: false,
-    hasUnknownMembers: false
-  };
-  const defs = NODE_FIELDS.EnumNumberBody;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function enumStringBody(members2) {
-  const node2 = {
-    type: "EnumStringBody",
-    members: members2,
-    explicitType: false,
-    hasUnknownMembers: false
-  };
-  const defs = NODE_FIELDS.EnumStringBody;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function enumSymbolBody(members2) {
-  const node2 = {
-    type: "EnumSymbolBody",
-    members: members2,
-    hasUnknownMembers: false
-  };
-  const defs = NODE_FIELDS.EnumSymbolBody;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function enumBooleanMember(id, init) {
-  const node2 = {
-    type: "EnumBooleanMember",
-    id,
-    init
-  };
-  const defs = NODE_FIELDS.EnumBooleanMember;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.init, node2, "init", init, 1);
-  return node2;
-}
-function enumNumberMember(id, init) {
-  const node2 = {
-    type: "EnumNumberMember",
-    id,
-    init
-  };
-  const defs = NODE_FIELDS.EnumNumberMember;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.init, node2, "init", init, 1);
-  return node2;
-}
-function enumStringMember(id, init) {
-  const node2 = {
-    type: "EnumStringMember",
-    id,
-    init
-  };
-  const defs = NODE_FIELDS.EnumStringMember;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.init, node2, "init", init, 1);
-  return node2;
-}
-function enumDefaultedMember(id) {
-  const node2 = {
-    type: "EnumDefaultedMember",
-    id
-  };
-  const defs = NODE_FIELDS.EnumDefaultedMember;
-  validate2(defs.id, node2, "id", id, 1);
-  return node2;
-}
-function indexedAccessType(objectType, indexType) {
-  const node2 = {
-    type: "IndexedAccessType",
-    objectType,
-    indexType
-  };
-  const defs = NODE_FIELDS.IndexedAccessType;
-  validate2(defs.objectType, node2, "objectType", objectType, 1);
-  validate2(defs.indexType, node2, "indexType", indexType, 1);
-  return node2;
-}
-function optionalIndexedAccessType(objectType, indexType) {
-  const node2 = {
-    type: "OptionalIndexedAccessType",
-    objectType,
-    indexType,
-    optional: false
-  };
-  const defs = NODE_FIELDS.OptionalIndexedAccessType;
-  validate2(defs.objectType, node2, "objectType", objectType, 1);
-  validate2(defs.indexType, node2, "indexType", indexType, 1);
-  return node2;
-}
-function jsxAttribute(name, value = null) {
-  const node2 = {
-    type: "JSXAttribute",
-    name,
-    value
-  };
-  const defs = NODE_FIELDS.JSXAttribute;
-  validate2(defs.name, node2, "name", name, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  return node2;
-}
-function jsxClosingElement(name) {
-  const node2 = {
-    type: "JSXClosingElement",
-    name
-  };
-  const defs = NODE_FIELDS.JSXClosingElement;
-  validate2(defs.name, node2, "name", name, 1);
-  return node2;
-}
-function jsxElement(openingElement, closingElement = null, children) {
-  const node2 = {
-    type: "JSXElement",
-    openingElement,
-    closingElement,
-    children
-  };
-  const defs = NODE_FIELDS.JSXElement;
-  validate2(defs.openingElement, node2, "openingElement", openingElement, 1);
-  validate2(defs.closingElement, node2, "closingElement", closingElement, 1);
-  validate2(defs.children, node2, "children", children, 1);
-  return node2;
-}
-function jsxEmptyExpression() {
-  return {
-    type: "JSXEmptyExpression"
-  };
-}
-function jsxExpressionContainer(expression) {
-  const node2 = {
-    type: "JSXExpressionContainer",
-    expression
-  };
-  const defs = NODE_FIELDS.JSXExpressionContainer;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function jsxSpreadChild(expression) {
-  const node2 = {
-    type: "JSXSpreadChild",
-    expression
-  };
-  const defs = NODE_FIELDS.JSXSpreadChild;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function jsxIdentifier(name) {
-  const node2 = {
-    type: "JSXIdentifier",
-    name
-  };
-  const defs = NODE_FIELDS.JSXIdentifier;
-  validate2(defs.name, node2, "name", name);
-  return node2;
-}
-function jsxMemberExpression(object2, property) {
-  const node2 = {
-    type: "JSXMemberExpression",
-    object: object2,
-    property
-  };
-  const defs = NODE_FIELDS.JSXMemberExpression;
-  validate2(defs.object, node2, "object", object2, 1);
-  validate2(defs.property, node2, "property", property, 1);
-  return node2;
-}
-function jsxNamespacedName(namespace, name) {
-  const node2 = {
-    type: "JSXNamespacedName",
-    namespace,
-    name
-  };
-  const defs = NODE_FIELDS.JSXNamespacedName;
-  validate2(defs.namespace, node2, "namespace", namespace, 1);
-  validate2(defs.name, node2, "name", name, 1);
-  return node2;
-}
-function jsxOpeningElement(name, attributes, selfClosing = false) {
-  const node2 = {
-    type: "JSXOpeningElement",
-    name,
-    attributes,
-    selfClosing
-  };
-  const defs = NODE_FIELDS.JSXOpeningElement;
-  validate2(defs.name, node2, "name", name, 1);
-  validate2(defs.attributes, node2, "attributes", attributes, 1);
-  validate2(defs.selfClosing, node2, "selfClosing", selfClosing);
-  return node2;
-}
-function jsxSpreadAttribute(argument) {
-  const node2 = {
-    type: "JSXSpreadAttribute",
-    argument
-  };
-  const defs = NODE_FIELDS.JSXSpreadAttribute;
-  validate2(defs.argument, node2, "argument", argument, 1);
-  return node2;
-}
-function jsxText(value) {
-  const node2 = {
-    type: "JSXText",
-    value
-  };
-  const defs = NODE_FIELDS.JSXText;
-  validate2(defs.value, node2, "value", value);
-  return node2;
-}
-function jsxFragment(openingFragment, closingFragment, children) {
-  const node2 = {
-    type: "JSXFragment",
-    openingFragment,
-    closingFragment,
-    children
-  };
-  const defs = NODE_FIELDS.JSXFragment;
-  validate2(defs.openingFragment, node2, "openingFragment", openingFragment, 1);
-  validate2(defs.closingFragment, node2, "closingFragment", closingFragment, 1);
-  validate2(defs.children, node2, "children", children, 1);
-  return node2;
-}
-function jsxOpeningFragment() {
-  return {
-    type: "JSXOpeningFragment"
-  };
-}
-function jsxClosingFragment() {
-  return {
-    type: "JSXClosingFragment"
-  };
-}
-function placeholder(expectedNode, name) {
-  const node2 = {
-    type: "Placeholder",
-    expectedNode,
-    name
-  };
-  const defs = NODE_FIELDS.Placeholder;
-  validate2(defs.expectedNode, node2, "expectedNode", expectedNode);
-  validate2(defs.name, node2, "name", name, 1);
-  return node2;
-}
-function v8IntrinsicIdentifier(name) {
-  const node2 = {
-    type: "V8IntrinsicIdentifier",
-    name
-  };
-  const defs = NODE_FIELDS.V8IntrinsicIdentifier;
-  validate2(defs.name, node2, "name", name);
-  return node2;
-}
-function argumentPlaceholder() {
-  return {
-    type: "ArgumentPlaceholder"
-  };
-}
-function bindExpression(object2, callee) {
-  const node2 = {
-    type: "BindExpression",
-    object: object2,
-    callee
-  };
-  const defs = NODE_FIELDS.BindExpression;
-  validate2(defs.object, node2, "object", object2, 1);
-  validate2(defs.callee, node2, "callee", callee, 1);
-  return node2;
-}
-function classAccessorProperty(key, value = null, typeAnnotation2 = null, decorators = null, computed = false, _static = false) {
-  const node2 = {
-    type: "ClassAccessorProperty",
-    key,
-    value,
-    typeAnnotation: typeAnnotation2,
-    decorators,
-    computed,
-    static: _static
-  };
-  const defs = NODE_FIELDS.ClassAccessorProperty;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.value, node2, "value", value, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  validate2(defs.decorators, node2, "decorators", decorators, 1);
-  validate2(defs.computed, node2, "computed", computed);
-  validate2(defs.static, node2, "static", _static);
-  return node2;
-}
-function decorator(expression) {
-  const node2 = {
-    type: "Decorator",
-    expression
-  };
-  const defs = NODE_FIELDS.Decorator;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function doExpression(body, async = false) {
-  const node2 = {
-    type: "DoExpression",
-    body,
-    async
-  };
-  const defs = NODE_FIELDS.DoExpression;
-  validate2(defs.body, node2, "body", body, 1);
-  validate2(defs.async, node2, "async", async);
-  return node2;
-}
-function exportDefaultSpecifier(exported) {
-  const node2 = {
-    type: "ExportDefaultSpecifier",
-    exported
-  };
-  const defs = NODE_FIELDS.ExportDefaultSpecifier;
-  validate2(defs.exported, node2, "exported", exported, 1);
-  return node2;
-}
-function moduleExpression(body) {
-  const node2 = {
-    type: "ModuleExpression",
-    body
-  };
-  const defs = NODE_FIELDS.ModuleExpression;
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function topicReference() {
-  return {
-    type: "TopicReference"
-  };
-}
-function voidPattern() {
-  return {
-    type: "VoidPattern"
-  };
-}
-function tsParameterProperty(parameter) {
-  const node2 = {
-    type: "TSParameterProperty",
-    parameter
-  };
-  const defs = NODE_FIELDS.TSParameterProperty;
-  validate2(defs.parameter, node2, "parameter", parameter, 1);
-  return node2;
-}
-function tsDeclareFunction(id = null, typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSDeclareFunction",
-    id,
-    typeParameters,
-    params,
-    returnType,
-    async: false,
-    generator: false
-  };
-  const defs = NODE_FIELDS.TSDeclareFunction;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsDeclareMethod(key, typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSDeclareMethod",
-    key,
-    typeParameters,
-    params,
-    returnType,
-    async: false,
-    computed: false,
-    generator: false,
-    kind: "method",
-    static: false
-  };
-  const defs = NODE_FIELDS.TSDeclareMethod;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsQualifiedName(left, right) {
-  const node2 = {
-    type: "TSQualifiedName",
-    left,
-    right
-  };
-  const defs = NODE_FIELDS.TSQualifiedName;
-  validate2(defs.left, node2, "left", left, 1);
-  validate2(defs.right, node2, "right", right, 1);
-  return node2;
-}
-function tsCallSignatureDeclaration(typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSCallSignatureDeclaration",
-    typeParameters,
-    params,
-    returnType
-  };
-  const defs = NODE_FIELDS.TSCallSignatureDeclaration;
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsConstructSignatureDeclaration(typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSConstructSignatureDeclaration",
-    typeParameters,
-    params,
-    returnType
-  };
-  const defs = NODE_FIELDS.TSConstructSignatureDeclaration;
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsPropertySignature(key, typeAnnotation2 = null) {
-  const node2 = {
-    type: "TSPropertySignature",
-    key,
-    typeAnnotation: typeAnnotation2,
-    computed: false
-  };
-  const defs = NODE_FIELDS.TSPropertySignature;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsMethodSignature(key, typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSMethodSignature",
-    key,
-    typeParameters,
-    params,
-    returnType,
-    computed: false,
-    kind: "method"
-  };
-  const defs = NODE_FIELDS.TSMethodSignature;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsIndexSignature(parameters, typeAnnotation2 = null) {
-  const node2 = {
-    type: "TSIndexSignature",
-    parameters,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSIndexSignature;
-  validate2(defs.parameters, node2, "parameters", parameters, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsAnyKeyword() {
-  return {
-    type: "TSAnyKeyword"
-  };
-}
-function tsBooleanKeyword() {
-  return {
-    type: "TSBooleanKeyword"
-  };
-}
-function tsBigIntKeyword() {
-  return {
-    type: "TSBigIntKeyword"
-  };
-}
-function tsIntrinsicKeyword() {
-  return {
-    type: "TSIntrinsicKeyword"
-  };
-}
-function tsNeverKeyword() {
-  return {
-    type: "TSNeverKeyword"
-  };
-}
-function tsNullKeyword() {
-  return {
-    type: "TSNullKeyword"
-  };
-}
-function tsNumberKeyword() {
-  return {
-    type: "TSNumberKeyword"
-  };
-}
-function tsObjectKeyword() {
-  return {
-    type: "TSObjectKeyword"
-  };
-}
-function tsStringKeyword() {
-  return {
-    type: "TSStringKeyword"
-  };
-}
-function tsSymbolKeyword() {
-  return {
-    type: "TSSymbolKeyword"
-  };
-}
-function tsUndefinedKeyword() {
-  return {
-    type: "TSUndefinedKeyword"
-  };
-}
-function tsUnknownKeyword() {
-  return {
-    type: "TSUnknownKeyword"
-  };
-}
-function tsVoidKeyword() {
-  return {
-    type: "TSVoidKeyword"
-  };
-}
-function tsThisType() {
-  return {
-    type: "TSThisType"
-  };
-}
-function tsFunctionType(typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSFunctionType",
-    typeParameters,
-    params,
-    returnType
-  };
-  const defs = NODE_FIELDS.TSFunctionType;
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsConstructorType(typeParameters = null, params, returnType = null) {
-  const node2 = {
-    type: "TSConstructorType",
-    typeParameters,
-    params,
-    returnType
-  };
-  const defs = NODE_FIELDS.TSConstructorType;
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.params, node2, "params", params, 1);
-  validate2(defs.returnType, node2, "returnType", returnType, 1);
-  return node2;
-}
-function tsTypeReference(typeName, typeArguments = null) {
-  const node2 = {
-    type: "TSTypeReference",
-    typeName,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSTypeReference;
-  validate2(defs.typeName, node2, "typeName", typeName, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsTypePredicate(parameterName, typeAnnotation2 = null, asserts = null) {
-  const node2 = {
-    type: "TSTypePredicate",
-    parameterName,
-    typeAnnotation: typeAnnotation2,
-    asserts
-  };
-  const defs = NODE_FIELDS.TSTypePredicate;
-  validate2(defs.parameterName, node2, "parameterName", parameterName, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  validate2(defs.asserts, node2, "asserts", asserts);
-  return node2;
-}
-function tsTypeQuery(exprName, typeArguments = null) {
-  const node2 = {
-    type: "TSTypeQuery",
-    exprName,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSTypeQuery;
-  validate2(defs.exprName, node2, "exprName", exprName, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsTypeLiteral(members2) {
-  const node2 = {
-    type: "TSTypeLiteral",
-    members: members2
-  };
-  const defs = NODE_FIELDS.TSTypeLiteral;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function tsArrayType(elementType) {
-  const node2 = {
-    type: "TSArrayType",
-    elementType
-  };
-  const defs = NODE_FIELDS.TSArrayType;
-  validate2(defs.elementType, node2, "elementType", elementType, 1);
-  return node2;
-}
-function tsTupleType(elementTypes) {
-  const node2 = {
-    type: "TSTupleType",
-    elementTypes
-  };
-  const defs = NODE_FIELDS.TSTupleType;
-  validate2(defs.elementTypes, node2, "elementTypes", elementTypes, 1);
-  return node2;
-}
-function tsOptionalType(typeAnnotation2) {
-  const node2 = {
-    type: "TSOptionalType",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSOptionalType;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsRestType(typeAnnotation2) {
-  const node2 = {
-    type: "TSRestType",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSRestType;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsNamedTupleMember(label, elementType, optional2 = false) {
-  const node2 = {
-    type: "TSNamedTupleMember",
-    label,
-    elementType,
-    optional: optional2
-  };
-  const defs = NODE_FIELDS.TSNamedTupleMember;
-  validate2(defs.label, node2, "label", label, 1);
-  validate2(defs.elementType, node2, "elementType", elementType, 1);
-  validate2(defs.optional, node2, "optional", optional2);
-  return node2;
-}
-function tsUnionType(types2) {
-  const node2 = {
-    type: "TSUnionType",
-    types: types2
-  };
-  const defs = NODE_FIELDS.TSUnionType;
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function tsIntersectionType(types2) {
-  const node2 = {
-    type: "TSIntersectionType",
-    types: types2
-  };
-  const defs = NODE_FIELDS.TSIntersectionType;
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function tsConditionalType(checkType, extendsType, trueType, falseType) {
-  const node2 = {
-    type: "TSConditionalType",
-    checkType,
-    extendsType,
-    trueType,
-    falseType
-  };
-  const defs = NODE_FIELDS.TSConditionalType;
-  validate2(defs.checkType, node2, "checkType", checkType, 1);
-  validate2(defs.extendsType, node2, "extendsType", extendsType, 1);
-  validate2(defs.trueType, node2, "trueType", trueType, 1);
-  validate2(defs.falseType, node2, "falseType", falseType, 1);
-  return node2;
-}
-function tsInferType(typeParameter2) {
-  const node2 = {
-    type: "TSInferType",
-    typeParameter: typeParameter2
-  };
-  const defs = NODE_FIELDS.TSInferType;
-  validate2(defs.typeParameter, node2, "typeParameter", typeParameter2, 1);
-  return node2;
-}
-function tsParenthesizedType(typeAnnotation2) {
-  const node2 = {
-    type: "TSParenthesizedType",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSParenthesizedType;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsTypeOperator(typeAnnotation2, operator) {
-  const node2 = {
-    type: "TSTypeOperator",
-    typeAnnotation: typeAnnotation2,
-    operator
-  };
-  const defs = NODE_FIELDS.TSTypeOperator;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  validate2(defs.operator, node2, "operator", operator);
-  return node2;
-}
-function tsIndexedAccessType(objectType, indexType) {
-  const node2 = {
-    type: "TSIndexedAccessType",
-    objectType,
-    indexType
-  };
-  const defs = NODE_FIELDS.TSIndexedAccessType;
-  validate2(defs.objectType, node2, "objectType", objectType, 1);
-  validate2(defs.indexType, node2, "indexType", indexType, 1);
-  return node2;
-}
-function tsMappedType(key, constraint, nameType = null, typeAnnotation2 = null) {
-  const node2 = {
-    type: "TSMappedType",
-    key,
-    constraint,
-    nameType,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSMappedType;
-  validate2(defs.key, node2, "key", key, 1);
-  validate2(defs.constraint, node2, "constraint", constraint, 1);
-  validate2(defs.nameType, node2, "nameType", nameType, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsTemplateLiteralType(quasis, types2) {
-  const node2 = {
-    type: "TSTemplateLiteralType",
-    quasis,
-    types: types2
-  };
-  const defs = NODE_FIELDS.TSTemplateLiteralType;
-  validate2(defs.quasis, node2, "quasis", quasis, 1);
-  validate2(defs.types, node2, "types", types2, 1);
-  return node2;
-}
-function tsLiteralType(literal2) {
-  const node2 = {
-    type: "TSLiteralType",
-    literal: literal2
-  };
-  const defs = NODE_FIELDS.TSLiteralType;
-  validate2(defs.literal, node2, "literal", literal2, 1);
-  return node2;
-}
-function tsClassImplements(expression, typeArguments = null) {
-  const node2 = {
-    type: "TSClassImplements",
-    expression,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSClassImplements;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsInterfaceHeritage(expression, typeArguments = null) {
-  const node2 = {
-    type: "TSInterfaceHeritage",
-    expression,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSInterfaceHeritage;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsInterfaceDeclaration(id, typeParameters = null, _extends = null, body) {
-  const node2 = {
-    type: "TSInterfaceDeclaration",
-    id,
-    typeParameters,
-    extends: _extends,
-    body
-  };
-  const defs = NODE_FIELDS.TSInterfaceDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.extends, node2, "extends", _extends, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function tsInterfaceBody(body) {
-  const node2 = {
-    type: "TSInterfaceBody",
-    body
-  };
-  const defs = NODE_FIELDS.TSInterfaceBody;
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function tsTypeAliasDeclaration(id, typeParameters = null, typeAnnotation2) {
-  const node2 = {
-    type: "TSTypeAliasDeclaration",
-    id,
-    typeParameters,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSTypeAliasDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.typeParameters, node2, "typeParameters", typeParameters, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsInstantiationExpression(expression, typeArguments = null) {
-  const node2 = {
-    type: "TSInstantiationExpression",
-    expression,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSInstantiationExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsAsExpression(expression, typeAnnotation2) {
-  const node2 = {
-    type: "TSAsExpression",
-    expression,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSAsExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsSatisfiesExpression(expression, typeAnnotation2) {
-  const node2 = {
-    type: "TSSatisfiesExpression",
-    expression,
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSSatisfiesExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsTypeAssertion(typeAnnotation2, expression) {
-  const node2 = {
-    type: "TSTypeAssertion",
-    typeAnnotation: typeAnnotation2,
-    expression
-  };
-  const defs = NODE_FIELDS.TSTypeAssertion;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function tsEnumBody(members2) {
-  const node2 = {
-    type: "TSEnumBody",
-    members: members2
-  };
-  const defs = NODE_FIELDS.TSEnumBody;
-  validate2(defs.members, node2, "members", members2, 1);
-  return node2;
-}
-function tsEnumDeclaration(id, body) {
-  const node2 = {
-    type: "TSEnumDeclaration",
-    id,
-    body
-  };
-  const defs = NODE_FIELDS.TSEnumDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function tsEnumMember(id, initializer3 = null) {
-  const node2 = {
-    type: "TSEnumMember",
-    id,
-    initializer: initializer3
-  };
-  const defs = NODE_FIELDS.TSEnumMember;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.initializer, node2, "initializer", initializer3, 1);
-  return node2;
-}
-function tsModuleDeclaration(id, body) {
-  const node2 = {
-    type: "TSModuleDeclaration",
-    id,
-    body,
-    kind: "namespace"
-  };
-  const defs = NODE_FIELDS.TSModuleDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function tsModuleBlock(body) {
-  const node2 = {
-    type: "TSModuleBlock",
-    body
-  };
-  const defs = NODE_FIELDS.TSModuleBlock;
-  validate2(defs.body, node2, "body", body, 1);
-  return node2;
-}
-function tsImportType(source, qualifier = null, typeArguments = null) {
-  const node2 = {
-    type: "TSImportType",
-    source,
-    qualifier,
-    typeArguments
-  };
-  const defs = NODE_FIELDS.TSImportType;
-  validate2(defs.source, node2, "source", source, 1);
-  validate2(defs.qualifier, node2, "qualifier", qualifier, 1);
-  validate2(defs.typeArguments, node2, "typeArguments", typeArguments, 1);
-  return node2;
-}
-function tsImportEqualsDeclaration(id, moduleReference) {
-  const node2 = {
-    type: "TSImportEqualsDeclaration",
-    id,
-    moduleReference
-  };
-  const defs = NODE_FIELDS.TSImportEqualsDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  validate2(defs.moduleReference, node2, "moduleReference", moduleReference, 1);
-  return node2;
-}
-function tsExternalModuleReference(expression) {
-  const node2 = {
-    type: "TSExternalModuleReference",
-    expression
-  };
-  const defs = NODE_FIELDS.TSExternalModuleReference;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function tsNonNullExpression(expression) {
-  const node2 = {
-    type: "TSNonNullExpression",
-    expression
-  };
-  const defs = NODE_FIELDS.TSNonNullExpression;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function tsExportAssignment(expression) {
-  const node2 = {
-    type: "TSExportAssignment",
-    expression
-  };
-  const defs = NODE_FIELDS.TSExportAssignment;
-  validate2(defs.expression, node2, "expression", expression, 1);
-  return node2;
-}
-function tsNamespaceExportDeclaration(id) {
-  const node2 = {
-    type: "TSNamespaceExportDeclaration",
-    id
-  };
-  const defs = NODE_FIELDS.TSNamespaceExportDeclaration;
-  validate2(defs.id, node2, "id", id, 1);
-  return node2;
-}
-function tsTypeAnnotation(typeAnnotation2) {
-  const node2 = {
-    type: "TSTypeAnnotation",
-    typeAnnotation: typeAnnotation2
-  };
-  const defs = NODE_FIELDS.TSTypeAnnotation;
-  validate2(defs.typeAnnotation, node2, "typeAnnotation", typeAnnotation2, 1);
-  return node2;
-}
-function tsTypeParameterInstantiation(params) {
-  const node2 = {
-    type: "TSTypeParameterInstantiation",
-    params
-  };
-  const defs = NODE_FIELDS.TSTypeParameterInstantiation;
-  validate2(defs.params, node2, "params", params, 1);
-  return node2;
-}
-function tsTypeParameterDeclaration(params) {
-  const node2 = {
-    type: "TSTypeParameterDeclaration",
-    params
-  };
-  const defs = NODE_FIELDS.TSTypeParameterDeclaration;
-  validate2(defs.params, node2, "params", params, 1);
-  return node2;
-}
-function tsTypeParameter(constraint = null, _default3 = null, name) {
-  const node2 = {
-    type: "TSTypeParameter",
-    constraint,
-    default: _default3,
-    name
-  };
-  const defs = NODE_FIELDS.TSTypeParameter;
-  validate2(defs.constraint, node2, "constraint", constraint, 1);
-  validate2(defs.default, node2, "default", _default3, 1);
-  validate2(defs.name, node2, "name", name, 1);
-  return node2;
-}
-function NumberLiteral(value) {
-  deprecationWarning("NumberLiteral", "NumericLiteral", "The node type ");
-  return numericLiteral(value);
-}
-function RegexLiteral(pattern, flags = "") {
-  deprecationWarning("RegexLiteral", "RegExpLiteral", "The node type ");
-  return regExpLiteral(pattern, flags);
-}
-function RestProperty(argument) {
-  deprecationWarning("RestProperty", "RestElement", "The node type ");
-  return restElement(argument);
-}
-function SpreadProperty(argument) {
-  deprecationWarning("SpreadProperty", "SpreadElement", "The node type ");
-  return spreadElement(argument);
-}
-function alias(lowercase2) {
-  return function() {
-    deprecationWarning(lowercase2.replace(/^(?:ts|jsx|[a-z])/, (x) => x.toUpperCase()), lowercase2, "Usage of builders starting with an uppercase letter such as ", "uppercase builders");
-    return b[lowercase2](...arguments);
-  };
-}
-function cloneIfNode(obj, deep, withoutLoc, commentsCache) {
-  if (obj && typeof obj.type === "string") {
-    return cloneNodeInternal(obj, deep, withoutLoc, commentsCache);
-  }
-  return obj;
-}
-function cloneIfNodeOrArray(obj, deep, withoutLoc, commentsCache) {
-  if (Array.isArray(obj)) {
-    return obj.map((node2) => cloneIfNode(node2, deep, withoutLoc, commentsCache));
-  }
-  return cloneIfNode(obj, deep, withoutLoc, commentsCache);
-}
-function cloneNode(node2, deep = true, withoutLoc = false) {
-  if (!node2) return node2;
-  return cloneNodeInternal(node2, deep, withoutLoc, /* @__PURE__ */ new Map());
-}
-function cloneNodeInternal(node2, deep = true, withoutLoc = false, commentsCache) {
-  if (!node2) return node2;
-  const {
-    type
-  } = node2;
-  const newNode = {
-    type: node2.type
-  };
-  if (isIdentifier(node2)) {
-    newNode.name = node2.name;
-    if (hasOwn(node2, "optional") && typeof node2.optional === "boolean") {
-      newNode.optional = node2.optional;
-    }
-    if (hasOwn(node2, "typeAnnotation")) {
-      newNode.typeAnnotation = deep ? cloneIfNodeOrArray(node2.typeAnnotation, true, withoutLoc, commentsCache) : node2.typeAnnotation;
-    }
-    if (hasOwn(node2, "decorators")) {
-      newNode.decorators = deep ? cloneIfNodeOrArray(node2.decorators, true, withoutLoc, commentsCache) : node2.decorators;
-    }
-  } else if (!hasOwn(NODE_FIELDS$1, type)) {
-    throw new Error(`Unknown node type: "${type}"`);
-  } else {
-    for (const field of Object.keys(NODE_FIELDS$1[type])) {
-      if (hasOwn(node2, field)) {
-        if (deep) {
-          newNode[field] = isFile(node2) && field === "comments" ? maybeCloneComments(node2.comments, deep, withoutLoc, commentsCache) : cloneIfNodeOrArray(node2[field], true, withoutLoc, commentsCache);
-        } else {
-          newNode[field] = node2[field];
-        }
-      }
-    }
-  }
-  if (hasOwn(node2, "loc")) {
-    if (withoutLoc) {
-      newNode.loc = null;
-    } else {
-      newNode.loc = node2.loc;
-    }
-  }
-  if (hasOwn(node2, "leadingComments")) {
-    newNode.leadingComments = maybeCloneComments(node2.leadingComments, deep, withoutLoc, commentsCache);
-  }
-  if (hasOwn(node2, "innerComments")) {
-    newNode.innerComments = maybeCloneComments(node2.innerComments, deep, withoutLoc, commentsCache);
-  }
-  if (hasOwn(node2, "trailingComments")) {
-    newNode.trailingComments = maybeCloneComments(node2.trailingComments, deep, withoutLoc, commentsCache);
-  }
-  if (hasOwn(node2, "extra")) {
-    newNode.extra = {
-      ...node2.extra
-    };
-  }
-  return newNode;
-}
-function maybeCloneComments(comments, deep, withoutLoc, commentsCache) {
-  if (!comments || !deep) {
-    return comments;
-  }
-  return comments.map((comment) => {
-    const cache = commentsCache.get(comment);
-    if (cache) return cache;
-    const {
-      type,
-      value,
-      loc
-    } = comment;
-    const ret = {
-      type,
-      value,
-      loc
-    };
-    if (withoutLoc) {
-      ret.loc = void 0;
-    }
-    commentsCache.set(comment, ret);
-    return ret;
-  });
-}
-function traverseFast(node2, enter, opts) {
-  if (!node2) return false;
-  const keys2 = VISITOR_KEYS[node2.type];
-  if (!keys2) return false;
-  opts = opts || {};
-  const ret = enter(node2, opts);
-  if (ret !== void 0) {
-    switch (ret) {
-      case _skip:
-        return false;
-      case _stop:
-        return true;
-    }
-  }
-  for (const key of keys2) {
-    const subNode = node2[key];
-    if (!subNode) continue;
-    if (Array.isArray(subNode)) {
-      for (const node3 of subNode) {
-        if (traverseFast(node3, enter, opts)) return true;
-      }
-    } else {
-      if (traverseFast(subNode, enter, opts)) return true;
-    }
-  }
-  return false;
-}
-function removeProperties(node2, opts = {}) {
-  const map2 = opts.preserveComments ? CLEAR_KEYS : CLEAR_KEYS_PLUS_COMMENTS;
-  for (const key of map2) {
-    if (node2[key] != null) node2[key] = void 0;
-  }
-  for (const key of Object.keys(node2)) {
-    if (key.startsWith("_") && node2[key] != null) node2[key] = void 0;
-  }
-  const symbols = Object.getOwnPropertySymbols(node2);
-  for (const sym of symbols) {
-    node2[sym] = null;
-  }
-}
-function removePropertiesDeep(tree, opts) {
-  traverseFast(tree, removeProperties, opts);
-  return tree;
-}
-function toKeyAlias(node2, key = node2.key) {
-  let alias2;
-  if (node2.kind === "method") {
-    return toKeyAlias.increment() + "";
-  } else if (isIdentifier(key)) {
-    alias2 = key.name;
-  } else if (isStringLiteral(key)) {
-    alias2 = JSON.stringify(key.value);
-  } else {
-    alias2 = JSON.stringify(removePropertiesDeep(cloneNode(key)));
-  }
-  if (node2.computed) {
-    alias2 = `[${alias2}]`;
-  }
-  if (node2.static) {
-    alias2 = `static:${alias2}`;
-  }
-  return alias2;
-}
-function getBindingIdentifiers(node2, duplicates, outerOnly, newBindingsOnly) {
-  const search = [].concat(node2);
-  const ids = /* @__PURE__ */ Object.create(null);
-  while (search.length) {
-    const id = search.shift();
-    if (!id) continue;
-    if (newBindingsOnly && (isAssignmentExpression(id) || isUnaryExpression(id) || isUpdateExpression(id))) {
-      continue;
-    }
-    if (isIdentifier(id)) {
-      if (duplicates) {
-        const _ids = ids[id.name] = ids[id.name] || [];
-        _ids.push(id);
-      } else {
-        ids[id.name] = id;
-      }
-      continue;
-    }
-    if (isExportDeclaration(id) && !isExportAllDeclaration(id)) {
-      if (isDeclaration(id.declaration)) {
-        search.push(id.declaration);
-      }
-      continue;
-    }
-    if (outerOnly) {
-      if (isFunctionDeclaration(id)) {
-        search.push(id.id);
-        continue;
-      }
-      if (isFunctionExpression(id) || isClassExpression(id)) {
-        continue;
-      }
-    }
-    const keys2 = getBindingIdentifiers.keys[id.type];
-    if (keys2) {
-      for (let i = 0; i < keys2.length; i++) {
-        const key = keys2[i];
-        const nodes = id[key];
-        if (nodes) {
-          if (Array.isArray(nodes)) {
-            search.push(...nodes);
-          } else {
-            search.push(nodes);
-          }
-        }
-      }
-    }
-  }
-  return ids;
-}
-var warnings, isReactComponent, COMMENT_KEYS, LOGICAL_OPERATORS, UPDATE_OPERATORS, BOOLEAN_NUMBER_BINARY_OPERATORS, EQUALITY_BINARY_OPERATORS, COMPARISON_BINARY_OPERATORS, BOOLEAN_BINARY_OPERATORS, NUMBER_BINARY_OPERATORS, BINARY_OPERATORS, ASSIGNMENT_OPERATORS, BOOLEAN_UNARY_OPERATORS, NUMBER_UNARY_OPERATORS, STRING_UNARY_OPERATORS, UNARY_OPERATORS, VISITOR_KEYS, ALIAS_KEYS, FLIPPED_ALIAS_KEYS, NODE_FIELDS$1, BUILDER_KEYS, DEPRECATED_KEYS, NODE_PARENT_VALIDATIONS, NODE_UNION_SHAPES__PRIVATE, allExpandedTypes, validTypeOpts, validFieldKeys, store, utils, classMethodOrPropertyUnionShapeCommon, memberExpressionUnionShapeCommon, defineType$4, functionCommon, functionTypeAnnotationCommon, functionDeclarationCommon, patternLikeCommon, importAttributes, classMethodOrPropertyCommon, classMethodOrDeclareMethodCommon, defineType$3, defineInterfaceishType, enumBodyBase, defineType$2, PLACEHOLDERS, PLACEHOLDERS_ALIAS, PLACEHOLDERS_FLIPPED_ALIAS, defineType$1, defineType, bool, tSFunctionTypeAnnotationCommon, signatureDeclarationCommon, callConstructSignatureDeclaration, namedTypeElementCommon, tsKeywordTypes, fnOrCtrBase, unionOrIntersection, TSTypeExpression, DEPRECATED_ALIASES, TYPES, _validate, validate2, NODE_FIELDS, b, ArrayExpression, AssignmentExpression, BinaryExpression, InterpreterDirective, Directive, DirectiveLiteral, BlockStatement, BreakStatement, CallExpression, CatchClause, ConditionalExpression, ContinueStatement, DebuggerStatement, DoWhileStatement, EmptyStatement, ExpressionStatement, File2, ForInStatement, ForStatement, FunctionDeclaration, FunctionExpression, Identifier, IfStatement, LabeledStatement, StringLiteral, NumericLiteral, NullLiteral, BooleanLiteral, RegExpLiteral, LogicalExpression, MemberExpression, NewExpression, Program, ObjectExpression, ObjectMethod, ObjectProperty, RestElement, ReturnStatement, SequenceExpression, ParenthesizedExpression, SwitchCase, SwitchStatement, ThisExpression, ThrowStatement, TryStatement, UnaryExpression, UpdateExpression, VariableDeclaration, VariableDeclarator, WhileStatement, WithStatement, AssignmentPattern, ArrayPattern, ArrowFunctionExpression, ClassBody, ClassExpression, ClassDeclaration, ExportAllDeclaration, ExportDefaultDeclaration, ExportNamedDeclaration, ExportSpecifier, ForOfStatement, ImportDeclaration, ImportDefaultSpecifier, ImportNamespaceSpecifier, ImportSpecifier, MetaProperty, ClassMethod, ObjectPattern, SpreadElement, Super, TaggedTemplateExpression, TemplateElement, TemplateLiteral, YieldExpression, AwaitExpression, ImportExpression, Import, BigIntLiteral, ExportNamespaceSpecifier, OptionalMemberExpression, OptionalCallExpression, ClassProperty, ClassPrivateProperty, ClassPrivateMethod, PrivateName, StaticBlock, ImportAttribute, AnyTypeAnnotation, ArrayTypeAnnotation, BooleanTypeAnnotation, BooleanLiteralTypeAnnotation, NullLiteralTypeAnnotation, ClassImplements, DeclareClass, DeclareFunction, DeclareInterface, DeclareModule, DeclareModuleExports, DeclareTypeAlias, DeclareOpaqueType, DeclareVariable, DeclareExportDeclaration, DeclareExportAllDeclaration, DeclaredPredicate, ExistsTypeAnnotation, FunctionTypeAnnotation, FunctionTypeParam, GenericTypeAnnotation, InferredPredicate, InterfaceExtends, InterfaceDeclaration, InterfaceTypeAnnotation, IntersectionTypeAnnotation, MixedTypeAnnotation, EmptyTypeAnnotation, NullableTypeAnnotation, NumberLiteralTypeAnnotation, BigIntLiteralTypeAnnotation, NumberTypeAnnotation, ObjectTypeAnnotation, ObjectTypeInternalSlot, ObjectTypeCallProperty, ObjectTypeIndexer, ObjectTypeProperty, ObjectTypeSpreadProperty, OpaqueType, QualifiedTypeIdentifier, StringLiteralTypeAnnotation, StringTypeAnnotation, SymbolTypeAnnotation, ThisTypeAnnotation, TupleTypeAnnotation, TypeofTypeAnnotation, TypeAlias, TypeAnnotation, TypeCastExpression, TypeParameter, TypeParameterDeclaration, TypeParameterInstantiation, UnionTypeAnnotation, Variance, VoidTypeAnnotation, EnumDeclaration, EnumBooleanBody, EnumNumberBody, EnumStringBody, EnumSymbolBody, EnumBooleanMember, EnumNumberMember, EnumStringMember, EnumDefaultedMember, IndexedAccessType, OptionalIndexedAccessType, JSXAttribute, JSXClosingElement, JSXElement, JSXEmptyExpression, JSXExpressionContainer, JSXSpreadChild, JSXIdentifier, JSXMemberExpression, JSXNamespacedName, JSXOpeningElement, JSXSpreadAttribute, JSXText, JSXFragment, JSXOpeningFragment, JSXClosingFragment, Placeholder, V8IntrinsicIdentifier, ArgumentPlaceholder, BindExpression, ClassAccessorProperty, Decorator, DoExpression, ExportDefaultSpecifier, ModuleExpression, TopicReference, VoidPattern, TSParameterProperty, TSDeclareFunction, TSDeclareMethod, TSQualifiedName, TSCallSignatureDeclaration, TSConstructSignatureDeclaration, TSPropertySignature, TSMethodSignature, TSIndexSignature, TSAnyKeyword, TSBooleanKeyword, TSBigIntKeyword, TSIntrinsicKeyword, TSNeverKeyword, TSNullKeyword, TSNumberKeyword, TSObjectKeyword, TSStringKeyword, TSSymbolKeyword, TSUndefinedKeyword, TSUnknownKeyword, TSVoidKeyword, TSThisType, TSFunctionType, TSConstructorType, TSTypeReference, TSTypePredicate, TSTypeQuery, TSTypeLiteral, TSArrayType, TSTupleType, TSOptionalType, TSRestType, TSNamedTupleMember, TSUnionType, TSIntersectionType, TSConditionalType, TSInferType, TSParenthesizedType, TSTypeOperator, TSIndexedAccessType, TSMappedType, TSTemplateLiteralType, TSLiteralType, TSClassImplements, TSInterfaceHeritage, TSInterfaceDeclaration, TSInterfaceBody, TSTypeAliasDeclaration, TSInstantiationExpression, TSAsExpression, TSSatisfiesExpression, TSTypeAssertion, TSEnumBody, TSEnumDeclaration, TSEnumMember, TSModuleDeclaration, TSModuleBlock, TSImportType, TSImportEqualsDeclaration, TSExternalModuleReference, TSNonNullExpression, TSExportAssignment, TSNamespaceExportDeclaration, TSTypeAnnotation, TSTypeParameterInstantiation, TSTypeParameterDeclaration, TSTypeParameter, hasOwn, STANDARDIZED_TYPES, EXPRESSION_TYPES, BINARY_TYPES, SCOPABLE_TYPES, BLOCKPARENT_TYPES, BLOCK_TYPES, STATEMENT_TYPES, TERMINATORLESS_TYPES, COMPLETIONSTATEMENT_TYPES, CONDITIONAL_TYPES, LOOP_TYPES, WHILE_TYPES, EXPRESSIONWRAPPER_TYPES, FOR_TYPES, FORXSTATEMENT_TYPES, FUNCTION_TYPES, FUNCTIONPARENT_TYPES, PUREISH_TYPES, DECLARATION_TYPES, FUNCTIONPARAMETER_TYPES, PATTERNLIKE_TYPES, LVAL_TYPES, TSENTITYNAME_TYPES, LITERAL_TYPES, IMMUTABLE_TYPES, USERWHITESPACABLE_TYPES, METHOD_TYPES, OBJECTMEMBER_TYPES, PROPERTY_TYPES, UNARYLIKE_TYPES, PATTERN_TYPES, CLASS_TYPES, IMPORTOREXPORTDECLARATION_TYPES, EXPORTDECLARATION_TYPES, MODULESPECIFIER_TYPES, PRIVATE_TYPES, FLOW_TYPES, FLOWTYPE_TYPES, FLOWBASEANNOTATION_TYPES, FLOWDECLARATION_TYPES, FLOWPREDICATE_TYPES, ENUMBODY_TYPES, ENUMMEMBER_TYPES, JSX_TYPES, MISCELLANEOUS_TYPES, ACCESSOR_TYPES, TYPESCRIPT_TYPES, TSTYPEELEMENT_TYPES, TSTYPE_TYPES, TSBASETYPE_TYPES, _skip, _stop, CLEAR_KEYS, CLEAR_KEYS_PLUS_COMMENTS, objectToString, keys;
-var init_lib4 = __esm({
-  "node_modules/@babel/types/lib/index.js"() {
-    init_lib2();
-    init_lib3();
-    warnings = /* @__PURE__ */ new Set();
-    isReactComponent = buildMatchMemberExpression("React.Component");
-    COMMENT_KEYS = ["leadingComments", "trailingComments", "innerComments"];
-    LOGICAL_OPERATORS = ["||", "&&", "??"];
-    UPDATE_OPERATORS = ["++", "--"];
-    BOOLEAN_NUMBER_BINARY_OPERATORS = [">", "<", ">=", "<="];
-    EQUALITY_BINARY_OPERATORS = ["==", "===", "!=", "!=="];
-    COMPARISON_BINARY_OPERATORS = [...EQUALITY_BINARY_OPERATORS, "in", "instanceof"];
-    BOOLEAN_BINARY_OPERATORS = [...COMPARISON_BINARY_OPERATORS, ...BOOLEAN_NUMBER_BINARY_OPERATORS];
-    NUMBER_BINARY_OPERATORS = ["-", "/", "%", "*", "**", "&", "|", ">>", ">>>", "<<", "^"];
-    BINARY_OPERATORS = ["+", ...NUMBER_BINARY_OPERATORS, ...BOOLEAN_BINARY_OPERATORS, "|>"];
-    ASSIGNMENT_OPERATORS = ["=", "+=", ...NUMBER_BINARY_OPERATORS.map((op) => op + "="), ...LOGICAL_OPERATORS.map((op) => op + "=")];
-    BOOLEAN_UNARY_OPERATORS = ["delete", "!"];
-    NUMBER_UNARY_OPERATORS = ["+", "-", "~"];
-    STRING_UNARY_OPERATORS = ["typeof"];
-    UNARY_OPERATORS = ["void", "throw", ...BOOLEAN_UNARY_OPERATORS, ...NUMBER_UNARY_OPERATORS, ...STRING_UNARY_OPERATORS];
-    VISITOR_KEYS = {};
-    ALIAS_KEYS = {};
-    FLIPPED_ALIAS_KEYS = {};
-    NODE_FIELDS$1 = {};
-    BUILDER_KEYS = {};
-    DEPRECATED_KEYS = {};
-    NODE_PARENT_VALIDATIONS = {};
-    NODE_UNION_SHAPES__PRIVATE = {};
-    allExpandedTypes = [];
-    validTypeOpts = /* @__PURE__ */ new Set(["aliases", "builder", "deprecatedAlias", "fields", "inherits", "visitor", "validate", "unionShape"]);
-    validFieldKeys = /* @__PURE__ */ new Set(["default", "optional", "deprecated", "validate"]);
-    store = {};
-    utils = /* @__PURE__ */ Object.defineProperty({
-      __proto__: null,
-      ALIAS_KEYS,
-      BUILDER_KEYS,
-      DEPRECATED_KEYS,
-      FLIPPED_ALIAS_KEYS,
-      NODE_FIELDS: NODE_FIELDS$1,
-      NODE_PARENT_VALIDATIONS,
-      NODE_UNION_SHAPES__PRIVATE,
-      VISITOR_KEYS,
-      allExpandedTypes,
-      arrayOf,
-      arrayOfType,
-      assertEach,
-      assertNodeOrValueType,
-      assertNodeType,
-      assertOneOf,
-      assertOptionalChainStart,
-      assertShape,
-      assertValueType,
-      chain,
-      combine,
-      default: defineType$5,
-      defineAliasedType,
-      validate: validate$2,
-      validateArrayOfType,
-      validateDefault,
-      validateOptional,
-      validateOptionalType,
-      validateType
-    }, Symbol.toStringTag, { value: "Module" });
-    classMethodOrPropertyUnionShapeCommon = (allowPrivateName = false) => ({
-      unionShape: {
-        discriminator: "computed",
-        shapes: [{
-          name: "computed",
-          value: [true],
-          properties: {
-            key: {
-              validate: assertNodeType("Expression")
-            }
-          }
-        }, {
-          name: "nonComputed",
-          value: [false],
-          properties: {
-            key: {
-              validate: allowPrivateName ? assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "PrivateName") : assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral")
-            }
-          }
-        }]
-      }
-    });
-    memberExpressionUnionShapeCommon = {
-      unionShape: {
-        discriminator: "computed",
-        shapes: [{
-          name: "computed",
-          value: [true],
-          properties: {
-            property: {
-              validate: assertNodeType("Expression")
-            }
-          }
-        }, {
-          name: "nonComputed",
-          value: [false],
-          properties: {
-            property: {
-              validate: assertNodeType("Identifier", "PrivateName")
-            }
-          }
-        }]
-      }
-    };
-    defineType$4 = defineAliasedType("Standardized");
-    defineType$4("ArrayExpression", {
-      fields: {
-        elements: {
-          validate: arrayOf(assertNodeOrValueType("null", "Expression", "SpreadElement")),
-          default: void 0
-        }
-      },
-      visitor: ["elements"],
-      aliases: ["Expression"]
-    });
-    defineType$4("AssignmentExpression", {
-      fields: {
-        operator: {
-          validate: combine((function() {
-            const identifier2 = assertOneOf(...ASSIGNMENT_OPERATORS);
-            const pattern = assertOneOf("=");
-            return function(node2, key, val) {
-              const validator = is("Pattern", node2.left) ? pattern : identifier2;
-              validator(node2, key, val);
-            };
-          })(), {
-            oneOf: ASSIGNMENT_OPERATORS
-          })
-        },
-        left: {
-          validate: assertNodeType("Identifier", "MemberExpression", "OptionalMemberExpression", "ArrayPattern", "ObjectPattern", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression")
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        }
-      },
-      builder: ["operator", "left", "right"],
-      visitor: ["left", "right"],
-      aliases: ["Expression"]
-    });
-    defineType$4("BinaryExpression", {
-      builder: ["operator", "left", "right"],
-      fields: {
-        operator: {
-          validate: assertOneOf(...BINARY_OPERATORS)
-        },
-        left: {
-          validate: (function() {
-            const expression = assertNodeType("Expression");
-            const inOp = assertNodeType("Expression", "PrivateName");
-            const validator = combine(function(node2, key, val) {
-              const validator2 = node2.operator === "in" ? inOp : expression;
-              validator2(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["Expression", "PrivateName"]
-            });
-            return validator;
-          })()
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        }
-      },
-      unionShape: {
-        discriminator: "operator",
-        shapes: [{
-          name: "in",
-          value: ["in"],
-          properties: {
-            left: {
-              validate: assertNodeType("Expression", "PrivateName")
-            }
-          }
-        }, {
-          name: "notIn",
-          value: BINARY_OPERATORS.filter((op) => op !== "in"),
-          properties: {
-            left: {
-              validate: assertNodeType("Expression")
-            }
-          }
-        }]
-      },
-      visitor: ["left", "right"],
-      aliases: ["Binary", "Expression"]
-    });
-    defineType$4("InterpreterDirective", {
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("string")
-        }
-      }
-    });
-    defineType$4("Directive", {
-      visitor: ["value"],
-      fields: {
-        value: {
-          validate: assertNodeType("DirectiveLiteral")
-        }
-      }
-    });
-    defineType$4("DirectiveLiteral", {
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("string")
-        }
-      }
-    });
-    defineType$4("BlockStatement", {
-      builder: ["body", "directives"],
-      visitor: ["directives", "body"],
-      fields: {
-        directives: {
-          validate: arrayOfType("Directive"),
-          default: []
-        },
-        body: validateArrayOfType("Statement")
-      },
-      aliases: ["Scopable", "BlockParent", "Block", "Statement"]
-    });
-    defineType$4("BreakStatement", {
-      visitor: ["label"],
-      fields: {
-        label: {
-          validate: assertNodeType("Identifier"),
-          optional: true
-        }
-      },
-      aliases: ["Statement", "Terminatorless", "CompletionStatement"]
-    });
-    defineType$4("CallExpression", {
-      visitor: ["callee", "typeArguments", "arguments"],
-      builder: ["callee", "arguments"],
-      aliases: ["Expression"],
-      fields: {
-        callee: {
-          validate: assertNodeType("Expression", "Super", "Import", "V8IntrinsicIdentifier")
-        },
-        arguments: validateArrayOfType("Expression", "SpreadElement", "ArgumentPlaceholder"),
-        typeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("CatchClause", {
-      visitor: ["param", "body"],
-      fields: {
-        param: {
-          validate: assertNodeType("Identifier", "ArrayPattern", "ObjectPattern"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("BlockStatement")
-        }
-      },
-      aliases: ["Scopable", "BlockParent"]
-    });
-    defineType$4("ConditionalExpression", {
-      visitor: ["test", "consequent", "alternate"],
-      fields: {
-        test: {
-          validate: assertNodeType("Expression")
-        },
-        consequent: {
-          validate: assertNodeType("Expression")
-        },
-        alternate: {
-          validate: assertNodeType("Expression")
-        }
-      },
-      aliases: ["Expression", "Conditional"]
-    });
-    defineType$4("ContinueStatement", {
-      visitor: ["label"],
-      fields: {
-        label: {
-          validate: assertNodeType("Identifier"),
-          optional: true
-        }
-      },
-      aliases: ["Statement", "Terminatorless", "CompletionStatement"]
-    });
-    defineType$4("DebuggerStatement", {
-      aliases: ["Statement"]
-    });
-    defineType$4("DoWhileStatement", {
-      builder: ["test", "body"],
-      visitor: ["body", "test"],
-      fields: {
-        test: {
-          validate: assertNodeType("Expression")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      },
-      aliases: ["Statement", "BlockParent", "Loop", "While", "Scopable"]
-    });
-    defineType$4("EmptyStatement", {
-      aliases: ["Statement"]
-    });
-    defineType$4("ExpressionStatement", {
-      visitor: ["expression"],
-      fields: {
-        expression: {
-          validate: assertNodeType("Expression")
-        }
-      },
-      aliases: ["Statement", "ExpressionWrapper"]
-    });
-    defineType$4("File", {
-      builder: ["program", "comments", "tokens"],
-      visitor: ["program"],
-      fields: {
-        program: {
-          validate: assertNodeType("Program")
-        },
-        comments: {
-          validate: assertEach(assertNodeType("CommentBlock", "CommentLine")),
-          optional: true
-        },
-        tokens: {
-          validate: assertEach(Object.assign(() => {
-          }, {
-            type: "any"
-          })),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ForInStatement", {
-      visitor: ["left", "right", "body"],
-      aliases: ["Scopable", "Statement", "For", "BlockParent", "Loop", "ForXStatement"],
-      fields: {
-        left: {
-          validate: assertNodeType("VariableDeclaration", "Identifier", "MemberExpression", "ArrayPattern", "ObjectPattern", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression")
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    defineType$4("ForStatement", {
-      visitor: ["init", "test", "update", "body"],
-      aliases: ["Scopable", "Statement", "For", "BlockParent", "Loop"],
-      fields: {
-        init: {
-          validate: assertNodeType("VariableDeclaration", "Expression"),
-          optional: true
-        },
-        test: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        update: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    functionCommon = () => ({
-      params: validateArrayOfType("FunctionParameter"),
-      generator: {
-        default: false
-      },
-      async: {
-        default: false
-      }
-    });
-    functionTypeAnnotationCommon = () => ({
-      returnType: {
-        validate: assertNodeType("TypeAnnotation", "TSTypeAnnotation"),
-        optional: true
-      },
-      typeParameters: {
-        validate: assertNodeType("TypeParameterDeclaration", "TSTypeParameterDeclaration"),
-        optional: true
-      }
-    });
-    functionDeclarationCommon = () => ({
-      ...functionCommon(),
-      declare: {
-        validate: assertValueType("boolean"),
-        optional: true
-      },
-      id: {
-        validate: assertNodeType("Identifier"),
-        optional: true
-      }
-    });
-    defineType$4("FunctionDeclaration", {
-      builder: ["id", "params", "body", "generator", "async"],
-      visitor: ["id", "typeParameters", "params", "predicate", "returnType", "body"],
-      fields: {
-        ...functionDeclarationCommon(),
-        ...functionTypeAnnotationCommon(),
-        body: {
-          validate: assertNodeType("BlockStatement")
-        },
-        predicate: {
-          validate: assertNodeType("FlowPredicate"),
-          optional: true
-        }
-      },
-      aliases: ["Scopable", "Function", "BlockParent", "FunctionParent", "Statement", "Pureish", "Declaration"],
-      validate: (function() {
-        const identifier2 = assertNodeType("Identifier");
-        return function(parent, key, node2) {
-          if (!is("ExportDefaultDeclaration", parent)) {
-            identifier2(node2, "id", node2.id);
-          }
-        };
-      })()
-    });
-    defineType$4("FunctionExpression", {
-      inherits: "FunctionDeclaration",
-      aliases: ["Scopable", "Function", "BlockParent", "FunctionParent", "Expression", "Pureish"],
-      fields: {
-        ...functionCommon(),
-        ...functionTypeAnnotationCommon(),
-        id: {
-          validate: assertNodeType("Identifier"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("BlockStatement")
-        },
-        predicate: {
-          validate: assertNodeType("FlowPredicate"),
-          optional: true
-        }
-      }
-    });
-    patternLikeCommon = () => ({
-      typeAnnotation: {
-        validate: assertNodeType("TypeAnnotation", "TSTypeAnnotation"),
-        optional: true
-      },
-      optional: {
-        validate: assertValueType("boolean"),
-        optional: true
-      },
-      decorators: {
-        validate: arrayOfType("Decorator"),
-        optional: true
-      }
-    });
-    defineType$4("Identifier", {
-      builder: ["name"],
-      visitor: ["typeAnnotation", "decorators"],
-      aliases: ["Expression", "FunctionParameter", "PatternLike", "LVal", "TSEntityName"],
-      fields: {
-        ...patternLikeCommon(),
-        name: {
-          validate: chain(assertValueType("string"), combine(function(node2, key, val) {
-            if (!isValidIdentifier(val, false)) {
-              throw new TypeError(`"${val}" is not a valid identifier name`);
-            }
-          }, {
-            type: "string"
-          }))
-        }
-      },
-      validate: function(parent, key, node2) {
-        const match = /\.(\w+)$/.exec(key.toString());
-        if (!match) return;
-        const [, parentKey] = match;
-        const nonComp = {
-          computed: false
-        };
-        if (parentKey === "property") {
-          if (is("MemberExpression", parent, nonComp)) return;
-          if (is("OptionalMemberExpression", parent, nonComp)) return;
-        } else if (parentKey === "key") {
-          if (is("Property", parent, nonComp)) return;
-          if (is("Method", parent, nonComp)) return;
-        } else if (parentKey === "exported") {
-          if (is("ExportSpecifier", parent)) return;
-        } else if (parentKey === "imported") {
-          if (is("ImportSpecifier", parent, {
-            imported: node2
-          })) return;
-        } else if (parentKey === "meta") {
-          if (is("MetaProperty", parent, {
-            meta: node2
-          })) return;
-        }
-        if ((isKeyword2(node2.name) || isReservedWord2(node2.name, false)) && node2.name !== "this") {
-          throw new TypeError(`"${node2.name}" is not a valid identifier`);
-        }
-      }
-    });
-    defineType$4("IfStatement", {
-      visitor: ["test", "consequent", "alternate"],
-      aliases: ["Statement", "Conditional"],
-      fields: {
-        test: {
-          validate: assertNodeType("Expression")
-        },
-        consequent: {
-          validate: assertNodeType("Statement")
-        },
-        alternate: {
-          optional: true,
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    defineType$4("LabeledStatement", {
-      visitor: ["label", "body"],
-      aliases: ["Statement"],
-      fields: {
-        label: {
-          validate: assertNodeType("Identifier")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    defineType$4("StringLiteral", {
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("string")
-        }
-      },
-      aliases: ["Expression", "Pureish", "Literal", "Immutable"]
-    });
-    defineType$4("NumericLiteral", {
-      builder: ["value"],
-      deprecatedAlias: "NumberLiteral",
-      fields: {
-        value: {
-          validate: chain(assertValueType("number"), combine(function(node2, key, val) {
-            if (1 / val < 0 || !Number.isFinite(val)) {
-              const error62 = new Error(`NumericLiterals must be non-negative finite numbers. You can use t.valueToNode(${val}) instead.`);
-              if (!new Error().stack.includes("regenerator")) {
-                throw error62;
-              }
-            }
-          }, {
-            type: "number"
-          }))
-        }
-      },
-      aliases: ["Expression", "Pureish", "Literal", "Immutable"]
-    });
-    defineType$4("NullLiteral", {
-      aliases: ["Expression", "Pureish", "Literal", "Immutable"]
-    });
-    defineType$4("BooleanLiteral", {
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("boolean")
-        }
-      },
-      aliases: ["Expression", "Pureish", "Literal", "Immutable"]
-    });
-    defineType$4("RegExpLiteral", {
-      builder: ["pattern", "flags"],
-      deprecatedAlias: "RegexLiteral",
-      aliases: ["Expression", "Pureish", "Literal"],
-      fields: {
-        pattern: {
-          validate: assertValueType("string")
-        },
-        flags: {
-          validate: chain(assertValueType("string"), combine(function(node2, key, val) {
-            const invalid = /[^dgimsuvy]/.exec(val);
-            if (invalid) {
-              throw new TypeError(`"${invalid[0]}" is not a valid RegExp flag`);
-            }
-          }, {
-            type: "string"
-          })),
-          default: ""
-        }
-      }
-    });
-    defineType$4("LogicalExpression", {
-      builder: ["operator", "left", "right"],
-      visitor: ["left", "right"],
-      aliases: ["Binary", "Expression"],
-      fields: {
-        operator: {
-          validate: assertOneOf(...LOGICAL_OPERATORS)
-        },
-        left: {
-          validate: assertNodeType("Expression")
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("MemberExpression", {
-      builder: ["object", "property", "computed"],
-      visitor: ["object", "property"],
-      aliases: ["Expression", "LVal", "PatternLike"],
-      ...memberExpressionUnionShapeCommon,
-      fields: {
-        object: {
-          validate: assertNodeType("Expression", "Super")
-        },
-        property: {
-          validate: (function() {
-            const normal = assertNodeType("Identifier", "PrivateName");
-            const computed = assertNodeType("Expression");
-            const validator = combine(function(node2, key, val) {
-              const validator2 = node2.computed ? computed : normal;
-              validator2(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["Expression", "Identifier", "PrivateName"]
-            });
-            return validator;
-          })()
-        },
-        computed: {
-          default: false
-        }
-      }
-    });
-    defineType$4("NewExpression", {
-      inherits: "CallExpression",
-      fields: {
-        callee: {
-          validate: assertNodeType("Expression", "V8IntrinsicIdentifier")
-        },
-        arguments: validateArrayOfType("Expression", "SpreadElement", "ArgumentPlaceholder"),
-        typeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("Program", {
-      visitor: ["directives", "body"],
-      builder: ["body", "directives", "sourceType", "interpreter"],
-      fields: {
-        sourceType: {
-          validate: assertOneOf("script", "module"),
-          default: "script"
-        },
-        interpreter: {
-          validate: assertNodeType("InterpreterDirective"),
-          default: null,
-          optional: true
-        },
-        directives: {
-          validate: arrayOfType("Directive"),
-          default: []
-        },
-        body: validateArrayOfType("Statement")
-      },
-      aliases: ["Scopable", "BlockParent", "Block"]
-    });
-    defineType$4("ObjectExpression", {
-      visitor: ["properties"],
-      aliases: ["Expression"],
-      fields: {
-        properties: validateArrayOfType("ObjectMethod", "ObjectProperty", "SpreadElement")
-      }
-    });
-    defineType$4("ObjectMethod", {
-      builder: ["kind", "key", "params", "body", "computed", "generator", "async"],
-      visitor: ["decorators", "key", "typeParameters", "params", "returnType", "body"],
-      ...classMethodOrPropertyUnionShapeCommon(),
-      fields: {
-        ...functionCommon(),
-        ...functionTypeAnnotationCommon(),
-        kind: {
-          validate: assertOneOf("method", "get", "set")
-        },
-        computed: {
-          default: false
-        },
-        key: {
-          validate: (function() {
-            const normal = assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral");
-            const computed = assertNodeType("Expression");
-            const validator = combine(function(node2, key, val) {
-              const validator2 = node2.computed ? computed : normal;
-              validator2(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["Expression", "Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral"]
-            });
-            return validator;
-          })()
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("BlockStatement")
-        }
-      },
-      aliases: ["UserWhitespacable", "Function", "Scopable", "BlockParent", "FunctionParent", "Method", "ObjectMember"]
-    });
-    defineType$4("ObjectProperty", {
-      builder: ["key", "value", "computed", "shorthand"],
-      ...classMethodOrPropertyUnionShapeCommon(true),
-      fields: {
-        computed: {
-          default: false
-        },
-        key: {
-          validate: (function() {
-            const normal = assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "PrivateName");
-            const computed = assertNodeType("Expression");
-            const validator = combine(function(node2, key, val) {
-              const validator2 = node2.computed ? computed : normal;
-              validator2(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["Expression", "Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "PrivateName"]
-            });
-            return validator;
-          })()
-        },
-        value: {
-          validate: assertNodeType("Expression", "PatternLike")
-        },
-        shorthand: {
-          validate: chain(assertValueType("boolean"), combine(function(node2, key, shorthand) {
-            if (!shorthand) return;
-            if (node2.computed) {
-              throw new TypeError("Property shorthand of ObjectProperty cannot be true if computed is true");
-            }
-            if (!is("Identifier", node2.key)) {
-              throw new TypeError("Property shorthand of ObjectProperty cannot be true if key is not an Identifier");
-            }
-          }, {
-            type: "boolean"
-          })),
-          default: false
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        }
-      },
-      visitor: ["decorators", "key", "value"],
-      aliases: ["UserWhitespacable", "Property", "ObjectMember"],
-      validate: (function() {
-        const pattern = assertNodeType("Identifier", "Pattern", "TSAsExpression", "TSSatisfiesExpression", "TSNonNullExpression", "TSTypeAssertion");
-        const expression = assertNodeType("Expression");
-        return function(parent, key, node2) {
-          const validator = is("ObjectPattern", parent) ? pattern : expression;
-          validator(node2, "value", node2.value);
-        };
-      })()
-    });
-    defineType$4("RestElement", {
-      visitor: ["argument", "typeAnnotation"],
-      builder: ["argument"],
-      aliases: ["FunctionParameter", "PatternLike"],
-      deprecatedAlias: "RestProperty",
-      fields: {
-        ...patternLikeCommon(),
-        argument: {
-          validate: assertNodeType("Identifier", "ArrayPattern", "ObjectPattern", "MemberExpression", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression")
-        }
-      },
-      validate: function(parent, key) {
-        const match = /(\w+)\[(\d+)\]/.exec(key.toString());
-        if (!match) throw new Error("Internal Babel error: malformed key.");
-        const [, listKey, index] = match;
-        if (parent[listKey].length > +index + 1) {
-          throw new TypeError(`RestElement must be last element of ${listKey}`);
-        }
-      }
-    });
-    defineType$4("ReturnStatement", {
-      visitor: ["argument"],
-      aliases: ["Statement", "Terminatorless", "CompletionStatement"],
-      fields: {
-        argument: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("SequenceExpression", {
-      visitor: ["expressions"],
-      fields: {
-        expressions: validateArrayOfType("Expression")
-      },
-      aliases: ["Expression"]
-    });
-    defineType$4("ParenthesizedExpression", {
-      visitor: ["expression"],
-      aliases: ["Expression", "ExpressionWrapper"],
-      fields: {
-        expression: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("SwitchCase", {
-      visitor: ["test", "consequent"],
-      fields: {
-        test: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        consequent: validateArrayOfType("Statement")
-      }
-    });
-    defineType$4("SwitchStatement", {
-      visitor: ["discriminant", "cases"],
-      aliases: ["Statement", "BlockParent", "Scopable"],
-      fields: {
-        discriminant: {
-          validate: assertNodeType("Expression")
-        },
-        cases: validateArrayOfType("SwitchCase")
-      }
-    });
-    defineType$4("ThisExpression", {
-      aliases: ["Expression", "TSEntityName"]
-    });
-    defineType$4("ThrowStatement", {
-      visitor: ["argument"],
-      aliases: ["Statement", "Terminatorless", "CompletionStatement"],
-      fields: {
-        argument: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("TryStatement", {
-      visitor: ["block", "handler", "finalizer"],
-      aliases: ["Statement"],
-      fields: {
-        block: {
-          validate: chain(assertNodeType("BlockStatement"), combine(function(node2) {
-            if (!node2.handler && !node2.finalizer) {
-              throw new TypeError("TryStatement expects either a handler or finalizer, or both");
-            }
-          }, {
-            oneOfNodeTypes: ["BlockStatement"]
-          }))
-        },
-        handler: {
-          optional: true,
-          validate: assertNodeType("CatchClause")
-        },
-        finalizer: {
-          optional: true,
-          validate: assertNodeType("BlockStatement")
-        }
-      }
-    });
-    defineType$4("UnaryExpression", {
-      builder: ["operator", "argument", "prefix"],
-      fields: {
-        prefix: {
-          default: true
-        },
-        argument: {
-          validate: assertNodeType("Expression")
-        },
-        operator: {
-          validate: assertOneOf(...UNARY_OPERATORS)
-        }
-      },
-      visitor: ["argument"],
-      aliases: ["UnaryLike", "Expression"]
-    });
-    defineType$4("UpdateExpression", {
-      builder: ["operator", "argument", "prefix"],
-      fields: {
-        prefix: {
-          default: false
-        },
-        argument: {
-          validate: assertNodeType("Identifier", "MemberExpression")
-        },
-        operator: {
-          validate: assertOneOf(...UPDATE_OPERATORS)
-        }
-      },
-      visitor: ["argument"],
-      aliases: ["Expression"]
-    });
-    defineType$4("VariableDeclaration", {
-      builder: ["kind", "declarations"],
-      visitor: ["declarations"],
-      aliases: ["Statement", "Declaration"],
-      fields: {
-        declare: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        kind: {
-          validate: assertOneOf("var", "let", "const", "using", "await using")
-        },
-        declarations: validateArrayOfType("VariableDeclarator")
-      },
-      validate: (() => {
-        const withoutInit = assertNodeType("Identifier", "Placeholder");
-        const constOrLetOrVar = assertNodeType("Identifier", "ArrayPattern", "ObjectPattern", "Placeholder");
-        const usingOrAwaitUsing = assertNodeType("Identifier", "VoidPattern", "Placeholder");
-        return function(parent, key, node2) {
-          const {
-            kind,
-            declarations
-          } = node2;
-          const parentIsForX = is("ForXStatement", parent, {
-            left: node2
-          });
-          if (parentIsForX) {
-            if (declarations.length !== 1) {
-              throw new TypeError(`Exactly one VariableDeclarator is required in the VariableDeclaration of a ${parent.type}`);
-            }
-          }
-          for (const decl of declarations) {
-            if (kind === "const" || kind === "let" || kind === "var") {
-              if (!parentIsForX && !decl.init) {
-                withoutInit(decl, "id", decl.id);
-              } else {
-                constOrLetOrVar(decl, "id", decl.id);
-              }
-            } else {
-              usingOrAwaitUsing(decl, "id", decl.id);
-            }
-          }
-        };
-      })()
-    });
-    defineType$4("VariableDeclarator", {
-      visitor: ["id", "init"],
-      fields: {
-        id: {
-          validate: assertNodeType("Identifier", "ArrayPattern", "ObjectPattern", "VoidPattern")
-        },
-        definite: {
-          optional: true,
-          validate: assertValueType("boolean")
-        },
-        init: {
-          optional: true,
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("WhileStatement", {
-      visitor: ["test", "body"],
-      aliases: ["Statement", "BlockParent", "Loop", "While", "Scopable"],
-      fields: {
-        test: {
-          validate: assertNodeType("Expression")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    defineType$4("WithStatement", {
-      visitor: ["object", "body"],
-      aliases: ["Statement"],
-      fields: {
-        object: {
-          validate: assertNodeType("Expression")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        }
-      }
-    });
-    defineType$4("AssignmentPattern", {
-      visitor: ["left", "right", "decorators"],
-      builder: ["left", "right"],
-      aliases: ["FunctionParameter", "Pattern", "PatternLike"],
-      fields: {
-        ...patternLikeCommon(),
-        left: {
-          validate: assertNodeType("Identifier", "ObjectPattern", "ArrayPattern", "MemberExpression", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression")
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("ArrayPattern", {
-      visitor: ["elements", "typeAnnotation"],
-      builder: ["elements"],
-      aliases: ["FunctionParameter", "Pattern", "PatternLike", "LVal"],
-      fields: {
-        ...patternLikeCommon(),
-        elements: {
-          validate: chain(assertValueType("array"), assertEach(assertNodeOrValueType("null", "PatternLike")))
-        }
-      }
-    });
-    defineType$4("ArrowFunctionExpression", {
-      builder: ["params", "body", "async"],
-      visitor: ["typeParameters", "params", "predicate", "returnType", "body"],
-      aliases: ["Scopable", "Function", "BlockParent", "FunctionParent", "Expression", "Pureish"],
-      fields: {
-        ...functionCommon(),
-        generator: {
-          default: null,
-          optional: true,
-          validate: combine((node2, key, val) => {
-            if (val) {
-              throw new TypeError("ArrowFunctionExpression cannot be a generator");
-            }
-          }, {
-            type: "boolean"
-          })
-        },
-        ...functionTypeAnnotationCommon(),
-        expression: {
-          optional: true,
-          validate: assertValueType("boolean")
-        },
-        body: {
-          validate: assertNodeType("BlockStatement", "Expression")
-        },
-        predicate: {
-          validate: assertNodeType("FlowPredicate"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ClassBody", {
-      visitor: ["body"],
-      fields: {
-        body: validateArrayOfType("ClassMethod", "ClassPrivateMethod", "ClassProperty", "ClassPrivateProperty", "ClassAccessorProperty", "TSDeclareMethod", "TSIndexSignature", "StaticBlock")
-      }
-    });
-    defineType$4("ClassExpression", {
-      builder: ["id", "superClass", "body", "decorators"],
-      visitor: ["decorators", "id", "typeParameters", "superClass", "superTypeArguments", "mixins", "implements", "body"],
-      aliases: ["Scopable", "Class", "Expression"],
-      fields: {
-        id: {
-          validate: assertNodeType("Identifier"),
-          optional: true
-        },
-        typeParameters: {
-          validate: assertNodeType("TypeParameterDeclaration", "TSTypeParameterDeclaration"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("ClassBody")
-        },
-        superClass: {
-          optional: true,
-          validate: assertNodeType("Expression")
-        },
-        superTypeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        },
-        implements: {
-          validate: arrayOfType("TSClassImplements", "ClassImplements"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        mixins: {
-          validate: assertNodeType("InterfaceExtends"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ClassDeclaration", {
-      inherits: "ClassExpression",
-      aliases: ["Scopable", "Class", "Statement", "Declaration"],
-      fields: {
-        id: {
-          validate: assertNodeType("Identifier"),
-          optional: true
-        },
-        typeParameters: {
-          validate: assertNodeType("TypeParameterDeclaration", "TSTypeParameterDeclaration"),
-          optional: true
-        },
-        body: {
-          validate: assertNodeType("ClassBody")
-        },
-        superClass: {
-          optional: true,
-          validate: assertNodeType("Expression")
-        },
-        superTypeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        },
-        implements: {
-          validate: arrayOfType("TSClassImplements", "ClassImplements"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        mixins: {
-          validate: assertNodeType("InterfaceExtends"),
-          optional: true
-        },
-        declare: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        abstract: {
-          validate: assertValueType("boolean"),
-          optional: true
-        }
-      },
-      validate: (function() {
-        const identifier2 = assertNodeType("Identifier");
-        return function(parent, key, node2) {
-          if (!is("ExportDefaultDeclaration", parent)) {
-            identifier2(node2, "id", node2.id);
-          }
-        };
-      })()
-    });
-    importAttributes = {
-      attributes: {
-        optional: true,
-        validate: arrayOfType("ImportAttribute")
-      }
-    };
-    defineType$4("ExportAllDeclaration", {
-      visitor: ["source", "attributes"],
-      aliases: ["Statement", "Declaration", "ImportOrExportDeclaration", "ExportDeclaration"],
-      fields: {
-        source: {
-          validate: assertNodeType("StringLiteral")
-        },
-        exportKind: validateOptional(assertOneOf("type", "value")),
-        ...importAttributes
-      }
-    });
-    defineType$4("ExportDefaultDeclaration", {
-      visitor: ["declaration"],
-      aliases: ["Statement", "Declaration", "ImportOrExportDeclaration", "ExportDeclaration"],
-      fields: {
-        declaration: validateType("FunctionDeclaration", "ClassDeclaration", "Expression", "TSDeclareFunction", "TSInterfaceDeclaration", "EnumDeclaration"),
-        exportKind: validateOptional(assertOneOf("value"))
-      }
-    });
-    defineType$4("ExportNamedDeclaration", {
-      builder: ["declaration", "specifiers", "source", "attributes"],
-      visitor: ["declaration", "specifiers", "source", "attributes"],
-      aliases: ["Statement", "Declaration", "ImportOrExportDeclaration", "ExportDeclaration"],
-      fields: {
-        declaration: {
-          optional: true,
-          validate: chain(assertNodeType("Declaration"), combine(function(node2, key, val) {
-            if (val && node2.specifiers.length) {
-              throw new TypeError("Only declaration or specifiers is allowed on ExportNamedDeclaration");
-            }
-            if (val && node2.source) {
-              throw new TypeError("Cannot export a declaration from a source");
-            }
-          }, {
-            oneOfNodeTypes: ["VariableDeclaration", "FunctionDeclaration", "ClassDeclaration", "TSDeclareFunction", "TSEnumDeclaration", "TSImportEqualsDeclaration", "TSInterfaceDeclaration", "TSModuleDeclaration", "TSTypeAliasDeclaration", "EnumDeclaration", "InterfaceDeclaration", "OpaqueType", "TypeAlias"]
-          }))
-        },
-        ...importAttributes,
-        specifiers: {
-          default: [],
-          validate: arrayOf((function() {
-            const sourced = assertNodeType("ExportSpecifier", "ExportDefaultSpecifier", "ExportNamespaceSpecifier");
-            const sourceless = assertNodeType("ExportSpecifier");
-            return combine(function(node2, key, val) {
-              const validator = node2.source ? sourced : sourceless;
-              validator(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["ExportSpecifier", "ExportDefaultSpecifier", "ExportNamespaceSpecifier"]
-            });
-          })())
-        },
-        source: {
-          validate: assertNodeType("StringLiteral"),
-          optional: true
-        },
-        exportKind: validateOptional(assertOneOf("type", "value"))
-      }
-    });
-    defineType$4("ExportSpecifier", {
-      visitor: ["local", "exported"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        local: {
-          validate: assertNodeType("Identifier", "StringLiteral")
-        },
-        exported: {
-          validate: assertNodeType("Identifier", "StringLiteral")
-        },
-        exportKind: {
-          validate: assertOneOf("type", "value"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ForOfStatement", {
-      visitor: ["left", "right", "body"],
-      builder: ["left", "right", "body", "await"],
-      aliases: ["Scopable", "Statement", "For", "BlockParent", "Loop", "ForXStatement"],
-      fields: {
-        left: {
-          validate: (function() {
-            const declaration = assertNodeType("VariableDeclaration");
-            const lval = assertNodeType("Identifier", "MemberExpression", "ArrayPattern", "ObjectPattern", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression");
-            return combine(function(node2, key, val) {
-              if (is("VariableDeclaration", val)) {
-                declaration(node2, key, val);
-              } else {
-                lval(node2, key, val);
-              }
-            }, {
-              oneOfNodeTypes: ["VariableDeclaration", "Identifier", "MemberExpression", "ArrayPattern", "ObjectPattern", "TSAsExpression", "TSSatisfiesExpression", "TSTypeAssertion", "TSNonNullExpression"]
-            });
-          })()
-        },
-        right: {
-          validate: assertNodeType("Expression")
-        },
-        body: {
-          validate: assertNodeType("Statement")
-        },
-        await: {
-          default: false
-        }
-      }
-    });
-    defineType$4("ImportDeclaration", {
-      builder: ["specifiers", "source", "attributes"],
-      visitor: ["specifiers", "source", "attributes"],
-      aliases: ["Statement", "Declaration", "ImportOrExportDeclaration"],
-      fields: {
-        ...importAttributes,
-        module: {
-          optional: true,
-          validate: assertValueType("boolean")
-        },
-        phase: {
-          default: null,
-          validate: assertOneOf("source", "defer")
-        },
-        specifiers: validateArrayOfType("ImportSpecifier", "ImportDefaultSpecifier", "ImportNamespaceSpecifier"),
-        source: {
-          validate: assertNodeType("StringLiteral")
-        },
-        importKind: {
-          validate: assertOneOf("type", "typeof", "value"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ImportDefaultSpecifier", {
-      visitor: ["local"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        local: {
-          validate: assertNodeType("Identifier")
-        }
-      }
-    });
-    defineType$4("ImportNamespaceSpecifier", {
-      visitor: ["local"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        local: {
-          validate: assertNodeType("Identifier")
-        }
-      }
-    });
-    defineType$4("ImportSpecifier", {
-      visitor: ["imported", "local"],
-      builder: ["local", "imported"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        local: {
-          validate: assertNodeType("Identifier")
-        },
-        imported: {
-          validate: assertNodeType("Identifier", "StringLiteral")
-        },
-        importKind: {
-          validate: assertOneOf("type", "typeof", "value"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("MetaProperty", {
-      visitor: ["meta", "property"],
-      aliases: ["Expression"],
-      fields: {
-        meta: {
-          validate: chain(assertNodeType("Identifier"), combine(function(node2, key, val) {
-            let property;
-            switch (val.name) {
-              case "function":
-                property = "sent";
-                break;
-              case "new":
-                property = "target";
-                break;
-              case "import":
-                property = "meta";
-                break;
-            }
-            if (!is("Identifier", node2.property, {
-              name: property
-            })) {
-              throw new TypeError("Unrecognised MetaProperty");
-            }
-          }, {
-            oneOfNodeTypes: ["Identifier"]
-          }))
-        },
-        property: {
-          validate: assertNodeType("Identifier")
-        }
-      }
-    });
-    classMethodOrPropertyCommon = () => ({
-      abstract: {
-        validate: assertValueType("boolean"),
-        default: false,
-        optional: true
-      },
-      accessibility: {
-        validate: assertOneOf("public", "private", "protected"),
-        optional: true
-      },
-      static: {
-        default: false
-      },
-      override: {
-        optional: true,
-        validate: assertValueType("boolean"),
-        default: false
-      },
-      computed: {
-        default: false
-      },
-      optional: {
-        validate: assertValueType("boolean"),
-        optional: true
-      },
-      key: {
-        validate: chain((function() {
-          const normal = assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral");
-          const computed = assertNodeType("Expression", "PrivateName");
-          return function(node2, key, val) {
-            const validator = node2.computed ? computed : normal;
-            validator(node2, key, val);
-          };
-        })(), assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "Expression", "PrivateName"))
-      }
-    });
-    classMethodOrDeclareMethodCommon = (allowDecorators = true) => ({
-      ...functionCommon(),
-      ...classMethodOrPropertyCommon(),
-      params: validateArrayOfType("FunctionParameter", "TSParameterProperty"),
-      kind: {
-        validate: assertOneOf("get", "set", "method", "constructor"),
-        default: "method"
-      },
-      access: {
-        validate: chain(assertValueType("string"), assertOneOf("public", "private", "protected")),
-        optional: true
-      },
-      ...allowDecorators ? {
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        }
-      } : {}
-    });
-    defineType$4("ClassMethod", {
-      aliases: ["Function", "Scopable", "BlockParent", "FunctionParent", "Method"],
-      builder: ["kind", "key", "params", "body", "computed", "static", "generator", "async"],
-      visitor: ["decorators", "key", "typeParameters", "params", "returnType", "body"],
-      ...classMethodOrPropertyUnionShapeCommon(),
-      fields: {
-        ...classMethodOrDeclareMethodCommon(),
-        ...functionTypeAnnotationCommon(),
-        body: {
-          validate: assertNodeType("BlockStatement")
-        }
-      }
-    });
-    defineType$4("ObjectPattern", {
-      visitor: ["decorators", "properties", "typeAnnotation"],
-      builder: ["properties"],
-      aliases: ["FunctionParameter", "Pattern", "PatternLike", "LVal"],
-      fields: {
-        ...patternLikeCommon(),
-        properties: validateArrayOfType("RestElement", "ObjectProperty")
-      }
-    });
-    defineType$4("SpreadElement", {
-      visitor: ["argument"],
-      aliases: ["UnaryLike"],
-      deprecatedAlias: "SpreadProperty",
-      fields: {
-        argument: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("Super");
-    defineType$4("TaggedTemplateExpression", {
-      visitor: ["tag", "typeArguments", "quasi"],
-      builder: ["tag", "quasi"],
-      aliases: ["Expression"],
-      fields: {
-        tag: {
-          validate: assertNodeType("Expression")
-        },
-        quasi: {
-          validate: assertNodeType("TemplateLiteral")
-        },
-        typeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("TemplateElement", {
-      builder: ["value", "tail"],
-      fields: {
-        value: {
-          validate: chain(assertShape({
-            raw: {
-              validate: assertValueType("string")
-            },
-            cooked: {
-              validate: assertValueType("string"),
-              optional: true
-            }
-          }), function templateElementCookedValidator(node2) {
-            const raw = node2.value.raw;
-            let unterminatedCalled = false;
-            const error62 = () => {
-              throw new Error("Internal @babel/types error.");
-            };
-            const {
-              str,
-              firstInvalidLoc
-            } = readStringContents2("template", raw, 0, 0, 0, {
-              unterminated() {
-                unterminatedCalled = true;
-              },
-              strictNumericEscape: error62,
-              invalidEscapeSequence: error62,
-              numericSeparatorInEscapeSequence: error62,
-              unexpectedNumericSeparator: error62,
-              invalidDigit: error62,
-              invalidCodePoint: error62
-            });
-            if (!unterminatedCalled) throw new Error("Invalid raw");
-            node2.value.cooked = firstInvalidLoc ? null : str;
-          })
-        },
-        tail: {
-          default: false
-        }
-      }
-    });
-    defineType$4("TemplateLiteral", {
-      visitor: ["quasis", "expressions"],
-      aliases: ["Expression", "Literal"],
-      fields: {
-        quasis: validateArrayOfType("TemplateElement"),
-        expressions: {
-          validate: chain(assertValueType("array"), assertEach(assertNodeType("Expression", "TSType")), function(node2, key, val) {
-            if (node2.quasis.length !== val.length + 1) {
-              throw new TypeError(`Number of ${node2.type} quasis should be exactly one more than the number of expressions.
-Expected ${val.length + 1} quasis but got ${node2.quasis.length}`);
-            }
-          })
-        }
-      }
-    });
-    defineType$4("YieldExpression", {
-      builder: ["argument", "delegate"],
-      visitor: ["argument"],
-      aliases: ["Expression", "Terminatorless"],
-      fields: {
-        delegate: {
-          validate: chain(assertValueType("boolean"), combine(function(node2, key, val) {
-            if (val && !node2.argument) {
-              throw new TypeError("Property delegate of YieldExpression cannot be true if there is no argument");
-            }
-          }, {
-            type: "boolean"
-          })),
-          default: false
-        },
-        argument: {
-          optional: true,
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("AwaitExpression", {
-      builder: ["argument"],
-      visitor: ["argument"],
-      aliases: ["Expression", "Terminatorless"],
-      fields: {
-        argument: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$4("ImportExpression", {
-      visitor: ["source", "options"],
-      aliases: ["Expression"],
-      fields: {
-        phase: {
-          default: null,
-          validate: assertOneOf("source", "defer")
-        },
-        source: {
-          validate: assertNodeType("Expression")
-        },
-        options: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("Import");
-    defineType$4("BigIntLiteral", {
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("bigint")
-        }
-      },
-      aliases: ["Expression", "Pureish", "Literal", "Immutable"]
-    });
-    defineType$4("ExportNamespaceSpecifier", {
-      visitor: ["exported"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        exported: {
-          validate: assertNodeType("Identifier", "StringLiteral")
-        }
-      }
-    });
-    defineType$4("OptionalMemberExpression", {
-      builder: ["object", "property", "computed", "optional"],
-      visitor: ["object", "property"],
-      aliases: ["Expression"],
-      ...memberExpressionUnionShapeCommon,
-      fields: {
-        object: {
-          validate: assertNodeType("Expression")
-        },
-        property: {
-          validate: (function() {
-            const normal = assertNodeType("Identifier", "PrivateName");
-            const computed = assertNodeType("Expression");
-            return combine(function(node2, key, val) {
-              const validator = node2.computed ? computed : normal;
-              validator(node2, key, val);
-            }, {
-              oneOfNodeTypes: ["Expression", "PrivateName"]
-            });
-          })()
-        },
-        computed: {
-          default: false
-        },
-        optional: {
-          validate: chain(assertValueType("boolean"), assertOptionalChainStart())
-        }
-      }
-    });
-    defineType$4("OptionalCallExpression", {
-      visitor: ["callee", "typeArguments", "arguments"],
-      builder: ["callee", "arguments", "optional"],
-      aliases: ["Expression"],
-      fields: {
-        callee: {
-          validate: assertNodeType("Expression")
-        },
-        arguments: validateArrayOfType("Expression", "SpreadElement", "ArgumentPlaceholder"),
-        optional: {
-          validate: chain(assertValueType("boolean"), assertOptionalChainStart())
-        },
-        typeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ClassProperty", {
-      visitor: ["decorators", "variance", "key", "typeAnnotation", "value"],
-      builder: ["key", "value", "typeAnnotation", "decorators", "computed", "static"],
-      aliases: ["Property"],
-      ...classMethodOrPropertyUnionShapeCommon(),
-      fields: {
-        ...classMethodOrPropertyCommon(),
-        value: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        definite: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        typeAnnotation: {
-          validate: assertNodeType("TypeAnnotation", "TSTypeAnnotation"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        readonly: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        declare: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        variance: {
-          validate: assertNodeType("Variance"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ClassPrivateProperty", {
-      visitor: ["decorators", "variance", "key", "typeAnnotation", "value"],
-      builder: ["key", "value", "decorators", "static"],
-      aliases: ["Property", "Private"],
-      fields: {
-        key: {
-          validate: assertNodeType("PrivateName")
-        },
-        value: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        typeAnnotation: {
-          validate: assertNodeType("TypeAnnotation", "TSTypeAnnotation"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        static: {
-          validate: assertValueType("boolean"),
-          default: false
-        },
-        readonly: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        optional: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        definite: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        variance: {
-          validate: assertNodeType("Variance"),
-          optional: true
-        }
-      }
-    });
-    defineType$4("ClassPrivateMethod", {
-      builder: ["kind", "key", "params", "body", "static"],
-      visitor: ["decorators", "key", "typeParameters", "params", "returnType", "body"],
-      aliases: ["Function", "Scopable", "BlockParent", "FunctionParent", "Method", "Private"],
-      fields: {
-        ...classMethodOrDeclareMethodCommon(),
-        ...functionTypeAnnotationCommon(),
-        kind: {
-          validate: assertOneOf("get", "set", "method"),
-          default: "method"
-        },
-        key: {
-          validate: assertNodeType("PrivateName")
-        },
-        body: {
-          validate: assertNodeType("BlockStatement")
-        }
-      }
-    });
-    defineType$4("PrivateName", {
-      visitor: ["id"],
-      aliases: ["Private"],
-      fields: {
-        id: {
-          validate: assertNodeType("Identifier")
-        }
-      }
-    });
-    defineType$4("StaticBlock", {
-      visitor: ["body"],
-      fields: {
-        body: validateArrayOfType("Statement")
-      },
-      aliases: ["Scopable", "BlockParent", "FunctionParent"]
-    });
-    defineType$4("ImportAttribute", {
-      visitor: ["key", "value"],
-      fields: {
-        key: {
-          validate: assertNodeType("Identifier", "StringLiteral")
-        },
-        value: {
-          validate: assertNodeType("StringLiteral")
-        }
-      }
-    });
-    defineType$3 = defineAliasedType("Flow");
-    defineInterfaceishType = (name) => {
-      const isDeclareClass = name === "DeclareClass";
-      defineType$3(name, {
-        builder: ["id", "typeParameters", "extends", "body"],
-        visitor: ["id", "typeParameters", "extends", ...isDeclareClass ? ["mixins", "implements"] : [], "body"],
-        aliases: ["FlowDeclaration", "Statement", "Declaration"],
-        fields: {
-          id: validateType("Identifier"),
-          typeParameters: validateOptionalType("TypeParameterDeclaration"),
-          extends: validateOptional(arrayOfType("InterfaceExtends")),
-          ...isDeclareClass ? {
-            mixins: validateOptional(arrayOfType("InterfaceExtends")),
-            implements: validateOptional(arrayOfType("ClassImplements"))
-          } : {},
-          body: validateType("ObjectTypeAnnotation")
-        }
-      });
-    };
-    defineType$3("AnyTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("ArrayTypeAnnotation", {
-      visitor: ["elementType"],
-      aliases: ["FlowType"],
-      fields: {
-        elementType: validateType("FlowType")
-      }
-    });
-    defineType$3("BooleanTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("BooleanLiteralTypeAnnotation", {
-      builder: ["value"],
-      aliases: ["FlowType"],
-      fields: {
-        value: validate$2(assertValueType("boolean"))
-      }
-    });
-    defineType$3("NullLiteralTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("ClassImplements", {
-      visitor: ["id", "typeParameters"],
-      fields: {
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TypeParameterInstantiation")
-      }
-    });
-    defineInterfaceishType("DeclareClass");
-    defineType$3("DeclareFunction", {
-      builder: ["id"],
-      visitor: ["id", "predicate"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier"),
-        predicate: validateOptionalType("FlowPredicate")
-      }
-    });
-    defineInterfaceishType("DeclareInterface");
-    defineType$3("DeclareModule", {
-      builder: ["id", "body", "kind"],
-      visitor: ["id", "body"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier", "StringLiteral"),
-        body: validateType("BlockStatement"),
-        kind: validateOptional(assertOneOf("CommonJS", "ES"))
-      }
-    });
-    defineType$3("DeclareModuleExports", {
-      visitor: ["typeAnnotation"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        typeAnnotation: validateType("TypeAnnotation")
-      }
-    });
-    defineType$3("DeclareTypeAlias", {
-      visitor: ["id", "typeParameters", "right"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TypeParameterDeclaration"),
-        right: validateType("FlowType")
-      }
-    });
-    defineType$3("DeclareOpaqueType", {
-      visitor: ["id", "typeParameters", "supertype"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TypeParameterDeclaration"),
-        supertype: validateOptionalType("FlowType"),
-        impltype: validateOptionalType("FlowType")
-      }
-    });
-    defineType$3("DeclareVariable", {
-      visitor: ["id"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier")
-      }
-    });
-    defineType$3("DeclareExportDeclaration", {
-      visitor: ["declaration", "specifiers", "source", "attributes"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        declaration: validateOptionalType("Flow"),
-        specifiers: validateOptional(arrayOfType("ExportSpecifier", "ExportNamespaceSpecifier")),
-        source: validateOptionalType("StringLiteral"),
-        default: validateOptional(assertValueType("boolean")),
-        ...importAttributes
-      }
-    });
-    defineType$3("DeclareExportAllDeclaration", {
-      visitor: ["source", "attributes"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        source: validateType("StringLiteral"),
-        exportKind: validateOptional(assertOneOf("type", "value")),
-        ...importAttributes
-      }
-    });
-    defineType$3("DeclaredPredicate", {
-      visitor: ["value"],
-      aliases: ["FlowPredicate"],
-      fields: {
-        value: validateType("Expression")
-      }
-    });
-    defineType$3("ExistsTypeAnnotation", {
-      aliases: ["FlowType"]
-    });
-    defineType$3("FunctionTypeAnnotation", {
-      builder: ["typeParameters", "params", "rest", "returnType"],
-      visitor: ["typeParameters", "this", "params", "rest", "returnType"],
-      aliases: ["FlowType"],
-      fields: {
-        typeParameters: validateOptionalType("TypeParameterDeclaration"),
-        params: validateArrayOfType("FunctionTypeParam"),
-        rest: validateOptionalType("FunctionTypeParam"),
-        this: validateOptionalType("FunctionTypeParam"),
-        returnType: validateType("FlowType")
-      }
-    });
-    defineType$3("FunctionTypeParam", {
-      visitor: ["name", "typeAnnotation"],
-      fields: {
-        name: validateOptionalType("Identifier"),
-        typeAnnotation: validateType("FlowType"),
-        optional: validateOptional(assertValueType("boolean"))
-      }
-    });
-    defineType$3("GenericTypeAnnotation", {
-      visitor: ["id", "typeParameters"],
-      aliases: ["FlowType"],
-      fields: {
-        id: validateType("Identifier", "QualifiedTypeIdentifier"),
-        typeParameters: validateOptionalType("TypeParameterInstantiation")
-      }
-    });
-    defineType$3("InferredPredicate", {
-      aliases: ["FlowPredicate"]
-    });
-    defineType$3("InterfaceExtends", {
-      visitor: ["id", "typeParameters"],
-      fields: {
-        id: validateType("Identifier", "QualifiedTypeIdentifier"),
-        typeParameters: validateOptionalType("TypeParameterInstantiation")
-      }
-    });
-    defineInterfaceishType("InterfaceDeclaration");
-    defineType$3("InterfaceTypeAnnotation", {
-      visitor: ["extends", "body"],
-      aliases: ["FlowType"],
-      fields: {
-        extends: validateOptional(arrayOfType("InterfaceExtends")),
-        body: validateType("ObjectTypeAnnotation")
-      }
-    });
-    defineType$3("IntersectionTypeAnnotation", {
-      visitor: ["types"],
-      aliases: ["FlowType"],
-      fields: {
-        types: validate$2(arrayOfType("FlowType"))
-      }
-    });
-    defineType$3("MixedTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("EmptyTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("NullableTypeAnnotation", {
-      visitor: ["typeAnnotation"],
-      aliases: ["FlowType"],
-      fields: {
-        typeAnnotation: validateType("FlowType")
-      }
-    });
-    defineType$3("NumberLiteralTypeAnnotation", {
-      builder: ["value"],
-      aliases: ["FlowType"],
-      fields: {
-        value: validate$2(assertValueType("number"))
-      }
-    });
-    defineType$3("BigIntLiteralTypeAnnotation", {
-      builder: ["value"],
-      aliases: ["FlowType"],
-      fields: {
-        value: validate$2(assertValueType("bigint"))
-      }
-    });
-    defineType$3("NumberTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("ObjectTypeAnnotation", {
-      visitor: ["properties", "indexers", "callProperties", "internalSlots"],
-      aliases: ["FlowType"],
-      builder: ["properties", "indexers", "callProperties", "internalSlots", "exact"],
-      fields: {
-        properties: validate$2(arrayOfType("ObjectTypeProperty", "ObjectTypeSpreadProperty")),
-        indexers: {
-          validate: arrayOfType("ObjectTypeIndexer"),
-          optional: false,
-          default: []
-        },
-        callProperties: {
-          validate: arrayOfType("ObjectTypeCallProperty"),
-          optional: false,
-          default: []
-        },
-        internalSlots: {
-          validate: arrayOfType("ObjectTypeInternalSlot"),
-          optional: false,
-          default: []
-        },
-        exact: {
-          validate: assertValueType("boolean"),
-          default: false
-        },
-        inexact: validateOptional(assertValueType("boolean"))
-      }
-    });
-    defineType$3("ObjectTypeInternalSlot", {
-      visitor: ["id", "value"],
-      builder: ["id", "value", "optional", "static", "method"],
-      aliases: ["UserWhitespacable"],
-      fields: {
-        id: validateType("Identifier"),
-        value: validateType("FlowType"),
-        optional: validate$2(assertValueType("boolean")),
-        static: validate$2(assertValueType("boolean")),
-        method: validate$2(assertValueType("boolean"))
-      }
-    });
-    defineType$3("ObjectTypeCallProperty", {
-      visitor: ["value"],
-      aliases: ["UserWhitespacable"],
-      fields: {
-        value: validateType("FlowType"),
-        static: validateDefault(assertValueType("boolean"), false)
-      }
-    });
-    defineType$3("ObjectTypeIndexer", {
-      visitor: ["variance", "id", "key", "value"],
-      builder: ["id", "key", "value", "variance"],
-      aliases: ["UserWhitespacable"],
-      fields: {
-        id: validateOptionalType("Identifier"),
-        key: validateType("FlowType"),
-        value: validateType("FlowType"),
-        static: validateDefault(assertValueType("boolean"), false),
-        variance: validateOptionalType("Variance")
-      }
-    });
-    defineType$3("ObjectTypeProperty", {
-      visitor: ["key", "value", "variance"],
-      aliases: ["UserWhitespacable"],
-      fields: {
-        key: validateType("Identifier", "StringLiteral", "NumericLiteral"),
-        value: validateType("FlowType"),
-        kind: {
-          validate: assertOneOf("init", "get", "set"),
-          default: "init",
-          optional: false
-        },
-        static: validateDefault(assertValueType("boolean"), false),
-        proto: validateDefault(assertValueType("boolean"), false),
-        optional: validateDefault(assertValueType("boolean"), false),
-        variance: validateOptionalType("Variance"),
-        method: validateDefault(assertValueType("boolean"), false)
-      }
-    });
-    defineType$3("ObjectTypeSpreadProperty", {
-      visitor: ["argument"],
-      aliases: ["UserWhitespacable"],
-      fields: {
-        argument: validateType("FlowType")
-      }
-    });
-    defineType$3("OpaqueType", {
-      visitor: ["id", "typeParameters", "supertype", "impltype"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TypeParameterDeclaration"),
-        supertype: validateOptionalType("FlowType"),
-        impltype: validateType("FlowType")
-      }
-    });
-    defineType$3("QualifiedTypeIdentifier", {
-      visitor: ["qualification", "id"],
-      builder: ["id", "qualification"],
-      fields: {
-        id: validateType("Identifier"),
-        qualification: validateType("Identifier", "QualifiedTypeIdentifier")
-      }
-    });
-    defineType$3("StringLiteralTypeAnnotation", {
-      builder: ["value"],
-      aliases: ["FlowType"],
-      fields: {
-        value: validate$2(assertValueType("string"))
-      }
-    });
-    defineType$3("StringTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("SymbolTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("ThisTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("TupleTypeAnnotation", {
-      visitor: ["types"],
-      aliases: ["FlowType"],
-      fields: {
-        types: validate$2(arrayOfType("FlowType"))
-      }
-    });
-    defineType$3("TypeofTypeAnnotation", {
-      visitor: ["argument"],
-      aliases: ["FlowType"],
-      fields: {
-        argument: validateType("FlowType", "Identifier")
-      }
-    });
-    defineType$3("TypeAlias", {
-      visitor: ["id", "typeParameters", "right"],
-      aliases: ["FlowDeclaration", "Statement", "Declaration"],
-      fields: {
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TypeParameterDeclaration"),
-        right: validateType("FlowType")
-      }
-    });
-    defineType$3("TypeAnnotation", {
-      visitor: ["typeAnnotation"],
-      fields: {
-        typeAnnotation: validateType("FlowType", "Identifier")
-      }
-    });
-    defineType$3("TypeCastExpression", {
-      visitor: ["expression", "typeAnnotation"],
-      aliases: ["ExpressionWrapper", "Expression"],
-      fields: {
-        expression: validateType("Expression"),
-        typeAnnotation: validateType("TypeAnnotation")
-      }
-    });
-    defineType$3("TypeParameter", {
-      builder: ["name", "bound", "default", "variance"],
-      visitor: ["bound", "default", "variance"],
-      fields: {
-        name: validate$2(assertValueType("string")),
-        bound: validateOptionalType("TypeAnnotation"),
-        default: validateOptionalType("FlowType"),
-        variance: validateOptionalType("Variance")
-      }
-    });
-    defineType$3("TypeParameterDeclaration", {
-      visitor: ["params"],
-      fields: {
-        params: validate$2(arrayOfType("TypeParameter"))
-      }
-    });
-    defineType$3("TypeParameterInstantiation", {
-      visitor: ["params"],
-      fields: {
-        params: validate$2(arrayOfType("FlowType"))
-      }
-    });
-    defineType$3("UnionTypeAnnotation", {
-      visitor: ["types"],
-      aliases: ["FlowType"],
-      fields: {
-        types: validate$2(arrayOfType("FlowType"))
-      }
-    });
-    defineType$3("Variance", {
-      builder: ["kind"],
-      fields: {
-        kind: validate$2(assertOneOf("minus", "plus"))
-      }
-    });
-    defineType$3("VoidTypeAnnotation", {
-      aliases: ["FlowType", "FlowBaseAnnotation"]
-    });
-    defineType$3("EnumDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "body"],
-      fields: {
-        id: validateType("Identifier"),
-        body: validateType("EnumBooleanBody", "EnumNumberBody", "EnumStringBody", "EnumSymbolBody")
-      }
-    });
-    enumBodyBase = {
-      explicitType: validateDefault(assertValueType("boolean"), false),
-      hasUnknownMembers: validateDefault(assertValueType("boolean"), false)
-    };
-    defineType$3("EnumBooleanBody", {
-      aliases: ["EnumBody"],
-      visitor: ["members"],
-      fields: {
-        ...enumBodyBase,
-        members: validateArrayOfType("EnumBooleanMember")
-      }
-    });
-    defineType$3("EnumNumberBody", {
-      aliases: ["EnumBody"],
-      visitor: ["members"],
-      fields: {
-        ...enumBodyBase,
-        members: validateArrayOfType("EnumNumberMember")
-      }
-    });
-    defineType$3("EnumStringBody", {
-      aliases: ["EnumBody"],
-      visitor: ["members"],
-      fields: {
-        ...enumBodyBase,
-        members: validateArrayOfType("EnumStringMember", "EnumDefaultedMember")
-      }
-    });
-    defineType$3("EnumSymbolBody", {
-      aliases: ["EnumBody"],
-      visitor: ["members"],
-      fields: {
-        members: validateArrayOfType("EnumDefaultedMember"),
-        hasUnknownMembers: validateDefault(assertValueType("boolean"), false)
-      }
-    });
-    defineType$3("EnumBooleanMember", {
-      aliases: ["EnumMember"],
-      visitor: ["id", "init"],
-      fields: {
-        id: validateType("Identifier"),
-        init: validateType("BooleanLiteral")
-      }
-    });
-    defineType$3("EnumNumberMember", {
-      aliases: ["EnumMember"],
-      visitor: ["id", "init"],
-      fields: {
-        id: validateType("Identifier"),
-        init: validateType("NumericLiteral")
-      }
-    });
-    defineType$3("EnumStringMember", {
-      aliases: ["EnumMember"],
-      visitor: ["id", "init"],
-      fields: {
-        id: validateType("Identifier"),
-        init: validateType("StringLiteral")
-      }
-    });
-    defineType$3("EnumDefaultedMember", {
-      aliases: ["EnumMember"],
-      visitor: ["id"],
-      fields: {
-        id: validateType("Identifier")
-      }
-    });
-    defineType$3("IndexedAccessType", {
-      visitor: ["objectType", "indexType"],
-      aliases: ["FlowType"],
-      fields: {
-        objectType: validateType("FlowType"),
-        indexType: validateType("FlowType")
-      }
-    });
-    defineType$3("OptionalIndexedAccessType", {
-      visitor: ["objectType", "indexType"],
-      aliases: ["FlowType"],
-      fields: {
-        objectType: validateType("FlowType"),
-        indexType: validateType("FlowType"),
-        optional: validateDefault(assertValueType("boolean"), false)
-      }
-    });
-    defineType$2 = defineAliasedType("JSX");
-    defineType$2("JSXAttribute", {
-      visitor: ["name", "value"],
-      aliases: ["Immutable"],
-      fields: {
-        name: {
-          validate: assertNodeType("JSXIdentifier", "JSXNamespacedName")
-        },
-        value: {
-          optional: true,
-          validate: assertNodeType("JSXElement", "JSXFragment", "StringLiteral", "JSXExpressionContainer")
-        }
-      }
-    });
-    defineType$2("JSXClosingElement", {
-      visitor: ["name"],
-      aliases: ["Immutable"],
-      fields: {
-        name: {
-          validate: assertNodeType("JSXIdentifier", "JSXMemberExpression", "JSXNamespacedName")
-        }
-      }
-    });
-    defineType$2("JSXElement", {
-      builder: ["openingElement", "closingElement", "children"],
-      visitor: ["openingElement", "children", "closingElement"],
-      aliases: ["Immutable", "Expression"],
-      fields: {
-        openingElement: {
-          validate: assertNodeType("JSXOpeningElement")
-        },
-        closingElement: {
-          optional: true,
-          validate: assertNodeType("JSXClosingElement")
-        },
-        children: validateArrayOfType("JSXText", "JSXExpressionContainer", "JSXSpreadChild", "JSXElement", "JSXFragment")
-      }
-    });
-    defineType$2("JSXEmptyExpression", {});
-    defineType$2("JSXExpressionContainer", {
-      visitor: ["expression"],
-      aliases: ["Immutable"],
-      fields: {
-        expression: {
-          validate: assertNodeType("Expression", "JSXEmptyExpression")
-        }
-      }
-    });
-    defineType$2("JSXSpreadChild", {
-      visitor: ["expression"],
-      aliases: ["Immutable"],
-      fields: {
-        expression: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$2("JSXIdentifier", {
-      builder: ["name"],
-      fields: {
-        name: {
-          validate: assertValueType("string")
-        }
-      }
-    });
-    defineType$2("JSXMemberExpression", {
-      visitor: ["object", "property"],
-      fields: {
-        object: {
-          validate: assertNodeType("JSXMemberExpression", "JSXIdentifier")
-        },
-        property: {
-          validate: assertNodeType("JSXIdentifier")
-        }
-      }
-    });
-    defineType$2("JSXNamespacedName", {
-      visitor: ["namespace", "name"],
-      fields: {
-        namespace: {
-          validate: assertNodeType("JSXIdentifier")
-        },
-        name: {
-          validate: assertNodeType("JSXIdentifier")
-        }
-      }
-    });
-    defineType$2("JSXOpeningElement", {
-      builder: ["name", "attributes", "selfClosing"],
-      visitor: ["name", "typeArguments", "attributes"],
-      aliases: ["Immutable"],
-      fields: {
-        name: {
-          validate: assertNodeType("JSXIdentifier", "JSXMemberExpression", "JSXNamespacedName")
-        },
-        selfClosing: {
-          default: false
-        },
-        attributes: validateArrayOfType("JSXAttribute", "JSXSpreadAttribute"),
-        typeArguments: {
-          validate: assertNodeType("TypeParameterInstantiation", "TSTypeParameterInstantiation"),
-          optional: true
-        }
-      }
-    });
-    defineType$2("JSXSpreadAttribute", {
-      visitor: ["argument"],
-      fields: {
-        argument: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$2("JSXText", {
-      aliases: ["Immutable"],
-      builder: ["value"],
-      fields: {
-        value: {
-          validate: assertValueType("string")
-        }
-      }
-    });
-    defineType$2("JSXFragment", {
-      builder: ["openingFragment", "closingFragment", "children"],
-      visitor: ["openingFragment", "children", "closingFragment"],
-      aliases: ["Immutable", "Expression"],
-      fields: {
-        openingFragment: {
-          validate: assertNodeType("JSXOpeningFragment")
-        },
-        closingFragment: {
-          validate: assertNodeType("JSXClosingFragment")
-        },
-        children: validateArrayOfType("JSXText", "JSXExpressionContainer", "JSXSpreadChild", "JSXElement", "JSXFragment")
-      }
-    });
-    defineType$2("JSXOpeningFragment", {
-      aliases: ["Immutable"]
-    });
-    defineType$2("JSXClosingFragment", {
-      aliases: ["Immutable"]
-    });
-    PLACEHOLDERS = ["Identifier", "StringLiteral", "Expression", "Statement", "Declaration", "BlockStatement", "ClassBody", "Pattern"];
-    PLACEHOLDERS_ALIAS = {
-      Declaration: ["Statement"],
-      Pattern: ["PatternLike", "LVal"]
-    };
-    for (const type of PLACEHOLDERS) {
-      const alias2 = ALIAS_KEYS[type];
-      if (alias2?.length) PLACEHOLDERS_ALIAS[type] = alias2;
-    }
-    PLACEHOLDERS_FLIPPED_ALIAS = {};
-    Object.keys(PLACEHOLDERS_ALIAS).forEach((type) => {
-      PLACEHOLDERS_ALIAS[type].forEach((alias2) => {
-        if (!Object.hasOwn(PLACEHOLDERS_FLIPPED_ALIAS, alias2)) {
-          PLACEHOLDERS_FLIPPED_ALIAS[alias2] = [];
-        }
-        PLACEHOLDERS_FLIPPED_ALIAS[alias2].push(type);
-      });
-    });
-    defineType$1 = defineAliasedType("Miscellaneous");
-    defineType$1("Placeholder", {
-      visitor: [],
-      builder: ["expectedNode", "name"],
-      fields: {
-        name: {
-          validate: assertNodeType("Identifier")
-        },
-        expectedNode: {
-          validate: assertOneOf(...PLACEHOLDERS)
-        },
-        ...patternLikeCommon()
-      }
-    });
-    defineType$1("V8IntrinsicIdentifier", {
-      builder: ["name"],
-      fields: {
-        name: {
-          validate: assertValueType("string")
-        }
-      }
-    });
-    defineType$5("ArgumentPlaceholder", {});
-    defineType$5("BindExpression", {
-      visitor: ["object", "callee"],
-      aliases: ["Expression"],
-      fields: {
-        object: {
-          validate: assertNodeOrValueType("null", "Expression")
-        },
-        callee: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$5("ClassAccessorProperty", {
-      visitor: ["decorators", "key", "typeAnnotation", "value"],
-      builder: ["key", "value", "typeAnnotation", "decorators", "computed", "static"],
-      aliases: ["Property", "Accessor"],
-      ...classMethodOrPropertyUnionShapeCommon(true),
-      fields: {
-        ...classMethodOrPropertyCommon(),
-        key: {
-          validate: chain((function() {
-            const normal = assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "PrivateName");
-            const computed = assertNodeType("Expression");
-            return function(node2, key, val) {
-              const validator = node2.computed ? computed : normal;
-              validator(node2, key, val);
-            };
-          })(), assertNodeType("Identifier", "StringLiteral", "NumericLiteral", "BigIntLiteral", "Expression", "PrivateName"))
-        },
-        value: {
-          validate: assertNodeType("Expression"),
-          optional: true
-        },
-        definite: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        typeAnnotation: {
-          validate: assertNodeType("TypeAnnotation", "TSTypeAnnotation"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        },
-        readonly: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        declare: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        variance: {
-          validate: assertNodeType("Variance"),
-          optional: true
-        }
-      }
-    });
-    defineType$5("Decorator", {
-      visitor: ["expression"],
-      fields: {
-        expression: {
-          validate: assertNodeType("Expression")
-        }
-      }
-    });
-    defineType$5("DoExpression", {
-      visitor: ["body"],
-      builder: ["body", "async"],
-      aliases: ["Expression"],
-      fields: {
-        body: {
-          validate: assertNodeType("BlockStatement")
-        },
-        async: {
-          validate: assertValueType("boolean"),
-          default: false
-        }
-      }
-    });
-    defineType$5("ExportDefaultSpecifier", {
-      visitor: ["exported"],
-      aliases: ["ModuleSpecifier"],
-      fields: {
-        exported: {
-          validate: assertNodeType("Identifier")
-        }
-      }
-    });
-    defineType$5("ModuleExpression", {
-      visitor: ["body"],
-      fields: {
-        body: {
-          validate: assertNodeType("Program")
-        }
-      },
-      aliases: ["Expression"]
-    });
-    defineType$5("TopicReference", {
-      aliases: ["Expression"]
-    });
-    defineType$5("VoidPattern", {
-      aliases: ["Pattern", "PatternLike", "FunctionParameter"]
-    });
-    defineType = defineAliasedType("TypeScript");
-    bool = assertValueType("boolean");
-    tSFunctionTypeAnnotationCommon = () => ({
-      returnType: {
-        validate: assertNodeType("TSTypeAnnotation"),
-        optional: true
-      },
-      typeParameters: {
-        validate: assertNodeType("TSTypeParameterDeclaration"),
-        optional: true
-      }
-    });
-    defineType("TSParameterProperty", {
-      aliases: [],
-      visitor: ["parameter"],
-      fields: {
-        accessibility: {
-          validate: assertOneOf("public", "private", "protected"),
-          optional: true
-        },
-        readonly: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        parameter: {
-          validate: assertNodeType("Identifier", "AssignmentPattern")
-        },
-        override: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        decorators: {
-          validate: arrayOfType("Decorator"),
-          optional: true
-        }
-      }
-    });
-    defineType("TSDeclareFunction", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "typeParameters", "params", "returnType"],
-      fields: {
-        ...functionDeclarationCommon(),
-        ...tSFunctionTypeAnnotationCommon()
-      }
-    });
-    defineType("TSDeclareMethod", {
-      visitor: ["key", "typeParameters", "params", "returnType"],
-      ...classMethodOrPropertyUnionShapeCommon(true),
-      fields: {
-        ...classMethodOrDeclareMethodCommon(false),
-        ...tSFunctionTypeAnnotationCommon()
-      }
-    });
-    defineType("TSQualifiedName", {
-      aliases: ["TSEntityName"],
-      visitor: ["left", "right"],
-      fields: {
-        left: validateType("TSEntityName"),
-        right: validateType("Identifier")
-      }
-    });
-    signatureDeclarationCommon = () => ({
-      typeParameters: validateOptionalType("TSTypeParameterDeclaration"),
-      params: validateArrayOfType("ArrayPattern", "Identifier", "ObjectPattern", "RestElement"),
-      returnType: validateOptionalType("TSTypeAnnotation")
-    });
-    callConstructSignatureDeclaration = {
-      aliases: ["TSTypeElement"],
-      visitor: ["typeParameters", "params", "returnType"],
-      fields: signatureDeclarationCommon()
-    };
-    defineType("TSCallSignatureDeclaration", callConstructSignatureDeclaration);
-    defineType("TSConstructSignatureDeclaration", callConstructSignatureDeclaration);
-    namedTypeElementCommon = () => ({
-      key: validateType("Expression"),
-      computed: {
-        default: false
-      },
-      optional: validateOptional(bool)
-    });
-    defineType("TSPropertySignature", {
-      aliases: ["TSTypeElement"],
-      visitor: ["key", "typeAnnotation"],
-      fields: {
-        ...namedTypeElementCommon(),
-        readonly: validateOptional(bool),
-        typeAnnotation: validateOptionalType("TSTypeAnnotation"),
-        kind: {
-          optional: true,
-          validate: assertOneOf("get", "set")
-        }
-      }
-    });
-    defineType("TSMethodSignature", {
-      aliases: ["TSTypeElement"],
-      visitor: ["key", "typeParameters", "params", "returnType"],
-      fields: {
-        ...signatureDeclarationCommon(),
-        ...namedTypeElementCommon(),
-        kind: {
-          validate: assertOneOf("method", "get", "set"),
-          default: "method"
-        }
-      }
-    });
-    defineType("TSIndexSignature", {
-      aliases: ["TSTypeElement"],
-      visitor: ["parameters", "typeAnnotation"],
-      fields: {
-        readonly: validateOptional(bool),
-        static: validateOptional(bool),
-        parameters: validateArrayOfType("Identifier"),
-        typeAnnotation: validateOptionalType("TSTypeAnnotation")
-      }
-    });
-    tsKeywordTypes = ["TSAnyKeyword", "TSBooleanKeyword", "TSBigIntKeyword", "TSIntrinsicKeyword", "TSNeverKeyword", "TSNullKeyword", "TSNumberKeyword", "TSObjectKeyword", "TSStringKeyword", "TSSymbolKeyword", "TSUndefinedKeyword", "TSUnknownKeyword", "TSVoidKeyword"];
-    for (const type of tsKeywordTypes) {
-      defineType(type, {
-        aliases: ["TSType", "TSBaseType"],
-        visitor: [],
-        fields: {}
-      });
-    }
-    defineType("TSThisType", {
-      aliases: ["TSType", "TSBaseType"],
-      visitor: [],
-      fields: {}
-    });
-    fnOrCtrBase = {
-      aliases: ["TSType"],
-      visitor: ["typeParameters", "params", "returnType"]
-    };
-    defineType("TSFunctionType", {
-      ...fnOrCtrBase,
-      fields: signatureDeclarationCommon()
-    });
-    defineType("TSConstructorType", {
-      ...fnOrCtrBase,
-      fields: {
-        ...signatureDeclarationCommon(),
-        abstract: validateOptional(bool)
-      }
-    });
-    defineType("TSTypeReference", {
-      aliases: ["TSType"],
-      visitor: ["typeName", "typeArguments"],
-      fields: {
-        typeName: validateType("TSEntityName"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation")
-      }
-    });
-    defineType("TSTypePredicate", {
-      aliases: ["TSType"],
-      visitor: ["parameterName", "typeAnnotation"],
-      builder: ["parameterName", "typeAnnotation", "asserts"],
-      fields: {
-        parameterName: validateType("Identifier", "TSThisType"),
-        typeAnnotation: validateOptionalType("TSTypeAnnotation"),
-        asserts: validateOptional(bool)
-      }
-    });
-    defineType("TSTypeQuery", {
-      aliases: ["TSType"],
-      visitor: ["exprName", "typeArguments"],
-      fields: {
-        exprName: validateType("TSEntityName", "TSImportType"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation")
-      }
-    });
-    defineType("TSTypeLiteral", {
-      aliases: ["TSType"],
-      visitor: ["members"],
-      fields: {
-        members: validateArrayOfType("TSTypeElement")
-      }
-    });
-    defineType("TSArrayType", {
-      aliases: ["TSType"],
-      visitor: ["elementType"],
-      fields: {
-        elementType: validateType("TSType")
-      }
-    });
-    defineType("TSTupleType", {
-      aliases: ["TSType"],
-      visitor: ["elementTypes"],
-      fields: {
-        elementTypes: validateArrayOfType("TSType", "TSNamedTupleMember")
-      }
-    });
-    defineType("TSOptionalType", {
-      aliases: ["TSType"],
-      visitor: ["typeAnnotation"],
-      fields: {
-        typeAnnotation: validateType("TSType")
-      }
-    });
-    defineType("TSRestType", {
-      aliases: ["TSType"],
-      visitor: ["typeAnnotation"],
-      fields: {
-        typeAnnotation: validateType("TSType")
-      }
-    });
-    defineType("TSNamedTupleMember", {
-      aliases: ["TSType"],
-      visitor: ["label", "elementType"],
-      builder: ["label", "elementType", "optional"],
-      fields: {
-        label: validateType("Identifier"),
-        optional: {
-          validate: bool,
-          default: false
-        },
-        elementType: validateType("TSType")
-      }
-    });
-    unionOrIntersection = {
-      aliases: ["TSType"],
-      visitor: ["types"],
-      fields: {
-        types: validateArrayOfType("TSType")
-      }
-    };
-    defineType("TSUnionType", unionOrIntersection);
-    defineType("TSIntersectionType", unionOrIntersection);
-    defineType("TSConditionalType", {
-      aliases: ["TSType"],
-      visitor: ["checkType", "extendsType", "trueType", "falseType"],
-      fields: {
-        checkType: validateType("TSType"),
-        extendsType: validateType("TSType"),
-        trueType: validateType("TSType"),
-        falseType: validateType("TSType")
-      }
-    });
-    defineType("TSInferType", {
-      aliases: ["TSType"],
-      visitor: ["typeParameter"],
-      fields: {
-        typeParameter: validateType("TSTypeParameter")
-      }
-    });
-    defineType("TSParenthesizedType", {
-      aliases: ["TSType"],
-      visitor: ["typeAnnotation"],
-      fields: {
-        typeAnnotation: validateType("TSType")
-      }
-    });
-    defineType("TSTypeOperator", {
-      aliases: ["TSType"],
-      visitor: ["typeAnnotation"],
-      builder: ["typeAnnotation", "operator"],
-      fields: {
-        operator: {
-          validate: assertOneOf("keyof", "readonly", "unique"),
-          default: void 0
-        },
-        typeAnnotation: validateType("TSType")
-      }
-    });
-    defineType("TSIndexedAccessType", {
-      aliases: ["TSType"],
-      visitor: ["objectType", "indexType"],
-      fields: {
-        objectType: validateType("TSType"),
-        indexType: validateType("TSType")
-      }
-    });
-    defineType("TSMappedType", {
-      aliases: ["TSType"],
-      visitor: ["key", "constraint", "nameType", "typeAnnotation"],
-      builder: ["key", "constraint", "nameType", "typeAnnotation"],
-      fields: {
-        key: validateType("Identifier"),
-        constraint: validateType("TSType"),
-        readonly: validateOptional(assertOneOf(true, false, "+", "-")),
-        optional: validateOptional(assertOneOf(true, false, "+", "-")),
-        typeAnnotation: validateOptionalType("TSType"),
-        nameType: validateOptionalType("TSType")
-      }
-    });
-    defineType("TSTemplateLiteralType", {
-      aliases: ["TSType", "TSBaseType"],
-      visitor: ["quasis", "types"],
-      fields: {
-        quasis: validateArrayOfType("TemplateElement"),
-        types: {
-          validate: chain(assertValueType("array"), assertEach(assertNodeType("TSType")), function(node2, key, val) {
-            if (node2.quasis.length !== val.length + 1) {
-              throw new TypeError(`Number of ${node2.type} quasis should be exactly one more than the number of types.
-Expected ${val.length + 1} quasis but got ${node2.quasis.length}`);
-            }
-          })
-        }
-      }
-    });
-    defineType("TSLiteralType", {
-      aliases: ["TSType", "TSBaseType"],
-      visitor: ["literal"],
-      fields: {
-        literal: {
-          validate: (function() {
-            const unaryExpression2 = assertNodeType("NumericLiteral", "BigIntLiteral");
-            const unaryOperator = assertOneOf("-");
-            const literal2 = assertNodeType("NumericLiteral", "StringLiteral", "BooleanLiteral", "BigIntLiteral", "TemplateLiteral");
-            const validator = combine(function validator2(parent, key, node2) {
-              if (is("UnaryExpression", node2)) {
-                unaryOperator(node2, "operator", node2.operator);
-                unaryExpression2(node2, "argument", node2.argument);
-              } else {
-                literal2(parent, key, node2);
-              }
-            }, {
-              oneOfNodeTypes: ["NumericLiteral", "StringLiteral", "BooleanLiteral", "BigIntLiteral", "TemplateLiteral", "UnaryExpression"]
-            });
-            return validator;
-          })()
-        }
-      }
-    });
-    defineType("TSClassImplements", {
-      aliases: ["TSType"],
-      visitor: ["expression", "typeArguments"],
-      fields: {
-        expression: validateType("Expression"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation")
-      }
-    });
-    defineType("TSInterfaceHeritage", {
-      aliases: ["TSType"],
-      visitor: ["expression", "typeArguments"],
-      fields: {
-        expression: validateType("Expression"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation")
-      }
-    });
-    defineType("TSInterfaceDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "typeParameters", "extends", "body"],
-      fields: {
-        declare: validateOptional(bool),
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TSTypeParameterDeclaration"),
-        extends: validateOptional(arrayOfType("TSInterfaceHeritage")),
-        body: validateType("TSInterfaceBody")
-      }
-    });
-    defineType("TSInterfaceBody", {
-      visitor: ["body"],
-      fields: {
-        body: validateArrayOfType("TSTypeElement")
-      }
-    });
-    defineType("TSTypeAliasDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "typeParameters", "typeAnnotation"],
-      fields: {
-        declare: validateOptional(bool),
-        id: validateType("Identifier"),
-        typeParameters: validateOptionalType("TSTypeParameterDeclaration"),
-        typeAnnotation: validateType("TSType")
-      }
-    });
-    defineType("TSInstantiationExpression", {
-      aliases: ["Expression"],
-      visitor: ["expression", "typeArguments"],
-      fields: {
-        expression: validateType("Expression"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation")
-      }
-    });
-    TSTypeExpression = {
-      aliases: ["Expression", "LVal", "PatternLike"],
-      visitor: ["expression", "typeAnnotation"],
-      fields: {
-        expression: validateType("Expression"),
-        typeAnnotation: validateType("TSType")
-      }
-    };
-    defineType("TSAsExpression", TSTypeExpression);
-    defineType("TSSatisfiesExpression", TSTypeExpression);
-    defineType("TSTypeAssertion", {
-      aliases: ["Expression", "LVal", "PatternLike"],
-      visitor: ["typeAnnotation", "expression"],
-      fields: {
-        typeAnnotation: validateType("TSType"),
-        expression: validateType("Expression")
-      }
-    });
-    defineType("TSEnumBody", {
-      visitor: ["members"],
-      fields: {
-        members: validateArrayOfType("TSEnumMember")
-      }
-    });
-    defineType("TSEnumDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "body"],
-      fields: {
-        declare: validateOptional(bool),
-        const: validateOptional(bool),
-        id: validateType("Identifier"),
-        body: validateType("TSEnumBody")
-      }
-    });
-    defineType("TSEnumMember", {
-      visitor: ["id", "initializer"],
-      fields: {
-        id: validateType("Identifier", "StringLiteral"),
-        initializer: validateOptionalType("Expression")
-      }
-    });
-    defineType("TSModuleDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "body"],
-      fields: {
-        kind: {
-          validate: assertOneOf("global", "namespace", "module"),
-          default: "namespace"
-        },
-        declare: validateOptional(bool),
-        id: {
-          validate: chain(assertNodeType("TSEntityName", "StringLiteral"), combine(function(node2, key, val) {
-            if (node2.kind === "namespace" && is("StringLiteral", val)) {
-              throw new TypeError(`TSModuleDeclaration of kind 'namespace' cannot have a StringLiteral id.`);
-            }
-          }, {
-            oneOfNodeTypes: ["TSEntityName", "StringLiteral"]
-          }))
-        },
-        body: validateType("TSModuleBlock")
-      }
-    });
-    defineType("TSModuleBlock", {
-      aliases: ["Scopable", "Block", "BlockParent", "FunctionParent"],
-      visitor: ["body"],
-      fields: {
-        body: validateArrayOfType("Statement")
-      }
-    });
-    defineType("TSImportType", {
-      aliases: ["TSType"],
-      builder: ["source", "qualifier", "typeArguments"],
-      visitor: ["source", "options", "qualifier", "typeArguments"],
-      fields: {
-        source: validateType("StringLiteral"),
-        qualifier: validateOptionalType("TSEntityName"),
-        typeArguments: validateOptionalType("TSTypeParameterInstantiation"),
-        options: {
-          validate: assertNodeType("ObjectExpression"),
-          optional: true
-        }
-      }
-    });
-    defineType("TSImportEqualsDeclaration", {
-      aliases: ["Statement", "Declaration"],
-      visitor: ["id", "moduleReference"],
-      fields: {
-        id: validateType("Identifier"),
-        moduleReference: validateType("TSEntityName", "TSExternalModuleReference"),
-        importKind: {
-          validate: assertOneOf("type", "value"),
-          optional: true
-        }
-      }
-    });
-    defineType("TSExternalModuleReference", {
-      visitor: ["expression"],
-      fields: {
-        expression: validateType("StringLiteral")
-      }
-    });
-    defineType("TSNonNullExpression", {
-      aliases: ["Expression", "LVal", "PatternLike"],
-      visitor: ["expression"],
-      fields: {
-        expression: validateType("Expression")
-      }
-    });
-    defineType("TSExportAssignment", {
-      aliases: ["Statement"],
-      visitor: ["expression"],
-      fields: {
-        expression: validateType("Expression")
-      }
-    });
-    defineType("TSNamespaceExportDeclaration", {
-      aliases: ["Statement"],
-      visitor: ["id"],
-      fields: {
-        id: validateType("Identifier")
-      }
-    });
-    defineType("TSTypeAnnotation", {
-      visitor: ["typeAnnotation"],
-      fields: {
-        typeAnnotation: {
-          validate: assertNodeType("TSType")
-        }
-      }
-    });
-    defineType("TSTypeParameterInstantiation", {
-      visitor: ["params"],
-      fields: {
-        params: validateArrayOfType("TSType")
-      }
-    });
-    defineType("TSTypeParameterDeclaration", {
-      visitor: ["params"],
-      fields: {
-        params: validateArrayOfType("TSTypeParameter")
-      }
-    });
-    defineType("TSTypeParameter", {
-      builder: ["constraint", "default", "name"],
-      visitor: ["name", "constraint", "default"],
-      fields: {
-        name: {
-          validate: assertNodeType("Identifier")
-        },
-        in: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        out: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        const: {
-          validate: assertValueType("boolean"),
-          optional: true
-        },
-        constraint: {
-          validate: assertNodeType("TSType"),
-          optional: true
-        },
-        default: {
-          validate: assertNodeType("TSType"),
-          optional: true
-        }
-      }
-    });
-    DEPRECATED_ALIASES = {
-      ModuleDeclaration: "ImportOrExportDeclaration"
-    };
-    Object.keys(DEPRECATED_ALIASES).forEach((deprecatedAlias) => {
-      FLIPPED_ALIAS_KEYS[deprecatedAlias] = FLIPPED_ALIAS_KEYS[DEPRECATED_ALIASES[deprecatedAlias]];
-    });
-    for (const {
-      types: types2,
-      set: set2
-    } of allExpandedTypes) {
-      for (const type of types2) {
-        const aliases = FLIPPED_ALIAS_KEYS[type];
-        if (aliases) {
-          aliases.forEach(set2.add, set2);
-        } else {
-          set2.add(type);
-        }
-      }
-    }
-    TYPES = [].concat(Object.keys(VISITOR_KEYS), Object.keys(FLIPPED_ALIAS_KEYS), Object.keys(DEPRECATED_KEYS));
-    _validate = /* @__PURE__ */ Object.defineProperty({
-      __proto__: null,
-      default: validate$1,
-      validateChild,
-      validateField,
-      validateInternal
-    }, Symbol.toStringTag, { value: "Module" });
-    ({
-      validateInternal: validate2
-    } = _validate);
-    ({
-      NODE_FIELDS
-    } = utils);
-    b = /* @__PURE__ */ Object.defineProperty({
-      __proto__: null,
-      anyTypeAnnotation,
-      argumentPlaceholder,
-      arrayExpression,
-      arrayPattern,
-      arrayTypeAnnotation,
-      arrowFunctionExpression,
-      assignmentExpression,
-      assignmentPattern,
-      awaitExpression,
-      bigIntLiteral,
-      bigIntLiteralTypeAnnotation,
-      binaryExpression,
-      bindExpression,
-      blockStatement,
-      booleanLiteral,
-      booleanLiteralTypeAnnotation,
-      booleanTypeAnnotation,
-      breakStatement,
-      callExpression,
-      catchClause,
-      classAccessorProperty,
-      classBody,
-      classDeclaration,
-      classExpression,
-      classImplements,
-      classMethod,
-      classPrivateMethod,
-      classPrivateProperty,
-      classProperty,
-      conditionalExpression,
-      continueStatement,
-      debuggerStatement,
-      declareClass,
-      declareExportAllDeclaration,
-      declareExportDeclaration,
-      declareFunction,
-      declareInterface,
-      declareModule,
-      declareModuleExports,
-      declareOpaqueType,
-      declareTypeAlias,
-      declareVariable,
-      declaredPredicate,
-      decorator,
-      directive,
-      directiveLiteral,
-      doExpression,
-      doWhileStatement,
-      emptyStatement,
-      emptyTypeAnnotation,
-      enumBooleanBody,
-      enumBooleanMember,
-      enumDeclaration,
-      enumDefaultedMember,
-      enumNumberBody,
-      enumNumberMember,
-      enumStringBody,
-      enumStringMember,
-      enumSymbolBody,
-      existsTypeAnnotation,
-      exportAllDeclaration,
-      exportDefaultDeclaration,
-      exportDefaultSpecifier,
-      exportNamedDeclaration,
-      exportNamespaceSpecifier,
-      exportSpecifier,
-      expressionStatement,
-      file: file2,
-      forInStatement,
-      forOfStatement,
-      forStatement,
-      functionDeclaration,
-      functionExpression,
-      functionTypeAnnotation,
-      functionTypeParam,
-      genericTypeAnnotation,
-      identifier,
-      ifStatement,
-      import: _import,
-      importAttribute,
-      importDeclaration,
-      importDefaultSpecifier,
-      importExpression,
-      importNamespaceSpecifier,
-      importSpecifier,
-      indexedAccessType,
-      inferredPredicate,
-      interfaceDeclaration,
-      interfaceExtends,
-      interfaceTypeAnnotation,
-      interpreterDirective,
-      intersectionTypeAnnotation,
-      jsxAttribute,
-      jsxClosingElement,
-      jsxClosingFragment,
-      jsxElement,
-      jsxEmptyExpression,
-      jsxExpressionContainer,
-      jsxFragment,
-      jsxIdentifier,
-      jsxMemberExpression,
-      jsxNamespacedName,
-      jsxOpeningElement,
-      jsxOpeningFragment,
-      jsxSpreadAttribute,
-      jsxSpreadChild,
-      jsxText,
-      labeledStatement,
-      logicalExpression,
-      memberExpression,
-      metaProperty,
-      mixedTypeAnnotation,
-      moduleExpression,
-      newExpression,
-      nullLiteral,
-      nullLiteralTypeAnnotation,
-      nullableTypeAnnotation,
-      numberLiteral: NumberLiteral,
-      numberLiteralTypeAnnotation,
-      numberTypeAnnotation,
-      numericLiteral,
-      objectExpression,
-      objectMethod,
-      objectPattern,
-      objectProperty,
-      objectTypeAnnotation,
-      objectTypeCallProperty,
-      objectTypeIndexer,
-      objectTypeInternalSlot,
-      objectTypeProperty,
-      objectTypeSpreadProperty,
-      opaqueType,
-      optionalCallExpression,
-      optionalIndexedAccessType,
-      optionalMemberExpression,
-      parenthesizedExpression,
-      placeholder,
-      privateName,
-      program,
-      qualifiedTypeIdentifier,
-      regExpLiteral,
-      regexLiteral: RegexLiteral,
-      restElement,
-      restProperty: RestProperty,
-      returnStatement,
-      sequenceExpression,
-      spreadElement,
-      spreadProperty: SpreadProperty,
-      staticBlock,
-      stringLiteral,
-      stringLiteralTypeAnnotation,
-      stringTypeAnnotation,
-      super: _super,
-      switchCase,
-      switchStatement,
-      symbolTypeAnnotation,
-      taggedTemplateExpression,
-      templateElement,
-      templateLiteral: templateLiteral2,
-      thisExpression,
-      thisTypeAnnotation,
-      throwStatement,
-      topicReference,
-      tryStatement,
-      tsAnyKeyword,
-      tsArrayType,
-      tsAsExpression,
-      tsBigIntKeyword,
-      tsBooleanKeyword,
-      tsCallSignatureDeclaration,
-      tsClassImplements,
-      tsConditionalType,
-      tsConstructSignatureDeclaration,
-      tsConstructorType,
-      tsDeclareFunction,
-      tsDeclareMethod,
-      tsEnumBody,
-      tsEnumDeclaration,
-      tsEnumMember,
-      tsExportAssignment,
-      tsExternalModuleReference,
-      tsFunctionType,
-      tsImportEqualsDeclaration,
-      tsImportType,
-      tsIndexSignature,
-      tsIndexedAccessType,
-      tsInferType,
-      tsInstantiationExpression,
-      tsInterfaceBody,
-      tsInterfaceDeclaration,
-      tsInterfaceHeritage,
-      tsIntersectionType,
-      tsIntrinsicKeyword,
-      tsLiteralType,
-      tsMappedType,
-      tsMethodSignature,
-      tsModuleBlock,
-      tsModuleDeclaration,
-      tsNamedTupleMember,
-      tsNamespaceExportDeclaration,
-      tsNeverKeyword,
-      tsNonNullExpression,
-      tsNullKeyword,
-      tsNumberKeyword,
-      tsObjectKeyword,
-      tsOptionalType,
-      tsParameterProperty,
-      tsParenthesizedType,
-      tsPropertySignature,
-      tsQualifiedName,
-      tsRestType,
-      tsSatisfiesExpression,
-      tsStringKeyword,
-      tsSymbolKeyword,
-      tsTemplateLiteralType,
-      tsThisType,
-      tsTupleType,
-      tsTypeAliasDeclaration,
-      tsTypeAnnotation,
-      tsTypeAssertion,
-      tsTypeLiteral,
-      tsTypeOperator,
-      tsTypeParameter,
-      tsTypeParameterDeclaration,
-      tsTypeParameterInstantiation,
-      tsTypePredicate,
-      tsTypeQuery,
-      tsTypeReference,
-      tsUndefinedKeyword,
-      tsUnionType,
-      tsUnknownKeyword,
-      tsVoidKeyword,
-      tupleTypeAnnotation,
-      typeAlias,
-      typeAnnotation,
-      typeCastExpression,
-      typeParameter,
-      typeParameterDeclaration,
-      typeParameterInstantiation,
-      typeofTypeAnnotation,
-      unaryExpression,
-      unionTypeAnnotation,
-      updateExpression,
-      v8IntrinsicIdentifier,
-      variableDeclaration,
-      variableDeclarator,
-      variance,
-      voidPattern,
-      voidTypeAnnotation,
-      whileStatement,
-      withStatement,
-      yieldExpression
-    }, Symbol.toStringTag, { value: "Module" });
-    ArrayExpression = alias("arrayExpression");
-    AssignmentExpression = alias("assignmentExpression");
-    BinaryExpression = alias("binaryExpression");
-    InterpreterDirective = alias("interpreterDirective");
-    Directive = alias("directive");
-    DirectiveLiteral = alias("directiveLiteral");
-    BlockStatement = alias("blockStatement");
-    BreakStatement = alias("breakStatement");
-    CallExpression = alias("callExpression");
-    CatchClause = alias("catchClause");
-    ConditionalExpression = alias("conditionalExpression");
-    ContinueStatement = alias("continueStatement");
-    DebuggerStatement = alias("debuggerStatement");
-    DoWhileStatement = alias("doWhileStatement");
-    EmptyStatement = alias("emptyStatement");
-    ExpressionStatement = alias("expressionStatement");
-    File2 = alias("file");
-    ForInStatement = alias("forInStatement");
-    ForStatement = alias("forStatement");
-    FunctionDeclaration = alias("functionDeclaration");
-    FunctionExpression = alias("functionExpression");
-    Identifier = alias("identifier");
-    IfStatement = alias("ifStatement");
-    LabeledStatement = alias("labeledStatement");
-    StringLiteral = alias("stringLiteral");
-    NumericLiteral = alias("numericLiteral");
-    NullLiteral = alias("nullLiteral");
-    BooleanLiteral = alias("booleanLiteral");
-    RegExpLiteral = alias("regExpLiteral");
-    LogicalExpression = alias("logicalExpression");
-    MemberExpression = alias("memberExpression");
-    NewExpression = alias("newExpression");
-    Program = alias("program");
-    ObjectExpression = alias("objectExpression");
-    ObjectMethod = alias("objectMethod");
-    ObjectProperty = alias("objectProperty");
-    RestElement = alias("restElement");
-    ReturnStatement = alias("returnStatement");
-    SequenceExpression = alias("sequenceExpression");
-    ParenthesizedExpression = alias("parenthesizedExpression");
-    SwitchCase = alias("switchCase");
-    SwitchStatement = alias("switchStatement");
-    ThisExpression = alias("thisExpression");
-    ThrowStatement = alias("throwStatement");
-    TryStatement = alias("tryStatement");
-    UnaryExpression = alias("unaryExpression");
-    UpdateExpression = alias("updateExpression");
-    VariableDeclaration = alias("variableDeclaration");
-    VariableDeclarator = alias("variableDeclarator");
-    WhileStatement = alias("whileStatement");
-    WithStatement = alias("withStatement");
-    AssignmentPattern = alias("assignmentPattern");
-    ArrayPattern = alias("arrayPattern");
-    ArrowFunctionExpression = alias("arrowFunctionExpression");
-    ClassBody = alias("classBody");
-    ClassExpression = alias("classExpression");
-    ClassDeclaration = alias("classDeclaration");
-    ExportAllDeclaration = alias("exportAllDeclaration");
-    ExportDefaultDeclaration = alias("exportDefaultDeclaration");
-    ExportNamedDeclaration = alias("exportNamedDeclaration");
-    ExportSpecifier = alias("exportSpecifier");
-    ForOfStatement = alias("forOfStatement");
-    ImportDeclaration = alias("importDeclaration");
-    ImportDefaultSpecifier = alias("importDefaultSpecifier");
-    ImportNamespaceSpecifier = alias("importNamespaceSpecifier");
-    ImportSpecifier = alias("importSpecifier");
-    MetaProperty = alias("metaProperty");
-    ClassMethod = alias("classMethod");
-    ObjectPattern = alias("objectPattern");
-    SpreadElement = alias("spreadElement");
-    Super = alias("super");
-    TaggedTemplateExpression = alias("taggedTemplateExpression");
-    TemplateElement = alias("templateElement");
-    TemplateLiteral = alias("templateLiteral");
-    YieldExpression = alias("yieldExpression");
-    AwaitExpression = alias("awaitExpression");
-    ImportExpression = alias("importExpression");
-    Import = alias("import");
-    BigIntLiteral = alias("bigIntLiteral");
-    ExportNamespaceSpecifier = alias("exportNamespaceSpecifier");
-    OptionalMemberExpression = alias("optionalMemberExpression");
-    OptionalCallExpression = alias("optionalCallExpression");
-    ClassProperty = alias("classProperty");
-    ClassPrivateProperty = alias("classPrivateProperty");
-    ClassPrivateMethod = alias("classPrivateMethod");
-    PrivateName = alias("privateName");
-    StaticBlock = alias("staticBlock");
-    ImportAttribute = alias("importAttribute");
-    AnyTypeAnnotation = alias("anyTypeAnnotation");
-    ArrayTypeAnnotation = alias("arrayTypeAnnotation");
-    BooleanTypeAnnotation = alias("booleanTypeAnnotation");
-    BooleanLiteralTypeAnnotation = alias("booleanLiteralTypeAnnotation");
-    NullLiteralTypeAnnotation = alias("nullLiteralTypeAnnotation");
-    ClassImplements = alias("classImplements");
-    DeclareClass = alias("declareClass");
-    DeclareFunction = alias("declareFunction");
-    DeclareInterface = alias("declareInterface");
-    DeclareModule = alias("declareModule");
-    DeclareModuleExports = alias("declareModuleExports");
-    DeclareTypeAlias = alias("declareTypeAlias");
-    DeclareOpaqueType = alias("declareOpaqueType");
-    DeclareVariable = alias("declareVariable");
-    DeclareExportDeclaration = alias("declareExportDeclaration");
-    DeclareExportAllDeclaration = alias("declareExportAllDeclaration");
-    DeclaredPredicate = alias("declaredPredicate");
-    ExistsTypeAnnotation = alias("existsTypeAnnotation");
-    FunctionTypeAnnotation = alias("functionTypeAnnotation");
-    FunctionTypeParam = alias("functionTypeParam");
-    GenericTypeAnnotation = alias("genericTypeAnnotation");
-    InferredPredicate = alias("inferredPredicate");
-    InterfaceExtends = alias("interfaceExtends");
-    InterfaceDeclaration = alias("interfaceDeclaration");
-    InterfaceTypeAnnotation = alias("interfaceTypeAnnotation");
-    IntersectionTypeAnnotation = alias("intersectionTypeAnnotation");
-    MixedTypeAnnotation = alias("mixedTypeAnnotation");
-    EmptyTypeAnnotation = alias("emptyTypeAnnotation");
-    NullableTypeAnnotation = alias("nullableTypeAnnotation");
-    NumberLiteralTypeAnnotation = alias("numberLiteralTypeAnnotation");
-    BigIntLiteralTypeAnnotation = alias("bigIntLiteralTypeAnnotation");
-    NumberTypeAnnotation = alias("numberTypeAnnotation");
-    ObjectTypeAnnotation = alias("objectTypeAnnotation");
-    ObjectTypeInternalSlot = alias("objectTypeInternalSlot");
-    ObjectTypeCallProperty = alias("objectTypeCallProperty");
-    ObjectTypeIndexer = alias("objectTypeIndexer");
-    ObjectTypeProperty = alias("objectTypeProperty");
-    ObjectTypeSpreadProperty = alias("objectTypeSpreadProperty");
-    OpaqueType = alias("opaqueType");
-    QualifiedTypeIdentifier = alias("qualifiedTypeIdentifier");
-    StringLiteralTypeAnnotation = alias("stringLiteralTypeAnnotation");
-    StringTypeAnnotation = alias("stringTypeAnnotation");
-    SymbolTypeAnnotation = alias("symbolTypeAnnotation");
-    ThisTypeAnnotation = alias("thisTypeAnnotation");
-    TupleTypeAnnotation = alias("tupleTypeAnnotation");
-    TypeofTypeAnnotation = alias("typeofTypeAnnotation");
-    TypeAlias = alias("typeAlias");
-    TypeAnnotation = alias("typeAnnotation");
-    TypeCastExpression = alias("typeCastExpression");
-    TypeParameter = alias("typeParameter");
-    TypeParameterDeclaration = alias("typeParameterDeclaration");
-    TypeParameterInstantiation = alias("typeParameterInstantiation");
-    UnionTypeAnnotation = alias("unionTypeAnnotation");
-    Variance = alias("variance");
-    VoidTypeAnnotation = alias("voidTypeAnnotation");
-    EnumDeclaration = alias("enumDeclaration");
-    EnumBooleanBody = alias("enumBooleanBody");
-    EnumNumberBody = alias("enumNumberBody");
-    EnumStringBody = alias("enumStringBody");
-    EnumSymbolBody = alias("enumSymbolBody");
-    EnumBooleanMember = alias("enumBooleanMember");
-    EnumNumberMember = alias("enumNumberMember");
-    EnumStringMember = alias("enumStringMember");
-    EnumDefaultedMember = alias("enumDefaultedMember");
-    IndexedAccessType = alias("indexedAccessType");
-    OptionalIndexedAccessType = alias("optionalIndexedAccessType");
-    JSXAttribute = alias("jsxAttribute");
-    JSXClosingElement = alias("jsxClosingElement");
-    JSXElement = alias("jsxElement");
-    JSXEmptyExpression = alias("jsxEmptyExpression");
-    JSXExpressionContainer = alias("jsxExpressionContainer");
-    JSXSpreadChild = alias("jsxSpreadChild");
-    JSXIdentifier = alias("jsxIdentifier");
-    JSXMemberExpression = alias("jsxMemberExpression");
-    JSXNamespacedName = alias("jsxNamespacedName");
-    JSXOpeningElement = alias("jsxOpeningElement");
-    JSXSpreadAttribute = alias("jsxSpreadAttribute");
-    JSXText = alias("jsxText");
-    JSXFragment = alias("jsxFragment");
-    JSXOpeningFragment = alias("jsxOpeningFragment");
-    JSXClosingFragment = alias("jsxClosingFragment");
-    Placeholder = alias("placeholder");
-    V8IntrinsicIdentifier = alias("v8IntrinsicIdentifier");
-    ArgumentPlaceholder = alias("argumentPlaceholder");
-    BindExpression = alias("bindExpression");
-    ClassAccessorProperty = alias("classAccessorProperty");
-    Decorator = alias("decorator");
-    DoExpression = alias("doExpression");
-    ExportDefaultSpecifier = alias("exportDefaultSpecifier");
-    ModuleExpression = alias("moduleExpression");
-    TopicReference = alias("topicReference");
-    VoidPattern = alias("voidPattern");
-    TSParameterProperty = alias("tsParameterProperty");
-    TSDeclareFunction = alias("tsDeclareFunction");
-    TSDeclareMethod = alias("tsDeclareMethod");
-    TSQualifiedName = alias("tsQualifiedName");
-    TSCallSignatureDeclaration = alias("tsCallSignatureDeclaration");
-    TSConstructSignatureDeclaration = alias("tsConstructSignatureDeclaration");
-    TSPropertySignature = alias("tsPropertySignature");
-    TSMethodSignature = alias("tsMethodSignature");
-    TSIndexSignature = alias("tsIndexSignature");
-    TSAnyKeyword = alias("tsAnyKeyword");
-    TSBooleanKeyword = alias("tsBooleanKeyword");
-    TSBigIntKeyword = alias("tsBigIntKeyword");
-    TSIntrinsicKeyword = alias("tsIntrinsicKeyword");
-    TSNeverKeyword = alias("tsNeverKeyword");
-    TSNullKeyword = alias("tsNullKeyword");
-    TSNumberKeyword = alias("tsNumberKeyword");
-    TSObjectKeyword = alias("tsObjectKeyword");
-    TSStringKeyword = alias("tsStringKeyword");
-    TSSymbolKeyword = alias("tsSymbolKeyword");
-    TSUndefinedKeyword = alias("tsUndefinedKeyword");
-    TSUnknownKeyword = alias("tsUnknownKeyword");
-    TSVoidKeyword = alias("tsVoidKeyword");
-    TSThisType = alias("tsThisType");
-    TSFunctionType = alias("tsFunctionType");
-    TSConstructorType = alias("tsConstructorType");
-    TSTypeReference = alias("tsTypeReference");
-    TSTypePredicate = alias("tsTypePredicate");
-    TSTypeQuery = alias("tsTypeQuery");
-    TSTypeLiteral = alias("tsTypeLiteral");
-    TSArrayType = alias("tsArrayType");
-    TSTupleType = alias("tsTupleType");
-    TSOptionalType = alias("tsOptionalType");
-    TSRestType = alias("tsRestType");
-    TSNamedTupleMember = alias("tsNamedTupleMember");
-    TSUnionType = alias("tsUnionType");
-    TSIntersectionType = alias("tsIntersectionType");
-    TSConditionalType = alias("tsConditionalType");
-    TSInferType = alias("tsInferType");
-    TSParenthesizedType = alias("tsParenthesizedType");
-    TSTypeOperator = alias("tsTypeOperator");
-    TSIndexedAccessType = alias("tsIndexedAccessType");
-    TSMappedType = alias("tsMappedType");
-    TSTemplateLiteralType = alias("tsTemplateLiteralType");
-    TSLiteralType = alias("tsLiteralType");
-    TSClassImplements = alias("tsClassImplements");
-    TSInterfaceHeritage = alias("tsInterfaceHeritage");
-    TSInterfaceDeclaration = alias("tsInterfaceDeclaration");
-    TSInterfaceBody = alias("tsInterfaceBody");
-    TSTypeAliasDeclaration = alias("tsTypeAliasDeclaration");
-    TSInstantiationExpression = alias("tsInstantiationExpression");
-    TSAsExpression = alias("tsAsExpression");
-    TSSatisfiesExpression = alias("tsSatisfiesExpression");
-    TSTypeAssertion = alias("tsTypeAssertion");
-    TSEnumBody = alias("tsEnumBody");
-    TSEnumDeclaration = alias("tsEnumDeclaration");
-    TSEnumMember = alias("tsEnumMember");
-    TSModuleDeclaration = alias("tsModuleDeclaration");
-    TSModuleBlock = alias("tsModuleBlock");
-    TSImportType = alias("tsImportType");
-    TSImportEqualsDeclaration = alias("tsImportEqualsDeclaration");
-    TSExternalModuleReference = alias("tsExternalModuleReference");
-    TSNonNullExpression = alias("tsNonNullExpression");
-    TSExportAssignment = alias("tsExportAssignment");
-    TSNamespaceExportDeclaration = alias("tsNamespaceExportDeclaration");
-    TSTypeAnnotation = alias("tsTypeAnnotation");
-    TSTypeParameterInstantiation = alias("tsTypeParameterInstantiation");
-    TSTypeParameterDeclaration = alias("tsTypeParameterDeclaration");
-    TSTypeParameter = alias("tsTypeParameter");
-    ({
-      hasOwn
-    } = Object);
-    STANDARDIZED_TYPES = FLIPPED_ALIAS_KEYS["Standardized"];
-    EXPRESSION_TYPES = FLIPPED_ALIAS_KEYS["Expression"];
-    BINARY_TYPES = FLIPPED_ALIAS_KEYS["Binary"];
-    SCOPABLE_TYPES = FLIPPED_ALIAS_KEYS["Scopable"];
-    BLOCKPARENT_TYPES = FLIPPED_ALIAS_KEYS["BlockParent"];
-    BLOCK_TYPES = FLIPPED_ALIAS_KEYS["Block"];
-    STATEMENT_TYPES = FLIPPED_ALIAS_KEYS["Statement"];
-    TERMINATORLESS_TYPES = FLIPPED_ALIAS_KEYS["Terminatorless"];
-    COMPLETIONSTATEMENT_TYPES = FLIPPED_ALIAS_KEYS["CompletionStatement"];
-    CONDITIONAL_TYPES = FLIPPED_ALIAS_KEYS["Conditional"];
-    LOOP_TYPES = FLIPPED_ALIAS_KEYS["Loop"];
-    WHILE_TYPES = FLIPPED_ALIAS_KEYS["While"];
-    EXPRESSIONWRAPPER_TYPES = FLIPPED_ALIAS_KEYS["ExpressionWrapper"];
-    FOR_TYPES = FLIPPED_ALIAS_KEYS["For"];
-    FORXSTATEMENT_TYPES = FLIPPED_ALIAS_KEYS["ForXStatement"];
-    FUNCTION_TYPES = FLIPPED_ALIAS_KEYS["Function"];
-    FUNCTIONPARENT_TYPES = FLIPPED_ALIAS_KEYS["FunctionParent"];
-    PUREISH_TYPES = FLIPPED_ALIAS_KEYS["Pureish"];
-    DECLARATION_TYPES = FLIPPED_ALIAS_KEYS["Declaration"];
-    FUNCTIONPARAMETER_TYPES = FLIPPED_ALIAS_KEYS["FunctionParameter"];
-    PATTERNLIKE_TYPES = FLIPPED_ALIAS_KEYS["PatternLike"];
-    LVAL_TYPES = FLIPPED_ALIAS_KEYS["LVal"];
-    TSENTITYNAME_TYPES = FLIPPED_ALIAS_KEYS["TSEntityName"];
-    LITERAL_TYPES = FLIPPED_ALIAS_KEYS["Literal"];
-    IMMUTABLE_TYPES = FLIPPED_ALIAS_KEYS["Immutable"];
-    USERWHITESPACABLE_TYPES = FLIPPED_ALIAS_KEYS["UserWhitespacable"];
-    METHOD_TYPES = FLIPPED_ALIAS_KEYS["Method"];
-    OBJECTMEMBER_TYPES = FLIPPED_ALIAS_KEYS["ObjectMember"];
-    PROPERTY_TYPES = FLIPPED_ALIAS_KEYS["Property"];
-    UNARYLIKE_TYPES = FLIPPED_ALIAS_KEYS["UnaryLike"];
-    PATTERN_TYPES = FLIPPED_ALIAS_KEYS["Pattern"];
-    CLASS_TYPES = FLIPPED_ALIAS_KEYS["Class"];
-    IMPORTOREXPORTDECLARATION_TYPES = FLIPPED_ALIAS_KEYS["ImportOrExportDeclaration"];
-    EXPORTDECLARATION_TYPES = FLIPPED_ALIAS_KEYS["ExportDeclaration"];
-    MODULESPECIFIER_TYPES = FLIPPED_ALIAS_KEYS["ModuleSpecifier"];
-    PRIVATE_TYPES = FLIPPED_ALIAS_KEYS["Private"];
-    FLOW_TYPES = FLIPPED_ALIAS_KEYS["Flow"];
-    FLOWTYPE_TYPES = FLIPPED_ALIAS_KEYS["FlowType"];
-    FLOWBASEANNOTATION_TYPES = FLIPPED_ALIAS_KEYS["FlowBaseAnnotation"];
-    FLOWDECLARATION_TYPES = FLIPPED_ALIAS_KEYS["FlowDeclaration"];
-    FLOWPREDICATE_TYPES = FLIPPED_ALIAS_KEYS["FlowPredicate"];
-    ENUMBODY_TYPES = FLIPPED_ALIAS_KEYS["EnumBody"];
-    ENUMMEMBER_TYPES = FLIPPED_ALIAS_KEYS["EnumMember"];
-    JSX_TYPES = FLIPPED_ALIAS_KEYS["JSX"];
-    MISCELLANEOUS_TYPES = FLIPPED_ALIAS_KEYS["Miscellaneous"];
-    ACCESSOR_TYPES = FLIPPED_ALIAS_KEYS["Accessor"];
-    TYPESCRIPT_TYPES = FLIPPED_ALIAS_KEYS["TypeScript"];
-    TSTYPEELEMENT_TYPES = FLIPPED_ALIAS_KEYS["TSTypeElement"];
-    TSTYPE_TYPES = FLIPPED_ALIAS_KEYS["TSType"];
-    TSBASETYPE_TYPES = FLIPPED_ALIAS_KEYS["TSBaseType"];
-    _skip = /* @__PURE__ */ Symbol();
-    _stop = /* @__PURE__ */ Symbol();
-    traverseFast.skip = _skip;
-    traverseFast.stop = _stop;
-    CLEAR_KEYS = ["tokens", "start", "end", "loc", "raw", "rawValue"];
-    CLEAR_KEYS_PLUS_COMMENTS = [...COMMENT_KEYS, "comments", ...CLEAR_KEYS];
-    toKeyAlias.uid = 0;
-    toKeyAlias.increment = function() {
-      if (toKeyAlias.uid >= Number.MAX_SAFE_INTEGER) {
-        return toKeyAlias.uid = 0;
-      } else {
-        return toKeyAlias.uid++;
-      }
-    };
-    objectToString = Function.call.bind(Object.prototype.toString);
-    keys = {
-      DeclareClass: ["id"],
-      DeclareFunction: ["id"],
-      DeclareModule: ["id"],
-      DeclareVariable: ["id"],
-      DeclareInterface: ["id"],
-      DeclareTypeAlias: ["id"],
-      DeclareOpaqueType: ["id"],
-      InterfaceDeclaration: ["id"],
-      TypeAlias: ["id"],
-      OpaqueType: ["id"],
-      CatchClause: ["param"],
-      LabeledStatement: ["label"],
-      UnaryExpression: ["argument"],
-      AssignmentExpression: ["left"],
-      ImportSpecifier: ["local"],
-      ImportNamespaceSpecifier: ["local"],
-      ImportDefaultSpecifier: ["local"],
-      ImportDeclaration: ["specifiers"],
-      TSImportEqualsDeclaration: ["id"],
-      ExportSpecifier: ["exported"],
-      ExportNamespaceSpecifier: ["exported"],
-      ExportDefaultSpecifier: ["exported"],
-      FunctionDeclaration: ["id", "params"],
-      FunctionExpression: ["id", "params"],
-      ArrowFunctionExpression: ["params"],
-      ObjectMethod: ["params"],
-      ClassMethod: ["params"],
-      ClassPrivateMethod: ["params"],
-      ForInStatement: ["left"],
-      ForOfStatement: ["left"],
-      ClassDeclaration: ["id"],
-      ClassExpression: ["id"],
-      RestElement: ["argument"],
-      UpdateExpression: ["argument"],
-      ObjectProperty: ["value"],
-      AssignmentPattern: ["left"],
-      ArrayPattern: ["elements"],
-      ObjectPattern: ["properties"],
-      VariableDeclaration: ["declarations"],
-      VariableDeclarator: ["id"]
-    };
-    getBindingIdentifiers.keys = keys;
   }
 });
 
@@ -43104,39 +35636,46 @@ function parseErrorCategory(error62) {
   const code2 = error62?.reasonCode;
   return typeof code2 === "string" && /^\w+$/.test(code2) ? code2 : "UnknownError";
 }
-function isObviousNonIssue(node2, parents) {
-  if (isBinaryExpression(node2) || isAssignmentExpression(node2)) {
-    return isNumericLiteral(node2.right) && node2.right.value !== 0 || isBigIntLiteral(node2.right) && node2.right.value !== 0n;
+function isNode(value) {
+  return typeof value === "object" && value !== null && "type" in value && typeof value.type === "string";
+}
+function isObviousNonIssue(node2, ancestors) {
+  if (node2.type === "BinaryExpression" || node2.type === "AssignmentExpression") {
+    return node2.right.type === "NumericLiteral" && node2.right.value !== 0 || node2.right.type === "BigIntLiteral" && node2.right.value !== 0n;
   }
-  if (isCatchClause(node2)) return node2.body.body.some((statement) => isThrowStatement(statement));
-  const chain2 = [...parents, node2];
-  for (let index = chain2.length - 2; index >= 0 && !isFunction(chain2[index]); index--) {
-    const parent = chain2[index];
-    if (isTryStatement(parent) && parent.handler && parent.block === chain2[index + 1]) return true;
+  if (node2.type === "CatchClause") return node2.body.body.some((statement) => statement.type === "ThrowStatement");
+  let child = node2;
+  for (let index = ancestors.length - 1; index >= 0 && !functionTypes[ancestors[index].type]; index--) {
+    const parent = ancestors[index];
+    if (parent.type === "TryStatement" && parent.handler && parent.block === child) return true;
+    child = parent;
   }
   return false;
 }
 function findCandidates(path, content, changed) {
-  const file3 = parseSource(path, content);
+  const file2 = parseSource(path, content);
   const candidates = [];
   const occurrences = /* @__PURE__ */ new Map();
-  function visit2(node2, parents) {
+  const ancestors = [];
+  function visit2(node2) {
     let check2;
-    if (isBinaryExpression(node2) && ["/", "%"].includes(node2.operator) || isAssignmentExpression(node2) && ["/=", "%="].includes(node2.operator)) check2 = "zero-divisor";
-    if (isCatchClause(node2)) check2 = "swallowed-failure";
-    if (isCallExpression(node2) && isMemberExpression(node2.callee) && !node2.callee.computed && isIdentifier(node2.callee.object, { name: "JSON" }) && isIdentifier(node2.callee.property, { name: "parse" })) check2 = "unhandled-json";
+    if (node2.type === "BinaryExpression" && (node2.operator === "/" || node2.operator === "%") || node2.type === "AssignmentExpression" && (node2.operator === "/=" || node2.operator === "%=")) check2 = "zero-divisor";
+    if (node2.type === "CatchClause") check2 = "swallowed-failure";
+    if (node2.type === "CallExpression" && node2.callee.type === "MemberExpression" && !node2.callee.computed && node2.callee.object.type === "Identifier" && node2.callee.object.name === "JSON" && node2.callee.property.type === "Identifier" && node2.callee.property.name === "parse") check2 = "unhandled-json";
     if (check2) {
-      const container = [...parents].reverse().find((parent) => isFunction(parent));
-      const bounds = container ?? parents[2] ?? node2;
+      let containerIndex = ancestors.length - 1;
+      while (containerIndex >= 0 && !functionTypes[ancestors[containerIndex].type]) containerIndex--;
+      const container = ancestors[containerIndex];
+      const bounds = container ?? ancestors[2] ?? node2;
       const scope = { start: bounds.loc.start.line, end: bounds.loc.end.line };
-      const owner = container && parents[parents.indexOf(container) - 1];
-      const name = container === void 0 ? "<anonymous-or-module>" : "id" in container && isIdentifier(container.id) ? container.id.name : "key" in container && isIdentifier(container.key) ? container.key.name : owner && isVariableDeclarator(owner) && isIdentifier(owner.id) ? owner.id.name : "<anonymous-or-module>";
+      const owner = ancestors[containerIndex - 1];
+      const name = container === void 0 ? "<anonymous-or-module>" : "id" in container && container.id?.type === "Identifier" ? container.id.name : "key" in container && container.key.type === "Identifier" ? container.key.name : owner?.type === "VariableDeclarator" && owner.id.type === "Identifier" ? owner.id.name : "<anonymous-or-module>";
       const symbol2 = name;
       const quote = content.slice(node2.start, node2.end);
       const key = hash2([path, symbol2, check2, quote.replace(/\s+/g, " ")]);
       const occurrence = occurrences.get(key) ?? 0;
       occurrences.set(key, occurrence + 1);
-      if (!isObviousNonIssue(node2, parents) && changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
+      if (!isObviousNonIssue(node2, ancestors) && changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
         candidates.push({
           id: hash2([key, occurrence]).slice(0, 24),
           check: check2,
@@ -43148,22 +35687,24 @@ function findCandidates(path, content, changed) {
         });
       }
     }
-    for (const key of VISITOR_KEYS[node2.type] ?? []) {
+    ancestors.push(node2);
+    for (const key in node2) {
+      if (nonChildKeys[key]) continue;
       const value = node2[key];
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child && typeof child === "object" && "type" in child) visit2(child, [...parents, node2]);
-      }
+      if (Array.isArray(value)) {
+        for (const child of value) if (isNode(child)) visit2(child);
+      } else if (isNode(value)) visit2(value);
     }
+    ancestors.pop();
   }
-  visit2(file3, []);
+  visit2(file2);
   return candidates;
 }
-var checks, decoratorPlugins;
+var checks, decoratorPlugins, functionTypes, nonChildKeys;
 var init_checks3 = __esm({
   "src/checks.ts"() {
     "use strict";
     init_lib();
-    init_lib4();
     init_domain();
     checks = {
       "zero-divisor": {
@@ -43180,6 +35721,15 @@ var init_checks3 = __esm({
       }
     };
     decoratorPlugins = [["decorators-legacy", "decoratorAutoAccessors"], ["decorators"]];
+    functionTypes = {
+      FunctionDeclaration: true,
+      FunctionExpression: true,
+      ObjectMethod: true,
+      ArrowFunctionExpression: true,
+      ClassMethod: true,
+      ClassPrivateMethod: true
+    };
+    nonChildKeys = { loc: true, leadingComments: true, trailingComments: true, innerComments: true, comments: true };
   }
 });
 
@@ -43499,7 +36049,7 @@ function focusSource(content, targets, maxCharacters = 12e3) {
   const requested = [{ start: 1, end: Math.min(20, lines.length) }, ...expanded.map((range) => ({
     start: Math.max(1, range.start - 12),
     end: Math.min(lines.length, range.end + 12)
-  }))].sort((a, b2) => a.start - b2.start);
+  }))].sort((a, b) => a.start - b.start);
   const merged = [];
   for (const range of requested) {
     const last = merged.at(-1);
@@ -44160,7 +36710,7 @@ async function collect(options) {
     limitations.push(`Collected source limitation for ${count} file(s): ${reason} (${samples.join(", ")}).`);
   }
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
-  const sources = [...sourceByPath.values()].sort((a, b2) => a.path.localeCompare(b2.path));
+  const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
@@ -44372,8 +36922,8 @@ var init_jev = __esm({
               const answer2 = parsed.data.answers[id];
               if (!answer2 || answer2.type !== question.type) throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
               if (answer2.type === "noul") continue;
-              const keys2 = Object.keys(question.criteria);
-              if (answer2.type === "choice" && !keys2.includes(answer2.choice) || answer2.type === "score" && (answer2.score > keys2.length - 1 || keys2.some((key) => !answer2.legend[key])) || keys2.some((key) => answer2.probabilities[key] === void 0) || Object.keys(answer2.probabilities).some((key) => !keys2.includes(key)) || Math.abs(Object.values(answer2.probabilities).reduce((a, b2) => a + b2, 0) - 1) > 0.02) {
+              const keys = Object.keys(question.criteria);
+              if (answer2.type === "choice" && !keys.includes(answer2.choice) || answer2.type === "score" && (answer2.score > keys.length - 1 || keys.some((key) => !answer2.legend[key])) || keys.some((key) => answer2.probabilities[key] === void 0) || Object.keys(answer2.probabilities).some((key) => !keys.includes(key)) || Math.abs(Object.values(answer2.probabilities).reduce((a, b) => a + b, 0) - 1) > 0.02) {
                 throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
               }
             }
@@ -44447,19 +36997,19 @@ async function loadProjectConfig(repo, signal) {
 }
 async function resolveSettings(repo, explicit, signal) {
   const { root, config: config2 } = await loadProjectConfig(repo, signal);
-  const file3 = config2 ?? {};
+  const file2 = config2 ?? {};
   return {
     root,
     request: {
-      base: explicit.base ?? file3.base ?? DEFAULT_BASE,
-      includeUntracked: explicit.includeUntracked ?? file3.includeUntracked ?? false,
-      task: explicit.task ?? file3.task,
-      repositoryContext: explicit.repositoryContext ?? file3.repositoryContext,
-      collection: { ...file3.collection, ...defined(explicit.collection) },
+      base: explicit.base ?? file2.base ?? DEFAULT_BASE,
+      includeUntracked: explicit.includeUntracked ?? file2.includeUntracked ?? false,
+      task: explicit.task ?? file2.task,
+      repositoryContext: explicit.repositoryContext ?? file2.repositoryContext,
+      collection: { ...file2.collection, ...defined(explicit.collection) },
       ...config2 ? { projectConfig: config2 } : {}
     },
-    reviewTimeoutMs: explicit.reviewTimeoutMs ?? file3.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
-    provider: { model: file3.model, timeoutMs: file3.requestTimeoutMs }
+    reviewTimeoutMs: explicit.reviewTimeoutMs ?? file2.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
+    provider: { model: file2.model, timeoutMs: file2.requestTimeoutMs }
   };
 }
 var exec2, CONFIG_FILE, MAX_CONFIG_BYTES, CREDENTIAL_KEY, projectConfigSchema, where, defined;
@@ -44511,8 +37061,8 @@ var init_chunk_Br0eD_fh = __esm({
     };
     __copyProps = (to, from, except, desc) => {
       if (from && typeof from === "object" || typeof from === "function") {
-        for (var keys2 = __getOwnPropNames2(from), i = 0, n = keys2.length, key; i < n; i++) {
-          key = keys2[i];
+        for (var keys = __getOwnPropNames2(from), i = 0, n = keys.length, key; i < n; i++) {
+          key = keys[i];
           if (!__hasOwnProp.call(to, key) && key !== except) {
             __defProp2(to, key, {
               get: ((k) => from[k]).bind(null, key),
@@ -48136,7 +40686,7 @@ function serializeMessage(message) {
   return JSON.stringify(message) + "\n";
 }
 function validateToolName(name) {
-  const warnings2 = [];
+  const warnings = [];
   if (name.length === 0) return {
     isValid: false,
     warnings: ["Tool name cannot be empty"]
@@ -48145,27 +40695,27 @@ function validateToolName(name) {
     isValid: false,
     warnings: [`Tool name exceeds maximum length of 128 characters (current: ${name.length})`]
   };
-  if (name.includes(" ")) warnings2.push("Tool name contains spaces, which may cause parsing issues");
-  if (name.includes(",")) warnings2.push("Tool name contains commas, which may cause parsing issues");
-  if (name.startsWith("-") || name.endsWith("-")) warnings2.push("Tool name starts or ends with a dash, which may cause parsing issues in some contexts");
-  if (name.startsWith(".") || name.endsWith(".")) warnings2.push("Tool name starts or ends with a dot, which may cause parsing issues in some contexts");
+  if (name.includes(" ")) warnings.push("Tool name contains spaces, which may cause parsing issues");
+  if (name.includes(",")) warnings.push("Tool name contains commas, which may cause parsing issues");
+  if (name.startsWith("-") || name.endsWith("-")) warnings.push("Tool name starts or ends with a dash, which may cause parsing issues in some contexts");
+  if (name.startsWith(".") || name.endsWith(".")) warnings.push("Tool name starts or ends with a dot, which may cause parsing issues in some contexts");
   if (!TOOL_NAME_REGEX.test(name)) {
     const invalidChars = [...name].filter((char) => !/[A-Za-z0-9._-]/.test(char)).filter((char, index, arr) => arr.indexOf(char) === index);
-    warnings2.push(`Tool name contains invalid characters: ${invalidChars.map((c) => `"${c}"`).join(", ")}`, "Allowed characters are: A-Z, a-z, 0-9, underscore (_), dash (-), and dot (.)");
+    warnings.push(`Tool name contains invalid characters: ${invalidChars.map((c) => `"${c}"`).join(", ")}`, "Allowed characters are: A-Z, a-z, 0-9, underscore (_), dash (-), and dot (.)");
     return {
       isValid: false,
-      warnings: warnings2
+      warnings
     };
   }
   return {
     isValid: true,
-    warnings: warnings2
+    warnings
   };
 }
-function issueToolNameWarning(name, warnings2) {
-  if (warnings2.length > 0) {
+function issueToolNameWarning(name, warnings) {
+  if (warnings.length > 0) {
     console.warn(`Tool name validation warning for "${name}":`);
-    for (const warning of warnings2) console.warn(`  - ${warning}`);
+    for (const warning of warnings) console.warn(`  - ${warning}`);
     console.warn("Tool registration will proceed, but this may cause compatibility issues.");
     console.warn("Consider updating the tool name to conform to the MCP tool naming standard.");
     console.warn("See SEP: Specify Format for Tool Names (https://github.com/modelcontextprotocol/modelcontextprotocol/issues/986) for more details.");
@@ -49604,9 +42154,9 @@ var init_src_CX2iR2pK = __esm({
               const sendCodec = this._resolveOutboundCodec(r.method);
               this._assertOutboundRequestInEra(sendCodec, r.method);
               if (isStandardSchema(schemaOrOptions)) return sendRequest(r, schemaOrOptions, maybeOptions);
-              const validate3 = codecResultValidator(sendCodec, r.method);
-              if (validate3 === void 0) throw new TypeError(`'${r.method}' is not a spec method; pass a result schema as the second argument to ctx.mcpReq.send().`);
-              return sendRequest(r, validate3, schemaOrOptions);
+              const validate2 = codecResultValidator(sendCodec, r.method);
+              if (validate2 === void 0) throw new TypeError(`'${r.method}' is not a spec method; pass a result schema as the second argument to ctx.mcpReq.send().`);
+              return sendRequest(r, validate2, schemaOrOptions);
             }),
             notify: sendNotification
           },
@@ -49699,9 +42249,9 @@ var init_src_CX2iR2pK = __esm({
         const codec2 = this._resolveOutboundCodec(request.method);
         this._assertOutboundRequestInEra(codec2, request.method);
         if (isStandardSchema(schemaOrOptions)) return this._requestWithSchemaViaCodec(codec2, request, schemaOrOptions, maybeOptions);
-        const validate3 = codecResultValidator(codec2, request.method);
-        if (validate3 === void 0) throw new TypeError(`'${request.method}' is not a spec method; pass a result schema as the second argument to request().`);
-        return this._requestWithSchemaViaCodec(codec2, request, validate3, schemaOrOptions);
+        const validate2 = codecResultValidator(codec2, request.method);
+        if (validate2 === void 0) throw new TypeError(`'${request.method}' is not a spec method; pass a result schema as the second argument to request().`);
+        return this._requestWithSchemaViaCodec(codec2, request, validate2, schemaOrOptions);
       }
       /**
       * The wire codec for this instance's negotiated era — the phase-2 truth:
@@ -50197,16 +42747,16 @@ var init_ajvProvider_CEoC_sr = __esm({
           i++;
         }
       }
-      function mergeExprItems(a, b2) {
-        if (b2 === '""') return a;
-        if (a === '""') return b2;
+      function mergeExprItems(a, b) {
+        if (b === '""') return a;
+        if (a === '""') return b;
         if (typeof a == "string") {
-          if (b2 instanceof Name || a[a.length - 1] !== '"') return;
-          if (typeof b2 != "string") return `${a.slice(0, -1)}${b2}"`;
-          if (b2[0] === '"') return a.slice(0, -1) + b2.slice(1);
+          if (b instanceof Name || a[a.length - 1] !== '"') return;
+          if (typeof b != "string") return `${a.slice(0, -1)}${b}"`;
+          if (b[0] === '"') return a.slice(0, -1) + b.slice(1);
           return;
         }
-        if (typeof b2 == "string" && b2[0] === '"' && !(a instanceof Name)) return `"${a}${b2.slice(1)}`;
+        if (typeof b == "string" && b[0] === '"' && !(a instanceof Name)) return `"${a}${b.slice(1)}`;
       }
       function strConcat(c1, c2) {
         return c2.emptyStr() ? c1 : c1.emptyStr() ? c2 : str`${c1}${c2}`;
@@ -51890,31 +44440,31 @@ var init_ajvProvider_CEoC_sr = __esm({
       exports.extendSubschemaMode = extendSubschemaMode;
     }));
     require_fast_deep_equal = /* @__PURE__ */ __commonJSMin(((exports, module) => {
-      module.exports = function equal(a, b2) {
-        if (a === b2) return true;
-        if (a && b2 && typeof a == "object" && typeof b2 == "object") {
-          if (a.constructor !== b2.constructor) return false;
-          var length, i, keys2;
+      module.exports = function equal(a, b) {
+        if (a === b) return true;
+        if (a && b && typeof a == "object" && typeof b == "object") {
+          if (a.constructor !== b.constructor) return false;
+          var length, i, keys;
           if (Array.isArray(a)) {
             length = a.length;
-            if (length != b2.length) return false;
-            for (i = length; i-- !== 0; ) if (!equal(a[i], b2[i])) return false;
+            if (length != b.length) return false;
+            for (i = length; i-- !== 0; ) if (!equal(a[i], b[i])) return false;
             return true;
           }
-          if (a.constructor === RegExp) return a.source === b2.source && a.flags === b2.flags;
-          if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b2.valueOf();
-          if (a.toString !== Object.prototype.toString) return a.toString() === b2.toString();
-          keys2 = Object.keys(a);
-          length = keys2.length;
-          if (length !== Object.keys(b2).length) return false;
-          for (i = length; i-- !== 0; ) if (!Object.prototype.hasOwnProperty.call(b2, keys2[i])) return false;
+          if (a.constructor === RegExp) return a.source === b.source && a.flags === b.flags;
+          if (a.valueOf !== Object.prototype.valueOf) return a.valueOf() === b.valueOf();
+          if (a.toString !== Object.prototype.toString) return a.toString() === b.toString();
+          keys = Object.keys(a);
+          length = keys.length;
+          if (length !== Object.keys(b).length) return false;
+          for (i = length; i-- !== 0; ) if (!Object.prototype.hasOwnProperty.call(b, keys[i])) return false;
           for (i = length; i-- !== 0; ) {
-            var key = keys2[i];
-            if (!equal(a[key], b2[key])) return false;
+            var key = keys[i];
+            if (!equal(a[key], b[key])) return false;
           }
           return true;
         }
-        return a !== a && b2 !== b2;
+        return a !== a && b !== b;
       };
     }));
     require_json_schema_traverse = /* @__PURE__ */ __commonJSMin(((exports, module) => {
@@ -52637,28 +45187,28 @@ var init_ajvProvider_CEoC_sr = __esm({
           const validateCode = gen.toString();
           sourceCode = `${gen.scopeRefs(names_1.default.scope)}return ${validateCode}`;
           if (this.opts.code.process) sourceCode = this.opts.code.process(sourceCode, sch);
-          const validate3 = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode)(this, this.scope.get());
-          this.scope.value(validateName, { ref: validate3 });
-          validate3.errors = null;
-          validate3.schema = sch.schema;
-          validate3.schemaEnv = sch;
-          if (sch.$async) validate3.$async = true;
-          if (this.opts.code.source === true) validate3.source = {
+          const validate2 = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode)(this, this.scope.get());
+          this.scope.value(validateName, { ref: validate2 });
+          validate2.errors = null;
+          validate2.schema = sch.schema;
+          validate2.schemaEnv = sch;
+          if (sch.$async) validate2.$async = true;
+          if (this.opts.code.source === true) validate2.source = {
             validateName,
             validateCode,
             scopeValues: gen._values
           };
           if (this.opts.unevaluated) {
             const { props, items } = schemaCxt;
-            validate3.evaluated = {
+            validate2.evaluated = {
               props: props instanceof codegen_1.Name ? void 0 : props,
               items: items instanceof codegen_1.Name ? void 0 : items,
               dynamicProps: props instanceof codegen_1.Name,
               dynamicItems: items instanceof codegen_1.Name
             };
-            if (validate3.source) validate3.source.evaluated = (0, codegen_1.stringify)(validate3.evaluated);
+            if (validate2.source) validate2.source.evaluated = (0, codegen_1.stringify)(validate2.evaluated);
           }
-          sch.validate = validate3;
+          sch.validate = validate2;
           return sch;
         } catch (e) {
           delete sch.validate;
@@ -53730,14 +46280,14 @@ var init_ajvProvider_CEoC_sr = __esm({
           metaSchema = JSON.parse(JSON.stringify(metaSchema));
           for (const jsonPointer of keywordsJsonPointers) {
             const segments = jsonPointer.split("/").slice(1);
-            let keywords3 = metaSchema;
-            for (const seg of segments) keywords3 = keywords3[seg];
+            let keywords2 = metaSchema;
+            for (const seg of segments) keywords2 = keywords2[seg];
             for (const key in rules) {
               const rule = rules[key];
               if (typeof rule != "object") continue;
               const { $data } = rule.definition;
-              const schema = keywords3[key];
-              if ($data && schema) keywords3[key] = schemaOrData(schema);
+              const schema = keywords2[key];
+              if ($data && schema) keywords2[key] = schemaOrData(schema);
             }
           }
           return metaSchema;
@@ -55654,8 +48204,8 @@ var init_ajvProvider_CEoC_sr = __esm({
         const { gen, it } = cxt;
         it.schemaEnv.root.dynamicAnchors[anchor2] = true;
         const v = (0, codegen_1._)`${names_1.default.dynamicAnchors}${(0, codegen_1.getProperty)(anchor2)}`;
-        const validate3 = it.errSchemaPath === "#" ? it.validateName : _getValidate(cxt);
-        gen.if((0, codegen_1._)`!${v}`, () => gen.assign(v, validate3));
+        const validate2 = it.errSchemaPath === "#" ? it.validateName : _getValidate(cxt);
+        gen.if((0, codegen_1._)`!${v}`, () => gen.assign(v, validate2));
       }
       exports.dynamicAnchor = dynamicAnchor;
       function _getValidate(cxt) {
@@ -55702,11 +48252,11 @@ var init_ajvProvider_CEoC_sr = __esm({
             gen.if(v, _callRef(v, valid), _callRef(it.validateName, valid));
           } else _callRef(it.validateName, valid)();
         }
-        function _callRef(validate3, valid) {
+        function _callRef(validate2, valid) {
           return valid ? () => gen.block(() => {
-            (0, ref_1.callRef)(cxt, validate3);
+            (0, ref_1.callRef)(cxt, validate2);
             gen.let(valid, true);
-          }) : () => (0, ref_1.callRef)(cxt, validate3);
+          }) : () => (0, ref_1.callRef)(cxt, validate2);
         }
       }
       exports.dynamicRef = dynamicRef;
@@ -56747,9 +49297,9 @@ var init_ajvProvider_CEoC_sr = __esm({
     require_formats = /* @__PURE__ */ __commonJSMin(((exports) => {
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.formatNames = exports.fastFormats = exports.fullFormats = void 0;
-      function fmtDef(validate3, compare2) {
+      function fmtDef(validate2, compare2) {
         return {
-          validate: validate3,
+          validate: validate2,
           compare: compare2
         };
       }
