@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { readGitChangeContext } from '../src/git-context.js';
 import type { GitChange } from '../src/git-context.js';
@@ -106,4 +108,24 @@ test('omits binary and oversized baselines without poisoning other files', async
   assert.ok(values.get('oversized.ts')!.change.error);
   assert.equal(values.get('normal.ts')!.before, fakeHeader);
   assert.deepEqual(values.get('normal.ts')!.change.ranges, [{ start: 2, end: 2 }]);
+});
+
+test('reports a working-tree change between the raw and patch diffs as retryable', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'stable.ts'), 'export const stable = 1;\n');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stable file');
+  const base = repo.git('rev-parse', 'HEAD').trim();
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = 0;\n');
+  // A git wrapper edits stable.ts right after the raw diff, so the patch diff has one more section.
+  const bin = await mkdtemp(join(tmpdir(), 'tracecheck-git-wrapper-')); t.after(() => rm(bin, { recursive: true, force: true }));
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  await writeFile(join(bin, 'git'), `#!/bin/sh\n'${realGit}' "$@"\ncode=$?\ncase " $* " in *" --raw "*) echo edited >> '${join(repo.root, 'stable.ts')}';; esac\nexit $code\n`);
+  await chmod(join(bin, 'git'), 0o755);
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    await assert.rejects(contextFor(repo.root, base, ['average.ts', 'stable.ts']), { message: 'Working tree changed during collection; retry the preview.' });
+  } finally {
+    process.env.PATH = path;
+  }
 });

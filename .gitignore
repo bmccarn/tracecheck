@@ -4,7 +4,6 @@ dist/*
 .tracecheck/
 .env
 .env.*
-!.env.example
 *.tsbuildinfo
 release/
 *.tgz

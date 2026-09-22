@@ -14,7 +14,7 @@ This directory is the maintained source for verifying Tracecheck's user-facing b
 - Run CLI commands through `$S/capture.sh "$RUN" <name> -- node dist/plugin.mjs ...`.
 - Run MCP tools through `node $S/mcp-call.mjs --out "$RUN/mcp" [--repo "$ROOT"] --calls "$RUN/calls.json"`.
 - Use `--json` on CLI commands whose assertions read fields. The default output is human-readable Markdown.
-- CLI exit codes are part of the contract: `0` no findings or success, `1` needs attention, `2` error, `3` inconclusive.
+- CLI exit codes are part of the contract: `0` no findings or success, `1` needs attention (review findings or quality priorities, a supported verify hypothesis, or assess priorities with `--fail-on-priorities`), `2` error, `3` inconclusive. `node dist/plugin.mjs --help` lists every flag per command.
 - Start each recipe from a fresh fixture. Fixtures are disposable; the evidence in `$RUN` is kept.
 
 ## Proof and skip reporting

@@ -1,6 +1,6 @@
 # Local integrations
 
-For packaged downloads, native Claude/Codex marketplace installation, and npm distribution, see the [publishing guide](publishing.md).
+To install Tracecheck from the plugin marketplace or from npm, follow [Install](../README.md#install) in the README. This guide covers the portable plugin installer, manual MCP clients, and a manual Cursor setup.
 
 Build with `npm ci && npm run build`. The runtime is `dist/plugin.mjs`; it includes its dependencies. The project supplies portable Agent Plugins 1.0 manifests, a Codex compatibility manifest, a Claude compatibility manifest, and one continuous-review skill.
 
@@ -19,29 +19,23 @@ The portable runtime path resolves against the plugin root. The agent supplies t
 
 ## Manual MCP
 
-For any stdio MCP client, including clients without a portable installer target, configure:
+The README's [MCP and agent setup](../README.md#mcp-and-agent-setup) lists the launch command, arguments, and environment for any stdio MCP client, including clients without a portable installer target. Configure the environment in the client without committing credentials.
 
-- Command: `node`
-- Arguments: `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp`
-- Environment: forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`.
-
-Append `--repo`, `/absolute/path/to/reviewed/repository` to bind the process to one repository. Otherwise provide `repo` in collection-tool calls. GUI-launched clients may not inherit interactive shell variables; configure their environment explicitly without committing credentials.
-
-Load the included `skills/tracecheck/SKILL.md` through the client's skill support to get the continuous implement/validate/review workflow. MCP alone exposes the tools but does not impose that cadence.
+Load the complete `skills/tracecheck/` directory through the client's skill support to get the continuous implement/validate/review workflow. MCP alone exposes the tools but does not impose that cadence.
 
 ## Cursor: manual MCP + skill
 
 Cursor discovers local stdio MCP servers from either project `.cursor/mcp.json` or global `~/.cursor/mcp.json`. Add the `tracecheck` entry inside the existing `mcpServers` object; preserve every other server entry.
 
-Before stable `0.3.0` is published, point Cursor at a built local checkout so the MCP runtime matches the included four-tool skill:
+Point Cursor at the published 0.3.0 runtime so it matches the included four-tool skill:
 
 ```json
 {
   "mcpServers": {
     "tracecheck": {
       "type": "stdio",
-      "command": "node",
-      "args": ["/absolute/path/to/tracecheck/dist/plugin.mjs", "mcp"],
+      "command": "npx",
+      "args": ["--yes", "@bmccarn/tracecheck@0.3.0", "mcp"],
       "env": {
         "TYPESAFE_API_KEY": "${env:TYPESAFE_API_KEY}"
       }
@@ -50,16 +44,16 @@ Before stable `0.3.0` is published, point Cursor at a built local checkout so th
 }
 ```
 
-After stable `0.3.0` is published to npm, replace only `command` and `args` with the pinned stable runtime:
+To run a source checkout instead, for changes on `main` that are not in 0.3.0, replace only `command` and `args`:
 
 ```json
-"command": "npx",
-"args": ["--yes", "@bmccarn/tracecheck@0.3.0", "mcp"]
+"command": "node",
+"args": ["/absolute/path/to/tracecheck/dist/plugin.mjs", "mcp"]
 ```
 
-Do not pair the new four-tool skill with the public `0.2.0` runtime; that historical release predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. To use Jev through OpenRouter, use `"OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
+Do not pair the four-tool skill with the `0.2.0` runtime, which predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. A source checkout can also use Jev through OpenRouter with `"OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"`; 0.3.0 does not read that variable. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
 
-Copy the complete skill directory—not only `SKILL.md`—from the source matching the configured runtime to one discovered Cursor location. After `0.3.0` is published, unpack that exact npm package and copy its entire skill folder:
+Copy the complete skill directory, not only `SKILL.md`, from the same version as the configured runtime to one discovered Cursor location. For 0.3.0, unpack the npm package and copy its entire skill folder:
 
 ```sh
 npm pack @bmccarn/tracecheck@0.3.0
@@ -75,7 +69,7 @@ mkdir -p /path/to/project/.cursor/skills/tracecheck
 cp -R /tmp/tracecheck-0.3.0/package/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
 ```
 
-Before publication, copy the complete folder from the matching local checkout instead:
+If Cursor runs a source checkout, copy the complete folder from that checkout instead:
 
 ```sh
 cp -R /absolute/path/to/tracecheck/skills/tracecheck/. ~/.cursor/skills/tracecheck/

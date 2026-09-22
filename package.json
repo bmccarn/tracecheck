@@ -50,7 +50,7 @@
     ".mcp.json",
     "skills",
     "README.md",
-    "docs"
+    "docs/integrations.md"
   ],
   "keywords": [
     "code-review",

@@ -1,8 +1,8 @@
-# Baseline capability parity
+# Capability parity with `jev_review`
 
-The first Tracecheck build implemented a narrow source-review path and omitted important baseline capabilities. Version 0.2 restores the broad review layer alongside those additions. This is capability parity through a new implementation, not copied source or a wire-compatible replacement for the original tool.
+This document compares Tracecheck with `jev_review`, an earlier MCP tool for Jev code review that `tracecheck_assess` replaces. The first Tracecheck build implemented a narrow source-review path and omitted important `jev_review` capabilities. Version 0.2 restores the broad review layer alongside those additions. This is capability parity through a new implementation, not copied source or a wire-compatible replacement for `jev_review`.
 
-| Baseline capability | Tracecheck implementation | Verification |
+| `jev_review` capability | Tracecheck implementation | Verification |
 | --- | --- | --- |
 | Nineteen independent quality dimensions | Complete dimension registry and broad assessment | Exact dimension-set regression test; live 19-dimension responses |
 | Fifteen regular and four conditional dimensions | Relevance/evidence Noul for every dimension; conditional guidance for the four specialized dimensions | Registry and applicability tests |
@@ -37,7 +37,7 @@ The first Tracecheck build implemented a narrow source-review path and omitted i
 ## Intentional differences
 
 - The public tools use Tracecheck names and schemas. Existing callers of `jev_review` must migrate to `tracecheck_assess`; old evaluation JSON is not automatically imported.
-- Applicability below 0.8 withholds a score. The original's permissive binary threshold is replaced by explicit uncertainty; these thresholds still require representative calibration.
+- Applicability below 0.8 withholds a score. The permissive binary threshold of `jev_review` is replaced by explicit uncertainty; these thresholds still require representative calibration.
 - Priority is not inferred severity. A high overall dimension score cannot hide a separately supported concern.
 - Comparisons require matching scope, model, and rubric. Uncertain metric pairs do not produce confident numeric improvement claims.
 - Automatic collection and serialized requests have visible budgets. Scope is never silently truncated.
@@ -45,4 +45,4 @@ The first Tracecheck build implemented a narrow source-review path and omitted i
 
 ## Still outside the implemented additions
 
-Cross-language AST findings, complete caller graphs, sandboxed reproductions, verified-fix execution, broader labeled real-PR evaluation, and CI/SARIF exports are future work. They were proposed improvements, not baseline features that the original already implemented.
+Cross-language AST findings, complete caller graphs, sandboxed reproductions, verified-fix execution, and broader labeled real-PR evaluation are future work. They were proposed improvements, not features that `jev_review` already implemented. SARIF export, which this list used to include, is on `main` as `review --sarif` and ships in the next release.

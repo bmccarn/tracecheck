@@ -5,7 +5,7 @@ import { promisify } from 'node:util';
 import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
-import { readGitChangeContext, type GitChange } from './git-context.js';
+import { gitEnvironment, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
 import { definedSymbols, focusSource, isSource, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { hasSecret, readSource } from './safety.js';
@@ -37,9 +37,10 @@ const sourceBytes = (source: Source) => Buffer.byteLength(JSON.stringify(source)
 export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...(options.signal ? [options.signal] : [])]);
+  // Every Git command runs under the collection signal, so its timeout is the remaining collection budget.
   const git = async (root: string, args: string[]) => {
     signal.throwIfAborted();
-    return (await exec('git', ['-C', root, ...args], { maxBuffer: 8 * 1024 * 1024, timeout: 10_000, signal })).stdout;
+    return (await exec('git', ['-C', root, ...args], { signal, env: gitEnvironment() })).stdout;
   };
   const root = await realpath((await git(resolve(options.repo), ['rev-parse', '--show-toplevel'])).trim());
   const base = (await git(root, ['rev-parse', '--verify', '--end-of-options', `${options.base ?? 'HEAD'}^{commit}`])).trim();
@@ -47,8 +48,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   // Rename detection runs once here; readGitChangeContext diffs each detected pair with the same default threshold.
   const changed: string[] = [];
   const renames = new Map<string, string>();
-  const statusFields = (await git(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'])).split('\0');
-  if (statusFields.pop() !== '') throw new Error('Git change listing failed');
+  const statusFields = await readGitRecords(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'], signal, 'Git change listing failed');
   for (let index = 0; index < statusFields.length;) {
     const status = statusFields[index++]!;
     const recordPaths = statusFields.slice(index, index += /^[RC]/.test(status) ? 2 : 1);
@@ -57,8 +57,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     changed.push(path);
     if (status.startsWith('R')) renames.set(path, recordPaths[0]!);
   }
-  const untracked = (await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
-  const tracked = (await git(root, ['ls-files', '-z'])).split('\0').filter(Boolean);
+  const untracked = (await readGitRecords(root, ['ls-files', '--others', '--exclude-standard', '-z'], signal, 'Git untracked-file listing failed')).filter(Boolean);
+  const tracked = (await readGitRecords(root, ['ls-files', '-z'], signal, 'Git tracked-file listing failed')).filter(Boolean);
   const untrackedPaths = new Set(untracked);
 
   const known = new Set([...tracked, ...(options.includeUntracked ? untracked : [])]);
@@ -72,6 +72,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const candidateIds = new Set<string>();
   const changedSourcePaths = new Set<string>();
   const omissions = new Map<string, { count: number; samples: string[] }>();
+  // Reasons per path; each is reported as `${reason}: ${path}`, and counts group by reason.
   const sourceIssues = new Map<string, string[]>();
   const recordOmission = (reason: string, path: string) => {
     const entry = omissions.get(reason) ?? { count: 0, samples: [] };
@@ -81,11 +82,12 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     omissions.set(reason, entry);
   };
   const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
-  const noteSource = (path: string, message: string) => {
+  const noteSource = (path: string, reason: string) => {
     const issues = sourceIssues.get(path) ?? [];
-    if (!issues.includes(message)) issues.push(message);
+    if (!issues.includes(reason)) issues.push(reason);
     sourceIssues.set(path, issues);
   };
+  const issueMessages = (path: string) => (sourceIssues.get(path) ?? []).map(reason => `${reason}: ${path}`);
   // Each file is read and screened at most once per collection. A failure is kept too, so every later use reports it.
   const reads = new Map<string, Promise<string>>();
   const screenedRead = (path: string): Promise<string> => {
@@ -109,7 +111,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     }
     if (!isSource(path)) {
       recordOmission('Unsupported or generated file', path);
-      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      noteSource(path, 'Unsupported or generated file omitted');
       return undefined;
     }
     try {
@@ -122,6 +124,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
         if (before && hasSecret(before)) throw new Error('Base version with a potential credential');
         ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
+        if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
+        if (change?.noHunks === 'diff-suppressed') noteSource(path, 'Git reported no textual diff (binary or -diff attribute); changed lines are unknown');
       }
       let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
@@ -146,12 +150,12 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       loaded.set(path, { source, names });
       // A loaded changed file is never read again, so its full text need not stay in memory.
       if (role === 'changed') reads.delete(path);
-      if (!source.evidence!.complete) noteSource(path, `Focused excerpts only; omitted lines are not reviewed: ${path}`);
+      if (!source.evidence!.complete) noteSource(path, 'Focused excerpts only; omitted lines are not reviewed');
       if (role === 'changed' && !ranges.every(range => current.ranges.some(captured => captured.start <= range.start && captured.end >= range.end))) {
-        noteSource(path, `Changed ranges outside captured evidence omitted: ${path}`);
+        noteSource(path, 'Changed ranges outside captured evidence omitted');
       }
       if (role !== 'changed' && targets?.length && !targets.every(range => current.ranges.some(captured => captured.start <= range.start && captured.end >= range.end))) {
-        noteSource(path, `Relevant support ranges outside captured evidence omitted: ${path}`);
+        noteSource(path, 'Relevant support ranges outside captured evidence omitted');
       }
       if (role === 'changed') {
         changedSourcePaths.add(path);
@@ -160,8 +164,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
             const found = findCandidates(path, raw, ranges);
             const covered = found.filter(candidate => current.ranges.some(range => range.start <= candidate.range.start && range.end >= candidate.range.end));
             for (const candidate of covered) if (!candidateIds.has(candidate.id)) { candidateIds.add(candidate.id); candidates.push(candidate); }
-            if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
-          } catch (error) { noteSource(path, `Source could not be parsed (${parseErrorCategory(error)}); no candidates collected: ${path}`); }
+            if (covered.length !== found.length) noteSource(path, 'Candidates outside captured evidence omitted');
+          } catch (error) { noteSource(path, `Source could not be parsed (${parseErrorCategory(error)}); no candidates collected`); }
         }
       }
       return source;
@@ -169,7 +173,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       signal.throwIfAborted();
       const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
       recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted: ${path}`);
+      noteSource(path, `${message} omitted`);
       return undefined;
     }
   }
@@ -179,7 +183,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   for (const path of changePaths) {
     if (!isSource(path)) {
       recordOmission('Unsupported or generated file', label(path));
-      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      noteSource(path, 'Unsupported or generated file omitted');
       continue;
     }
     try {
@@ -189,7 +193,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       signal.throwIfAborted();
       const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
       recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted: ${path}`);
+      noteSource(path, `${message} omitted`);
     }
   }
   // A rename from an unsupported or generated path keeps that content out of review, so the new path has no baseline.
@@ -198,7 +202,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     const from = renames.get(path);
     if (!from) continue;
     if (isSource(from)) baselineRenames.set(path, from);
-    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline: ${path}`);
+    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline`);
   }
   await readGitChangeContext({ root, base, paths: eligibleChanges, renames: baselineRenames, signal,
     onBaseline: async (path, change, baseline) => { await load(path, 'changed', undefined, change, baseline); } });
@@ -271,7 +275,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     };
     for (const path of primary) {
       if (!add(path, true)) throw new Error(`Focused changed evidence cannot fit packet: ${path}`);
-      packetLimitations.push(...(sourceIssues.get(path) ?? []));
+      packetLimitations.push(...issueMessages(path));
     }
     const relatedRoles = ['test', 'caller', 'dependency'] as const;
     const relatedQueues = primary.map(path => relatedRoles.map(role => [...(relatedByChange.get(path) ?? [])]
@@ -312,13 +316,13 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       const source = await load(relatedPath, role, targets);
       if (source) sourceByPath.set(relatedPath, source);
       if (source && add(relatedPath, false)) {
-        packetLimitations.push(...(sourceIssues.get(relatedPath) ?? []));
+        packetLimitations.push(...issueMessages(relatedPath));
       } else if (source && !wasLoaded) {
         sourceByPath.delete(relatedPath);
         loaded.delete(relatedPath);
         sourceIssues.delete(relatedPath);
       } else if (!source) {
-        packetLimitations.push(...(sourceIssues.get(relatedPath) ?? []));
+        packetLimitations.push(...issueMessages(relatedPath));
       }
     }
     const packetCandidates = candidates.filter(candidate => primary.includes(candidate.path)).map(candidate => candidate.id);
@@ -330,8 +334,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   }
   const sourceIssueCounts = new Map<string, { count: number; samples: string[] }>();
   for (const path of sourceByPath.keys()) {
-    for (const issue of sourceIssues.get(path) ?? []) {
-      const reason = issue.replace(/: [^:]+$/, '');
+    for (const reason of sourceIssues.get(path) ?? []) {
       const entry = sourceIssueCounts.get(reason) ?? { count: 0, samples: [] };
       entry.count++;
       if (entry.samples.length < 3) entry.samples.push(path);

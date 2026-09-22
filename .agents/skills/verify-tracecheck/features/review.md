@@ -7,15 +7,16 @@ Review collects the same scope as preview, sends each nonempty packet to Jev wit
 - `review-cli` runs `review` and sets the exit code from the report status.
 - `review-decisions` returns a decision per candidate with `status` (`supported`, `not_supported`, `uncertain`, `needs_context`) and `impact`.
 - `review-quality` returns `quality` for one packet or `packetQualities` for several.
-- `review-previous` compares with a previous single-packet report via `--previous` or `previousEvaluation`. A previous evaluation that cannot be compared adds a `Previous evaluation was not compared because ...` limitation.
+- `review-previous` compares with a previous quality evaluation via `--previous` or `previousEvaluation`. The CLI flag takes a single-packet report saved by `review --out` or an evaluation saved by `assess --out` and rejects any other file, including a multi-packet report, with exit `2`. A previous evaluation that cannot be compared, including one supplied to a multi-packet review, adds a `Previous evaluation was not compared because ...` limitation.
 - `review-partial` keeps completed results when a request fails after its retries: the report is `inconclusive`, `usage.requests` counts only completed requests, and a `Review incomplete for packet <id> (<paths>): <error> Not evaluated: ...` limitation names the unevaluated source checks and broad review. When every request fails, the command fails with the provider error instead. MCP does not cache an incomplete report.
+- `review-sarif` writes supported findings as SARIF 2.1.0 with `--sarif FILE`: one rule per check family with a decision, one result per `supported` decision, and counts of the omitted decisions in run properties.
 - `review-mcp` runs `tracecheck_review` with a preview snapshot and caches the report for repeated calls. A cache hit collects once and makes no provider request.
 - `review-stale` rejects a snapshot when the repository changed after preview.
 - `compare-history` classifies findings across two saved reports with `compare`.
 
 ## How to get to it (user POV)
 
-- Run `tracecheck review --repo PATH [--base REF] [--task TEXT] [--context TEXT] [--previous report.json] [--json] [--out report.json]`.
+- Run `tracecheck review --repo PATH [--base REF] [--task TEXT] [--context TEXT] [--previous report-or-evaluation.json] [--json] [--out report.json] [--sarif findings.sarif]`.
 - Call `tracecheck_preview`, then `tracecheck_review` with its `snapshot` and the same collection arguments.
 - Run `tracecheck compare --previous old.json --current new.json`.
 
@@ -27,6 +28,8 @@ Preconditions:
 - A fixture exists: `node $S/fixture-repo.mjs json-regression > "$RUN/fixture.json"` and `ROOT=$(jq -r .root "$RUN/fixture.json")`.
 
 - **CLI review.** Run `$S/capture.sh "$RUN" review -- node dist/plugin.mjs review --repo "$ROOT" --json --out "$RUN/report.json"`. The exit code matches `status`: `1` for `needs_attention`, `3` for `inconclusive`, `0` for `no_findings`. `jq '{status, models, usage, decisions: [.decisions[] | {check, status, impact}], metrics: (.quality.metrics | length)}' "$RUN/report.json"` shows one `unhandled-json` decision and 19 metrics.
+- **SARIF.** Add `--sarif "$RUN/findings.sarif"` to the CLI review. `jq '.runs[0] | {rules: [.tool.driver.rules[].id], results: [.results[] | {ruleId, level, uri: .locations[0].physicalLocation.artifactLocation.uri, region: .locations[0].physicalLocation.region | {startLine, endLine}}], omitted: .properties.omittedDecisions}' "$RUN/findings.sarif"` has one result per `supported` decision in the report, at the decision's path and range. Validate the file against the official schema: download `https://raw.githubusercontent.com/oasis-tcs/sarif-spec/main/sarif-2.1/schema/sarif-schema-2.1.0.json` and run `npx -y ajv-cli@5 validate --spec=draft7 -c ajv-formats -s schema.json -d "$RUN/findings.sarif"`.
+- **Previous file shapes.** Save a review with `--out "$RUN/report.json"` and an assessment with `assess --out "$RUN/evaluation.json"`, then pass each to `review --previous`. The report yields `quality.comparison` entries; the evaluation normally adds a `Previous evaluation was not compared because its scope, model, or rubric version differs` limitation. A JSON file of any other shape exits `2` before inference with `neither a report saved by review --out nor an evaluation saved by assess --out`.
 - **Human output.** Run `$S/capture.sh "$RUN" review-md -- node dist/plugin.mjs review --repo "$ROOT"`. Stdout is a Markdown report with a quality table and a section per decision.
 - **MCP review and cache.** Write `[{"tool":"tracecheck_preview","arguments":{}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}}]` and run it with `mcp-call.mjs --repo "$ROOT"`. The first review has `structuredContent.cached: false`; the second has `cached: true` and the same `report.id`. To count collections, put a `git` wrapper that appends a line to a log first on `PATH` and add `run` steps that append a marker line to the log between calls. Count lines between markers: a miss collects twice (before and after inference), a hit once.
 - **Partial failure.** Start `$S/stand-in-provider.mjs --latency-ms 200 --fail-path 'ratio08'` with `hub`, create `node $S/fixture-repo.mjs multi-packet`, and run the CLI review with `TYPESAFE_API_KEY=placeholder` and `TYPESAFE_BASE_URL=http://127.0.0.1:<port>`. Exit `3`; `status` is `inconclusive`, `usage.requests` is `1`, the first packet's eight decisions and `packetQualities` entry remain, and one limitation starts with `Review incomplete for packet`. The stand-in log shows three attempts at the failing packet. Over MCP, start the stand-in with `--fail-times 3` and call `tracecheck_review` three times: the first report is incomplete with `cached: false`, the second reaches the stand-in again and completes with `cached: false`, and the third is `cached: true`.
@@ -39,5 +42,6 @@ Preconditions:
 - The stand-in provider answers every question the same way; use it for timing and failure handling, not for decision quality.
 - Each nonempty packet makes at least one provider request, and the 76 quality questions cost roughly 15,000 input tokens per request. Keep fixtures small.
 - The MCP cache lasts five minutes per server process. `mcp-call.mjs` starts a new process each run, so cache hits only occur within one calls file.
-- `--previous` requires a single-packet plan; multi-packet plans fail before inference.
+- `--previous` with a multi-packet plan runs the review and adds a limitation; a multi-packet previous report is rejected because it has no single quality evaluation.
+- SARIF omits `uncertain` and `needs_context` decisions and quality priorities; do not expect a result for them.
 - Reports contain source excerpts. Keep them inside `$RUN`.

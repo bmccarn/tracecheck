@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { DEFAULT_BASE, DEFAULT_REVIEW_TIMEOUT_MS, reviewScopeFields, reviewTimeoutSchema, type CollectionOptions } from './collection-options.js';
+import { gitEnvironment } from './git-context.js';
 import { modelSchema, requestConcurrencySchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
 import { hasSecret, readSource } from './safety.js';
 
@@ -70,7 +71,7 @@ export function parseProjectConfig(text: string): ProjectConfig {
 
 /** Finds the Git top level for `repo` and reads its configuration file, if one exists. */
 export async function loadProjectConfig(repo: string, signal?: AbortSignal): Promise<{ root: string; config?: ProjectConfig }> {
-  const { stdout } = await exec('git', ['-C', resolve(repo), 'rev-parse', '--show-toplevel'], { timeout: 10_000, signal });
+  const { stdout } = await exec('git', ['-C', resolve(repo), 'rev-parse', '--show-toplevel'], { timeout: 10_000, signal, env: gitEnvironment() });
   const root = await realpath(stdout.trim());
   let text: string;
   try {

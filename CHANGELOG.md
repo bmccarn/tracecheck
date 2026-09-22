@@ -24,6 +24,13 @@
 - Read optional project settings from `.tracecheck.json` (base, untracked files, task and context, collection limits, timeouts, and model), below flags, MCP arguments, and environment variables. Unknown keys and credential fields are rejected by name.
 - Candidate selection no longer bundles `@babel/types` (the bundle is about 237 KB smaller), walks syntax trees with one ancestor stack, and now checks decorator arguments on TypeScript parameter properties.
 - Resolve imports through TypeScript `paths` and `baseUrl` settings from the nearest `tsconfig.json` or `jsconfig.json`, following `extends` only inside the repository, and report configs that cannot be read or parsed.
+- Add `review --sarif FILE`, which writes supported findings as SARIF 2.1.0 for code-scanning tools.
+- Add `assess --fail-on-priorities`, which exits 1 when the evaluation lists actionable quality priorities.
+- `--help` lists every flag and exit code, and `--previous` accepts either a saved review report or an assess evaluation for both `review` and `assess`.
+- Stream Git file listings so repositories with very large path lists collect successfully, and derive listing timeouts from the collection budget instead of a fixed 10 seconds.
+- Ignore `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and similar variables that would redirect collection to another repository.
+- Report a working-tree change during collection as a retryable error, add limitations for changed files with no textual hunks, and group coverage counts correctly for paths that contain `:`.
+- Refresh the docs for the published 0.3.0 release, mark features that are only on `main`, and ship only runtime documentation in the npm package.
 
 ## 0.3.0 — 2026-09-18
 

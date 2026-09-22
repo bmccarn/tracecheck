@@ -18,7 +18,7 @@ Tracecheck helps your coding agent challenge suspected defects against source ev
 
 Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context to TypeSafe using your API key. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
 
-> **Status:** Working implementation with automated tests and live Jev/MCP validation. Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
+> **Status:** Version 0.3.0 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.3.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
 
 ## What you get
 
@@ -54,26 +54,70 @@ The division of work is deliberate: code extracts locations and computes compari
 - A Jev API key from the [TypeSafe console](https://console.typesafe.ai) for live assessments.
 - Git and a repository with at least one commit for automatic collection. Supplied-context assessment does not require Git.
 
-### Build and configure
+### Install
 
-Clone and build:
+Version 0.3.0 is published to npm as `@bmccarn/tracecheck` and to the `bmccarn/tracecheck-plugins` plugin marketplace. Choose one of these installation paths. Each one needs a provider key in the environment that launches Tracecheck; see [set a provider key](#set-a-provider-key).
+
+#### Install the agent plugin
+
+The plugin installs the review skill and registers the four-tool MCP server.
+
+**Claude Code**
+
+```text
+/plugin marketplace add bmccarn/tracecheck-plugins
+/plugin install tracecheck@tracecheck-plugins
+```
+
+Invoke `/tracecheck:tracecheck` to start the review workflow.
+
+**Codex**
+
+```sh
+codex plugin marketplace add bmccarn/tracecheck-plugins
+codex plugin add tracecheck@tracecheck-plugins
+```
+
+Start a new task and ask to use the Tracecheck skill.
+
+You can also add `bmccarn/tracecheck` itself as a marketplace. Its in-repo catalogs pin the latest stable release tag, currently `v0.3.0`, and never a release candidate. If you added this marketplace while its catalogs pinned `v0.2.0`, refresh the marketplace and update or reinstall the plugin to get 0.3.0.
+
+#### Run the CLI from npm
+
+```sh
+npx --yes @bmccarn/tracecheck@0.3.0 --help
+```
+
+The package contains the bundled runtime and the complete skill directory, `skills/tracecheck/`. Installing it registers neither the MCP server nor the skill with any client. To connect another MCP client, follow [MCP and agent setup](#mcp-and-agent-setup).
+
+#### Build from source
+
+Build a checkout to use changes on `main` that are not in 0.3.0:
 
 ```sh
 git clone https://github.com/bmccarn/tracecheck.git
 cd tracecheck
 npm ci
 npm run build
+```
 
+The built `dist/plugin.mjs` includes its runtime dependencies and runs without `node_modules`.
+
+### Set a provider key
+
+```sh
 # Set one of these in the environment that launches Tracecheck.
 export TYPESAFE_API_KEY="your-key"
 # JEV_API_KEY is also supported and takes precedence if both are set.
-# Without a TypeSafe key, an OpenRouter key routes requests through OpenRouter.
+# Not in 0.3.0: without a TypeSafe key, an OpenRouter key routes requests through OpenRouter.
 # export OPENROUTER_API_KEY="your-openrouter-key"
 ```
 
-The built `dist/plugin.mjs` includes its runtime dependencies and can run without `node_modules`. You can also use the npm CLI or install the plugin directly from GitHub; see [distribution](#distribution).
+### Run a first review
 
-Try the scripted example without an API call:
+The examples in this README run the source checkout's `node dist/plugin.mjs`. With the npm package, run `npx --yes @bmccarn/tracecheck@0.3.0` in its place.
+
+Try the scripted example without an API call. It runs from a source checkout:
 
 ```sh
 npm run demo
@@ -185,6 +229,8 @@ Keep the baseline fixed across commits by passing the same commit SHA with `--ba
 
 A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a limitation that says why. Source-finding history still uses the combined decisions.
 
+`--previous` takes either a report saved by `review --out` or an evaluation saved by `assess --out`, for both `review` and `assess`. Tracecheck reads the quality evaluation from it: a report's `quality`, or the evaluation itself. A multi-packet report has no single quality evaluation, so it is rejected, as is any other file. The comparison still requires the same scope, model, and rubric version; a review and an assessment usually have different scopes, so they are reported as not comparable unless the assessment `scope` matches.
+
 Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
 
 ### Supply context directly
@@ -215,60 +261,57 @@ node dist/plugin.mjs assess --input revised-context.json \
 
 A `diff` string is also supported. At least one current context field is required. Use a stable `scope` to identify the same review subject across checkpoints. `assess` evaluates only what you provide and performs no repository reads or parser-based source checks.
 
+`assess` exits `0` whatever it finds. Add `--fail-on-priorities` (not in 0.3.0) to exit `1` when the evaluation lists quality priorities; a priority is a concern judged with confidence of at least 0.6 and probability of at least 0.8, so uncertain concerns do not fail the command.
+
+### Upload findings to code scanning
+
+Not in 0.3.0. `review --sarif FILE` writes the supported source-anchored findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log, in addition to the normal output and exit code:
+
+```sh
+node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
+```
+
+- Each check family that produced a decision (`zero-divisor`, `swallowed-failure`, `unhandled-json`) is a rule, with the check hypothesis as its description and the verification step as its help.
+- Each `supported` decision is one result. Its location is the repository-relative path and line range, with the quoted source as the snippet; its message is the hypothesis. The level follows the judged impact: `high` is `error`, `medium` and `unknown` are `warning`, and `low` is `note`. Result properties carry `impact`, `impactConfidence`, `confidence`, `probability`, and `verification`.
+- `uncertain`, `needs_context`, and `not_supported` decisions are not results. The run's `omittedDecisions` property counts them; the JSON report keeps them in full.
+- Quality priorities have no source location and are not SARIF results. The run's `status` property still reflects them, and the exit code is unchanged.
+
+Paths are relative to the `SRCROOT` base, which the log maps to the reviewed repository root. The file holds source excerpts and is written with owner-only permissions.
+
 ### CLI options and exit codes
 
 | Option | Purpose |
 | --- | --- |
-| `--repo PATH` | Repository to collect; CLI preview/review default to the current directory. |
+| `--repo PATH` | Git repository to collect; preview and review default to the current directory. verify matches excerpts against it; mcp uses it when a tool call names no repository. |
 | `--base REF` | Git baseline; defaults to `HEAD`. |
-| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` turns off a configured `includeUntracked: true`. |
+| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` (not in 0.3.0) turns off a configured `includeUntracked: true`. |
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
 | `--json` | Emit full JSON for preview, review, or assess. |
-| `--out FILE` | Save a review report or quality assessment as JSON. |
-| `--previous FILE` | Previous repository report for review; previous quality assessment for assess. |
+| `--out FILE` | Save a review report, verification result, or quality assessment as JSON. |
+| `--sarif FILE` | Also write review's supported findings as SARIF 2.1.0. Not in 0.3.0. |
+| `--previous FILE` | For review and assess, a report saved by `review --out` or an evaluation saved by `assess --out` to compare quality with. For compare, the earlier report. |
+| `--current FILE` | For compare, the later report. |
+| `--input FILE` | Evidence JSON for verify; context JSON for assess. |
+| `--fail-on-priorities` | Make assess exit `1` when the evaluation lists actionable quality priorities. Not in 0.3.0. |
 | `--index-max-files N` | Optional local import-index file budget; unset by default. |
 | `--index-max-bytes N` | Optional local import-index byte budget; unset by default. |
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
 | `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
 | `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
 
-`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
+`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file), which is not in 0.3.0. A flag always overrides the file.
 
-Repository `review` uses these exit codes:
+Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | No actionable concerns in the performed review. |
-| `1` | Concerns need investigation. |
+| `0` | Success. `review` and `verify` found no actionable concern in the checks performed. |
+| `1` | `review`: supported source findings or quality priorities. `verify`: the hypothesis is supported. `assess --fail-on-priorities`: actionable quality priorities. |
 | `2` | Execution or input error. |
-| `3` | Inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
+| `3` | `review` or `verify` is inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
 
-A zero exit does not prove correctness. `assess` returns quality signals without a score-based failure gate. Use `--help` for command syntax.
-
-## Install the plugin
-
-After Tracecheck `0.3.0` is published, install the matching skill and four-tool MCP runtime through the stable marketplace:
-
-**Claude Code**
-
-```text
-/plugin marketplace add bmccarn/tracecheck-plugins
-/plugin install tracecheck@tracecheck-plugins
-```
-
-Invoke `/tracecheck:tracecheck` to start the review workflow.
-
-**Codex**
-
-```sh
-codex plugin marketplace add bmccarn/tracecheck-plugins
-codex plugin add tracecheck@tracecheck-plugins
-```
-
-Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ (22.x) or 24.11+ and a Jev key in the launching environment. The release-only marketplace becomes available only when the stable `0.3.0` publication has populated it from the verified release artifact. For local-bundle development and prepublication installation, follow the [publishing guide](docs/publishing.md#prerelease-local-bundle-installation).
-
-Adding `bmccarn/tracecheck` itself as a marketplace also installs the current stable release: its in-repo catalogs pin the latest stable tag and move with each stable release, never to a release candidate. Installations added while the catalogs pinned `v0.2.0` receive the current release after refreshing the marketplace and updating or reinstalling the plugin.
+A zero exit does not prove correctness. Without `--fail-on-priorities`, `assess` exits `0` on any result. `--help` lists every flag for each command.
 
 ## MCP and agent setup
 
@@ -281,17 +324,18 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 
-Configure your MCP client with:
+Configure your MCP client with one of these launch commands:
 
-| Setting | Value |
-| --- | --- |
-| Command | `node` |
-| Arguments | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
-| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`. |
+| Setting | npm package | Source checkout |
+| --- | --- | --- |
+| Command | `npx` | `node` |
+| Arguments | `--yes`, `@bmccarn/tracecheck@0.3.0`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
+
+Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. A source checkout also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`; 0.3.0 does not.
 
 Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
-The package includes portable plugin manifests, Codex and Claude compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The Claude and Codex plugin paths above remain native client installations. [Configure Cursor manually with its MCP entry and a copied complete skill directory](docs/integrations.md#cursor-manual-mcp--skill); npm installation alone registers neither for Cursor. The skill supplies the review cadence; adding the MCP server alone only exposes its tools.
+The package includes portable plugin manifests, client compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The skill supplies the review cadence; the MCP server alone only exposes its tools. For a client without a plugin marketplace, load the complete `skills/tracecheck/` directory, not only `SKILL.md`, through the client's skill support. The [Cursor setup](docs/integrations.md#cursor-manual-mcp--skill) shows both steps.
 
 A useful first instruction to your agent:
 
@@ -301,38 +345,25 @@ MCP protocol and packaging have been validated; installation in every native cli
 
 ## Distribution
 
-Tracecheck packages the MCP server and review skill together for Claude Code and Codex. The same standalone runtime also provides the npm CLI.
+One release publishes the same bundled runtime and skill through three channels:
+
+| Channel | Contents |
+| --- | --- |
+| npm `@bmccarn/tracecheck` | Stable releases under the `latest` tag and release candidates under `next`, published with provenance. |
+| [GitHub releases](https://github.com/bmccarn/tracecheck/releases) | The npm tarball and the marketplace archive for each release tag. |
+| `bmccarn/tracecheck-plugins` | The generated plugin marketplace. Only stable releases update it. |
+
+To build and check both archives locally, run:
 
 ```sh
 npm run package:check
 ```
 
-This builds and verifies an npm tarball and a marketplace bundle for both clients in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
+This builds and verifies an npm tarball and a marketplace bundle in `release/`. The packaged CLI and MCP handshake are tested through offline `npm exec`, outside the checkout.
 
-### Stable target: 0.3.0
+The `0.2.0` npm package and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) remain available. `0.2.0` predates the four-tool MCP server and the matching skill, so do not pair it with the current skill.
 
-After `0.3.0` is published, it is the `latest` npm release and the source for the stable Claude/Codex marketplace payload. Pin its CLI or four-tool MCP runtime:
-
-```sh
-npx --yes @bmccarn/tracecheck@0.3.0 --help
-npx --yes @bmccarn/tracecheck@0.3.0 mcp
-```
-
-Pair that runtime with the complete skill directory from the same `0.3.0` package or release artifact. Native Claude and Codex users should use the marketplace commands above; Cursor uses the [version-matched manual setup](docs/integrations.md#cursor-manual-mcp--skill).
-
-### Historical legacy: 0.2.0
-
-The public `0.2.0` npm package and [v0.2.0 release artifacts](https://github.com/bmccarn/tracecheck/releases/tag/v0.2.0) remain available for existing CLI installations:
-
-```sh
-npx --yes @bmccarn/tracecheck@0.2.0 --help
-npx --yes @bmccarn/tracecheck@0.2.0 review --repo /path/to/project
-```
-
-`0.2.0` predates the four-tool MCP server and matching skill, so it is not a new-installation path for those integrations.
-
-Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins` from the same verified release artifact. See the [publishing guide](docs/publishing.md) for prepublication local-bundle testing, stable publication, and recovery.
-
+The [publishing guide](docs/publishing.md) covers release-candidate testing, stable publication, and recovery.
 
 ## Configuration and data handling
 
@@ -340,13 +371,13 @@ Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins`
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | Required unless `JEV_API_KEY` or `OPENROUTER_API_KEY` is set | TypeSafe authentication. |
 | `JEV_API_KEY` | Unset | Alternative key name; takes precedence. |
-| `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. |
+| `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. Not in 0.3.0. |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. Not in 0.3.0. |
 | `JEV_MODEL` | `jev-latest` | Model selection. Use an available concrete version for repeatable evaluations. |
-| `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. |
-| `JEV_CONCURRENCY` | `4` | Most review requests in flight at once. A whole number from 1 to 16. Lower it if the provider rate-limits your account. Reports do not depend on it. |
+| `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. Not in 0.3.0. |
+| `JEV_CONCURRENCY` | `4` | Most review requests in flight at once. A whole number from 1 to 16. Lower it if the provider rate-limits your account. Reports do not depend on it. Not in 0.3.0. |
 
-Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
+Tracecheck does not load `.env` files automatically or persist your API key. To keep keys in a file, pass the file to Node when you run a source checkout, for example `node --env-file=.env dist/plugin.mjs review --repo /path/to/repo`, and keep the file out of Git. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
 - `preview` is local. `preview --json` shows the captured source as well as the collection metadata.
 - The collector skips generated paths, symlinks, binary files, and files that contain a potential credential. The same screening runs on every string in a provider request, including supplied task, diff, file, and context text. It detects private key blocks (including PGP, DSA, and encrypted keys), common provider token formats (AWS, GitHub, OpenAI-style, Slack, Google, Stripe, npm), passwords in URLs, and credential-named assignments (`password`, `token`, `secret`, `api_key`, and similar) whose quoted or unquoted value looks random. Values that read as identifiers, such as `'StringLiteralToken'`, and references such as `${API_TOKEN}` are not flagged. A skipped file is named in the collection limitations, and a blocked request names the file path or input field. Neither message includes the matched value. This is not comprehensive secret detection.
@@ -355,7 +386,7 @@ Tracecheck does not load `.env` files automatically or persist your API key. Rev
 
 ### Project configuration file
 
-To avoid repeating flags, commit a `.tracecheck.json` file at the repository root. CLI `preview` and `review`, and the MCP `tracecheck_preview` and `tracecheck_review` tools, read it from the repository they collect. An MCP server launched with `--repo` reads that repository's file. `verify` and `assess` do not read it. Every key is optional:
+Not in 0.3.0. To avoid repeating flags, commit a `.tracecheck.json` file at the repository root. CLI `preview` and `review`, and the MCP `tracecheck_preview` and `tracecheck_review` tools, read it from the repository they collect. An MCP server launched with `--repo` reads that repository's file. `verify` and `assess` do not read it. Every key is optional:
 
 ```json
 {
@@ -393,7 +424,7 @@ The preview snapshot covers the file's validated content. Editing the file betwe
 
 ### Using Jev through OpenRouter
 
-OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts TypeSafe's request format. Set `OPENROUTER_API_KEY` to use it. The setup from OpenRouter's TypeSafe SDK guide also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
+Not in 0.3.0. OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts TypeSafe's request format. Set `OPENROUTER_API_KEY` to use it. The setup from OpenRouter's TypeSafe SDK guide also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
 
 `JEV_MODEL` takes the same bare IDs as TypeSafe, such as `jev-latest`, and OpenRouter routes them to its `typesafe/` models. Reports record the model ID that OpenRouter returns, for example `typesafe/jev-1.13-20260917`. OpenRouter bills these requests to your OpenRouter account, and review context passes through OpenRouter on its way to TypeSafe.
 
@@ -433,12 +464,12 @@ npm run demo                        # Scripted example; no live inference
 npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
 npm run quality-smoke -- --live      # Live supplied-context Python assessments
-npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project label checks
+npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project label checks; maintainers only
 ```
 
-Live commands require credentials and consume API usage. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
+Live commands require credentials and consume API usage. The accuracy benchmark measures a repository that is not publicly available, so only maintainers can run it; see [the accuracy benchmark](docs/accuracy.md). The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
 
-GitHub Actions runs on pull requests and pushes to `main`, using Node 22.18.0 and the current 24.x LTS release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo, and runs `npm run release:check`. These checks need no live inference credentials. Commit the rebuilt bundle with any change that affects it.
+GitHub Actions runs CI on every pull request and on every push to `main`. The workflow tests on Node 22.18.0, the oldest supported 22.x release, and on the latest Node 24.x release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo, and runs `npm run release:check`. A new push to a pull request cancels that pull request's earlier run. The checks need no provider credentials. Commit the rebuilt bundle with any change that affects it.
 
 ## Troubleshooting
 
@@ -454,11 +485,11 @@ GitHub Actions runs on pull requests and pushes to `main`, using Node 22.18.0 an
 
 ## Roadmap
 
-The `0.3.0` version adds a real-project benchmark, separate relevance/evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. Its public availability follows the stable publication process above; npm `0.2.0` remains the previous release.
+Version 0.3.0 added a real-project benchmark, separate relevance and evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. It is the current release; `0.2.0` was the previous one.
 
 The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
 
-Later work includes broader source checks, incremental reassessment, isolated reproductions and fix verification, and CI/SARIF exports. These are planned capabilities, not current features.
+Later work includes broader source checks, incremental reassessment, and isolated reproductions with fix verification. These are planned capabilities, not current features.
 
 ## Development
 
