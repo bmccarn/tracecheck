@@ -6,6 +6,8 @@
 - Add `TYPESAFE_BASE_URL` to select any System One API base URL. Tracecheck rejects plain-HTTP remote hosts and URLs that contain credentials, a query, or a fragment.
 - The MCP review cache now keys reports by endpoint as well as model.
 - Recognize the context-limit error that OpenRouter relays from TypeSafe, so over-limit requests get the same "split the review" guidance.
+- Link Python callers and tests through parenthesized, comma-separated, and aliased imports.
+- Resolve NodeNext module paths (`.mjs` to `.mts`, `.cjs` to `.cts`, `.jsx` to `.tsx`, and directory `index` files), and stop creating edges to unsupported files such as images.
 
 ## 0.3.0 — 2026-09-18
 
