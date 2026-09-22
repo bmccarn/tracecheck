@@ -43513,17 +43513,22 @@ function importsFor(path, content, known, aliases) {
   }
   return [...result];
 }
+function definedSymbols(content) {
+  return [...new Set(Array.from(content.matchAll(DEFINED_SYMBOL), (match) => match[1] ?? match[2]))];
+}
 function symbolRanges(content, names) {
+  const wanted = [...new Set(names.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name)))];
+  if (!wanted.length) return [];
+  const pattern = new RegExp(`(?<![\\w$])(?:${wanted.map((name) => name.replaceAll("$", "\\$")).join("|")})(?![\\w$])`);
   const lines = content.split("\n");
-  const wanted = names.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name));
   const ranges = [];
   for (let index = 0; index < lines.length; index++) {
-    if (wanted.some((name) => new RegExp(`\\b${name}\\b`).test(lines[index]))) ranges.push({ start: index + 1, end: Math.min(lines.length, index + 35) });
+    if (pattern.test(lines[index])) ranges.push({ start: index + 1, end: Math.min(lines.length, index + 35) });
     if (ranges.length >= 12) break;
   }
   return ranges;
 }
-var isSource, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES;
+var isSource, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES, DEFINED_SYMBOL;
 var init_evidence = __esm({
   "src/evidence.ts"() {
     "use strict";
@@ -43537,6 +43542,7 @@ var init_evidence = __esm({
       ...["ts", "tsx", "mts", "cts", "js", "jsx", "mjs", "cjs"].map((extension) => `/index.${extension}`)
     ];
     SCRIPT_SOURCES = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
+    DEFINED_SYMBOL = /(?:def|function|class)\s+([A-Za-z_$][\w$]*)|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::(?:[^=;]|=>)*?)?=\s*(?:async\b\s*)?(?:function\b|(?:<[^<>]*>\s*)?\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?::[^=;]*?)?=>|[A-Za-z_$][\w$]*\s*=>)/g;
   }
 });
 
@@ -44067,7 +44073,7 @@ async function collect(options) {
           }
         };
       }
-      const names = role === "changed" ? [...raw.matchAll(/(?:def|function|class)\s+([A-Za-z_$][\w$]*)/g)].map((match) => match[1]) : void 0;
+      const names = role === "changed" ? definedSymbols(raw) : void 0;
       loaded.set(path, { source, names });
       if (!source.evidence.complete) noteSource(path, `Focused excerpts only; omitted lines are not reviewed: ${path}`);
       if (role === "changed" && !ranges.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {

@@ -126,12 +126,24 @@ export function importsFor(path: string, content: string, known: Set<string>, al
   return [...result];
 }
 
+// `def`/`function`/`class` names, and `const`/`let`/`var` bound to a function expression or an arrow function
+// (optionally typed, async, or generic; parameter lists may nest one level of parentheses).
+const DEFINED_SYMBOL = /(?:def|function|class)\s+([A-Za-z_$][\w$]*)|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::(?:[^=;]|=>)*?)?=\s*(?:async\b\s*)?(?:function\b|(?:<[^<>]*>\s*)?\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?::[^=;]*?)?=>|[A-Za-z_$][\w$]*\s*=>)/g;
+
+/** Names a changed file defines, used to focus its related files on the lines that mention them. */
+export function definedSymbols(content: string): string[] {
+  return [...new Set(Array.from(content.matchAll(DEFINED_SYMBOL), match => (match[1] ?? match[2])!))];
+}
+
 export function symbolRanges(content: string, names: string[]): Range[] {
+  const wanted = [...new Set(names.filter(name => /^[A-Za-z_$][\w$]*$/.test(name)))];
+  if (!wanted.length) return [];
+  // `$` is an identifier character, so `\b` cannot delimit names such as `$state`.
+  const pattern = new RegExp(`(?<![\\w$])(?:${wanted.map(name => name.replaceAll('$', '\\$')).join('|')})(?![\\w$])`);
   const lines = content.split('\n');
-  const wanted = names.filter(name => /^[A-Za-z_$][\w$]*$/.test(name));
   const ranges: Range[] = [];
   for (let index = 0; index < lines.length; index++) {
-    if (wanted.some(name => new RegExp(`\\b${name}\\b`).test(lines[index]!))) ranges.push({ start: index + 1, end: Math.min(lines.length, index + 35) });
+    if (pattern.test(lines[index]!)) ranges.push({ start: index + 1, end: Math.min(lines.length, index + 35) });
     if (ranges.length >= 12) break;
   }
   return ranges;
