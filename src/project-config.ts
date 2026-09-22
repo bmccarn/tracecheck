@@ -4,7 +4,7 @@ import { resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { z } from 'zod';
 import { DEFAULT_BASE, DEFAULT_REVIEW_TIMEOUT_MS, reviewScopeFields, reviewTimeoutSchema, type CollectionOptions } from './collection-options.js';
-import { modelSchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
+import { modelSchema, requestConcurrencySchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
 import { hasSecret, readSource } from './safety.js';
 
 const exec = promisify(execFile);
@@ -19,6 +19,7 @@ export const projectConfigSchema = z.object({
   reviewTimeoutMs: reviewTimeoutSchema,
   model: modelSchema,
   requestTimeoutMs: requestTimeoutSchema,
+  requestConcurrency: requestConcurrencySchema,
 }).partial().strict();
 export type ProjectConfig = z.output<typeof projectConfigSchema>;
 
@@ -36,7 +37,7 @@ export type EffectiveSettings = {
     collection: CollectionOptions; projectConfig?: ProjectConfig;
   };
   reviewTimeoutMs: number;
-  /** Provider fallbacks for jevSettings; JEV_MODEL and JEV_TIMEOUT_MS override them. */
+  /** Provider fallbacks for jevSettings; JEV_MODEL, JEV_TIMEOUT_MS, and JEV_CONCURRENCY override them. */
   provider: ConfiguredJevSettings;
 };
 
@@ -103,6 +104,6 @@ export async function resolveSettings(repo: string, explicit: ExplicitSettings, 
       ...(config ? { projectConfig: config } : {}),
     },
     reviewTimeoutMs: explicit.reviewTimeoutMs ?? file.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
-    provider: { model: file.model, timeoutMs: file.requestTimeoutMs },
+    provider: { model: file.model, timeoutMs: file.requestTimeoutMs, concurrency: file.requestConcurrency },
   };
 }

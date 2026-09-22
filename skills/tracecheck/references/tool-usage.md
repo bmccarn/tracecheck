@@ -60,6 +60,7 @@ This route reads no additional files. Include callers or tests yourself where th
 - Cursor setup or connection failure: inspect Cursor's **Output** panel → **MCP Logs**, then recheck the `mcp.json` stdio entry, the credential variable in Cursor's launching environment, and the complete `tracecheck` skill directory.
 - Budget or coverage gaps: reduce unrelated context while retaining contracts and dependencies. Explicitly list any scope left unreviewed.
 - Provider errors: surface the failure after built-in retries; do not loop indefinitely or substitute invented assessment results.
+- Incomplete review: a `Review incomplete for packet ...` limitation means a provider request failed after its retries. The report is inconclusive, keeps the other results, and names the work that was not evaluated. Call `tracecheck_review` again with the same snapshot; incomplete reports are not cached.
 - Uncertainty: seek specific missing evidence. If unavailable, retain uncertainty in the final report.
 
 At handoff, summarize the reviewed scope, actionable findings addressed, remaining uncertainty, and project checks actually executed. A high score, a disappearing finding, or a schema-valid response is not an executed fix verification.

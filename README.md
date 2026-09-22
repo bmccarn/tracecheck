@@ -242,7 +242,7 @@ Repository `review` uses these exit codes:
 | `0` | No actionable concerns in the performed review. |
 | `1` | Concerns need investigation. |
 | `2` | Execution or input error. |
-| `3` | Inconclusive because of uncertainty or coverage gaps. |
+| `3` | Inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
 
 A zero exit does not prove correctness. `assess` returns quality signals without a score-based failure gate. Use `--help` for command syntax.
 
@@ -287,7 +287,7 @@ Configure your MCP client with:
 | --- | --- |
 | Command | `node` |
 | Arguments | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
-| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, and `JEV_TIMEOUT_MS`. |
+| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`. |
 
 Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
@@ -344,6 +344,7 @@ Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins`
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. |
 | `JEV_MODEL` | `jev-latest` | Model selection. Use an available concrete version for repeatable evaluations. |
 | `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. |
+| `JEV_CONCURRENCY` | `4` | Most review requests in flight at once. A whole number from 1 to 16. Lower it if the provider rate-limits your account. Reports do not depend on it. |
 
 Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
@@ -365,7 +366,8 @@ To avoid repeating flags, commit a `.tracecheck.json` file at the repository roo
   "collection": { "maxIndexFiles": 5000, "indexTimeoutMs": 30000, "collectionTimeoutMs": 120000 },
   "reviewTimeoutMs": 600000,
   "model": "jev-latest",
-  "requestTimeoutMs": 60000
+  "requestTimeoutMs": 60000,
+  "requestConcurrency": 4
 }
 ```
 
@@ -376,11 +378,12 @@ To avoid repeating flags, commit a `.tracecheck.json` file at the repository roo
 | `reviewTimeoutMs` | `--review-timeout-ms` and the MCP `reviewTimeoutMs` argument |
 | `model` | `JEV_MODEL` |
 | `requestTimeoutMs` | `JEV_TIMEOUT_MS` |
+| `requestConcurrency` | `JEV_CONCURRENCY` |
 
 Each setting resolves in this order:
 
 1. A CLI flag or MCP argument. Collection limits resolve per key, so `--index-max-files` keeps the file's `indexTimeoutMs`.
-2. An environment variable. Only `model` and `requestTimeoutMs` have one: `JEV_MODEL` and `JEV_TIMEOUT_MS`.
+2. An environment variable. Only `model`, `requestTimeoutMs`, and `requestConcurrency` have one: `JEV_MODEL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`.
 3. The configuration file.
 4. The built-in default.
 
@@ -447,6 +450,7 @@ GitHub Actions runs on pull requests and pushes to `main`, using Node 22.18.0 an
 | Missing scores or inconclusive result | Read applicability and coverage limitations. Provide the missing contracts, callers, or tests rather than treating uncertainty as a defect. |
 | Comparison skipped or rejected | Keep scope, baseline, model, and rubric/policies consistent; use the correct report type for the command. |
 | Context limit error | Narrow the diff or supplied files and remove unrelated context. |
+| `Review incomplete for packet ...` limitation | A provider request failed after its retries. The report keeps every other result and names the source checks and broad review that were not evaluated. Run the review again; MCP does not cache incomplete reports. If the provider is rate-limiting, lower `JEV_CONCURRENCY`. |
 
 ## Roadmap
 

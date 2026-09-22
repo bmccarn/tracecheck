@@ -29,7 +29,7 @@ if (!values.live) {
         packets: [{ id: hash(item.id), changedPaths: [item.path], sourcePaths: [item.path], candidateIds: [candidateId], limitations: [] }],
         candidates: [{ id: candidateId, check: 'supplied-concern', path: item.path, symbol: item.symbol,
           range: { start: item.start, end: item.end }, quote: item.quote, hypothesis: item.hypothesis, verification: 'Evaluate the contract using the offline executable oracle.' }] };
-      const report = await review(plan, evaluator, signal);
+      const report = await review(plan, evaluator, { signal });
       const decision = report.decisions[0]!;
       results.push({ id: item.id, family: item.family, split: item.split, mode, expected: item.expected, actual: decision.status,
         model: report.models[0]!, requestHash: snapshot, decision, elapsedMs: report.usage.elapsedMs, inputTokens: report.usage.inputTokens, outputTokens: report.usage.outputTokens });

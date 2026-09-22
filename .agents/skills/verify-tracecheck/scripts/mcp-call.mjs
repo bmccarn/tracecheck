@@ -16,7 +16,7 @@ import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 
-const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS'];
+const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS', 'JEV_CONCURRENCY'];
 const { values } = parseArgs({
   options: {
     out: { type: 'string' }, repo: { type: 'string' }, calls: { type: 'string' },

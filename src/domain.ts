@@ -32,11 +32,12 @@ export type Response = {
   model: string; answers: Record<string, Answer>;
   usage: { input_tokens: number; output_tokens: number };
 };
+/** An evaluator rejects promptly when `signal` aborts, so a cancelled review stops every request in flight. */
 export interface Evaluator {
-  evaluate(state: unknown, questions: Record<string, Choice>): Promise<Response>;
+  evaluate(state: unknown, questions: Record<string, Choice>, signal?: AbortSignal): Promise<Response>;
 }
 export type TypedResponse = Omit<Response, 'answers'> & { answers: Record<string, TypedAnswer> };
-export interface TypedEvaluator { evaluate(state: unknown, questions: Record<string, Question>): Promise<TypedResponse> }
+export interface TypedEvaluator { evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<TypedResponse> }
 export type Decision = Candidate & {
   status: 'supported' | 'uncertain' | 'needs_context' | 'not_supported';
   confidence: number; probability: number;

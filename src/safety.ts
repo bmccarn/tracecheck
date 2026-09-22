@@ -87,7 +87,18 @@ export function assertSafeOutbound(value: unknown): void {
   visit(value, '', undefined);
 }
 
+/** The checked physical path of a file and the identity of its last observed state. */
+export type FileIdentity = { physical: string; dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
+
 export async function readSource(root: string, path: string, signal?: AbortSignal, maxBytes = 256_000): Promise<string> {
+  return (await readSourceFile(root, path, signal, maxBytes)).content;
+}
+
+/**
+ * Reads a regular file inside `root` without following symlinks, and rejects it if it changed during the read.
+ * Returns the identity the final check observed, so a caller that stat'ed the file earlier need not stat it again.
+ */
+export async function readSourceFile(root: string, path: string, signal?: AbortSignal, maxBytes = 256_000): Promise<{ content: string; identity: FileIdentity }> {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   const physical = await realpath(absolute);
@@ -113,6 +124,7 @@ export async function readSource(root: string, path: string, signal?: AbortSigna
     const current = await lstat(physical);
     if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size
       || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error('File changed during collection');
-    return buffer.subarray(0, size).toString('utf8');
+    return { content: buffer.subarray(0, size).toString('utf8'),
+      identity: { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs } };
   } finally { await file.close(); }
 }

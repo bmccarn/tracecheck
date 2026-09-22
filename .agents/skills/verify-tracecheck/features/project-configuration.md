@@ -1,6 +1,6 @@
 # Project configuration
 
-`preview` and `review` on the CLI, and `tracecheck_preview` and `tracecheck_review` over MCP, read optional defaults from `.tracecheck.json` at the root of the repository they collect. The file can set `base`, `includeUntracked`, `task`, `repositoryContext`, `collection`, `reviewTimeoutMs`, `model`, and `requestTimeoutMs`. A flag or MCP argument wins, then `JEV_MODEL` or `JEV_TIMEOUT_MS` for the provider settings, then the file, then the built-in default. The file is validated with the flag and argument schemas; unknown keys, invalid values, and credential-like fields are rejected with the key named. Its validated content is part of the preview snapshot.
+`preview` and `review` on the CLI, and `tracecheck_preview` and `tracecheck_review` over MCP, read optional defaults from `.tracecheck.json` at the root of the repository they collect. The file can set `base`, `includeUntracked`, `task`, `repositoryContext`, `collection`, `reviewTimeoutMs`, `model`, `requestTimeoutMs`, and `requestConcurrency`. A flag or MCP argument wins, then `JEV_MODEL`, `JEV_TIMEOUT_MS`, or `JEV_CONCURRENCY` for the provider settings, then the file, then the built-in default. The file is validated with the flag and argument schemas; unknown keys, invalid values, and credential-like fields are rejected with the key named. Its validated content is part of the preview snapshot.
 
 ## Sub-features
 
@@ -9,7 +9,7 @@
 - `config-validation` rejects unknown keys (including `baseUrl`), invalid values, and invalid JSON with an error naming the key and never quoting the value.
 - `config-credentials` rejects fields whose names look like a key, token, secret, or password, and values that match a known credential pattern.
 - `config-snapshot` makes `tracecheck_review` reject a preview snapshot after the file's settings change.
-- `config-provider` supplies the model and per-request timeout for review when the environment does not.
+- `config-provider` supplies the model, per-request timeout, and request concurrency for review when the environment does not.
 
 ## How to get to it (user POV)
 

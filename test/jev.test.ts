@@ -63,16 +63,17 @@ test('turns the provider context-limit code into actionable scope guidance', asy
 });
 
 test('selects TypeSafe or OpenRouter from the configured credentials', () => {
-  assert.deepEqual(jevSettings({ OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-latest', timeoutMs: 45_000 });
+  assert.deepEqual(jevSettings({ OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-latest', timeoutMs: 45_000, concurrency: 4 });
   // A TypeSafe key wins when both are present, and keeps the TypeSafe endpoint.
-  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'ts-key', OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'ts-key', baseUrl: 'https://api.typesafe.ai', model: 'jev-latest', timeoutMs: 45_000 });
+  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'ts-key', OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'ts-key', baseUrl: 'https://api.typesafe.ai', model: 'jev-latest', timeoutMs: 45_000, concurrency: 4 });
   assert.equal(jevSettings({ JEV_API_KEY: ' jev-key ', TYPESAFE_API_KEY: 'ts-key' }).apiKey, 'jev-key');
   // OpenRouter's documented setup reuses TYPESAFE_API_KEY with an explicit base URL.
-  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'or-key', TYPESAFE_BASE_URL: 'https://openrouter.ai/api', JEV_MODEL: 'jev-1.13', JEV_TIMEOUT_MS: '120000' }),
-    { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-1.13', timeoutMs: 120_000 });
-  assert.deepEqual(providerEnvironment({ OPENROUTER_API_KEY: 'or-key', TYPESAFE_API_KEY: '', JEV_TIMEOUT_MS: '5000', HOME: '/home/user' }),
-    { OPENROUTER_API_KEY: 'or-key', JEV_TIMEOUT_MS: '5000' });
+  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'or-key', TYPESAFE_BASE_URL: 'https://openrouter.ai/api', JEV_MODEL: 'jev-1.13', JEV_TIMEOUT_MS: '120000', JEV_CONCURRENCY: '16' }),
+    { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-1.13', timeoutMs: 120_000, concurrency: 16 });
+  assert.deepEqual(providerEnvironment({ OPENROUTER_API_KEY: 'or-key', TYPESAFE_API_KEY: '', JEV_TIMEOUT_MS: '5000', JEV_CONCURRENCY: '2', HOME: '/home/user' }),
+    { OPENROUTER_API_KEY: 'or-key', JEV_TIMEOUT_MS: '5000', JEV_CONCURRENCY: '2' });
   for (const value of ['0', '-1', '1.5', '10s', '3600001']) assert.throws(() => jevSettings({ JEV_TIMEOUT_MS: value }), /JEV_TIMEOUT_MS/);
+  for (const value of ['0', '17', '2.5', 'four']) assert.throws(() => jevSettings({ JEV_CONCURRENCY: value }), /JEV_CONCURRENCY must be a whole number from 1 to 16/);
 });
 
 test('sends requests to the OpenRouter System One endpoint and accepts its extra response fields', async () => {
@@ -185,6 +186,9 @@ test('names the per-request and overall timeouts with their durations', async ()
   assert.equal(count, 1);
   const overall = new Jev({ apiKey: 'fixture-key', signal: deadline(20, 'Review timed out after 20 ms.'), fetch: hangingFetch(() => {}) });
   await assert.rejects(overall.evaluate({}, questions), { message: 'Review timed out after 20 ms.' });
+  // A review passes its signal with each call, and aborting it cancels that request too.
+  const perCall = new Jev({ apiKey: 'fixture-key', fetch: hangingFetch(() => {}) });
+  await assert.rejects(perCall.evaluate({}, questions, deadline(20, 'Review timed out after 20 ms.')), { message: 'Review timed out after 20 ms.' });
 });
 
 test('rejects answers whose probabilities do not sum to one', async () => {

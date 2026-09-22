@@ -85,7 +85,7 @@ export async function assess(raw: QualityInput, evaluator: TypedEvaluator, signa
   const { previousEvaluation, scope: requestedScope, ...state } = input;
   const scope = requestedScope ?? hash({ task: input.task, paths: input.files?.map(file => file.path).sort() });
   signal?.throwIfAborted();
-  const response = await evaluator.evaluate(state, qualityQuestions());
+  const response = await evaluator.evaluate(state, qualityQuestions(), signal);
   signal?.throwIfAborted();
   const result = transformQuality(response, scope, hash(state), previousEvaluation);
   result.usage.elapsedMs = Date.now() - started;

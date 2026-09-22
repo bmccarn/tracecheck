@@ -5,16 +5,9 @@ import type { CollectionSettings } from './collection-options.js';
 import type { DiscoveryScope } from './domain.js';
 import { importsFor } from './evidence.js';
 import { createPathAliasLoader, type PathAliases } from './path-aliases.js';
-import { hasSecret, readSource } from './safety.js';
+import { hasSecret, readSourceFile, type FileIdentity } from './safety.js';
 
-type Fingerprint = {
-  physical: string;
-  dev: number;
-  ino: number;
-  size: number;
-  mtimeMs: number;
-  ctimeMs: number;
-};
+type Fingerprint = FileIdentity;
 
 // `aliases` keys the path alias settings the edges were resolved with.
 type Entry = { fingerprint: Fingerprint; aliases: string; edges: string[] };
@@ -86,26 +79,14 @@ type MetadataResult =
   | { kind: 'metadata'; fingerprint: Fingerprint; aliases: Aliases }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
-type ReadResult =
+type Indexed =
+  | { kind: 'cached'; edges: string[] }
   | { kind: 'indexed'; fingerprint: Fingerprint; aliases: string; edges: string[] }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
+type Admission = Indexed | { kind: 'read'; fingerprint: Fingerprint; aliases: Aliases };
 
 const INDEX_IO_CONCURRENCY = 16;
-
-async function bounded<T, R>(values: T[], stopped: () => boolean, task: (value: T) => Promise<R>): Promise<(R | undefined)[]> {
-  const results: (R | undefined)[] = new Array(values.length);
-  let next = 0;
-  const worker = async () => {
-    while (!stopped()) {
-      const index = next++;
-      if (index >= values.length) return;
-      results[index] = await task(values[index]!);
-    }
-  };
-  await Promise.all(Array.from({ length: Math.min(INDEX_IO_CONCURRENCY, values.length) }, worker));
-  return results;
-}
 
 /**
  * Builds a bounded, safe import graph. Cache entries retain only checked file
@@ -156,103 +137,90 @@ export async function buildImportIndex(options: {
   // Apply the file cap before any I/O is scheduled. A pinned prefix still
   // respects the resource policy that created it.
   const candidates = ordered.slice(0, Math.min(requestedPrefix, maxFiles));
+  const inspect = async (path: string): Promise<MetadataResult> => {
+    try {
+      const fingerprint = await metadata(physicalRoot, path, signal);
+      const aliases = path.endsWith('.py') ? { key: '' } : await aliasLoader.forFile(path);
+      if (stopped()) return { kind: 'interrupted' };
+      return { kind: 'metadata', fingerprint, aliases };
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
+    }
+  };
+  // Admission runs in path order, so the byte budget, the cache, and a deadline cut apply exactly as in a sequential scan.
   let indexedBytes = 0;
+  let halted = false;
+  const admit = (path: string, result: MetadataResult): Admission => {
+    if (halted || result.kind === 'interrupted') {
+      halted = true;
+      return { kind: 'interrupted' };
+    }
+    if (result.kind === 'omitted') return result;
+    if (indexedBytes + result.fingerprint.size > maxBytes) return { kind: 'omitted', reason: 'byte limit' };
+    indexedBytes += result.fingerprint.size;
+    const cached = cache.entries.get(path);
+    if (cached && fingerprintMatches(cached.fingerprint, result.fingerprint) && cached.aliases === result.aliases.key) return { kind: 'cached', edges: cached.edges };
+    return { kind: 'read', fingerprint: result.fingerprint, aliases: result.aliases };
+  };
+  const read = async (path: string, fingerprint: Fingerprint, aliases: Aliases): Promise<Indexed> => {
+    try {
+      const { content, identity } = await readSourceFile(physicalRoot, path, signal);
+      if (content.includes('\0')) throw new Error('Binary file');
+      if (hasSecret(content)) throw new Error('File with a potential credential');
+      if (!fingerprintMatches(fingerprint, identity)) throw new Error('File changed during collection');
+      const edges = importsFor(path, content, options.known, aliases.aliases).sort();
+      if (stopped()) return { kind: 'interrupted' };
+      return { kind: 'indexed', fingerprint: identity, aliases: aliases.key, edges };
+    } catch (error) {
+      options.signal?.throwIfAborted();
+      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
+    }
+  };
+  // Files stream through a fixed pool of workers, so a slow file holds up only its own worker. Each file waits for the
+  // admission of the file before it, which has already started, so the wait always ends.
+  const slots: Indexed[] = new Array(candidates.length);
+  let next = 0;
+  let admitted = Promise.resolve();
+  const worker = async () => {
+    while (!stopped()) {
+      const position = next++;
+      if (position >= candidates.length) return;
+      const path = candidates[position]!;
+      const previous = admitted;
+      let release!: () => void;
+      admitted = new Promise<void>(resolve => { release = resolve; });
+      let admission: Admission;
+      try {
+        const result = await inspect(path);
+        await previous;
+        admission = admit(path, result);
+      } finally { release(); }
+      slots[position] = admission.kind === 'read' ? await read(path, admission.fingerprint, admission.aliases) : admission;
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(INDEX_IO_CONCURRENCY, candidates.length) }, worker));
+
   let completed = 0;
   let deadlineReached = false;
-  for (let start = 0; start < candidates.length; start += INDEX_IO_CONCURRENCY) {
-    const batch = candidates.slice(start, start + INDEX_IO_CONCURRENCY);
-    const metadataResults = await bounded<string, MetadataResult>(batch, stopped, async path => {
-      try {
-        const fingerprint = await metadata(physicalRoot, path, signal);
-        const aliases = path.endsWith('.py') ? { key: '' } : await aliasLoader.forFile(path);
-        if (stopped()) return { kind: 'interrupted' };
-        return { kind: 'metadata', fingerprint, aliases };
-      } catch (error) {
-        options.signal?.throwIfAborted();
-        return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
-      }
-    });
-
-    const slots = new Map<string, { kind: 'cached'; edges: string[] } | { kind: 'omitted'; reason: string } | { kind: 'read'; fingerprint: Fingerprint; aliases: Aliases }>();
-    let prefix = batch.length;
-    for (let index = 0; index < batch.length; index++) {
-      const path = batch[index]!;
-      const result = metadataResults[index];
-      if (!result || result.kind === 'interrupted') {
-        prefix = index;
-        deadlineReached = true;
-        break;
-      }
-      if (result.kind === 'omitted') {
-        slots.set(path, result);
-        continue;
-      }
-      if (indexedBytes + result.fingerprint.size > maxBytes) {
-        slots.set(path, { kind: 'omitted', reason: 'byte limit' });
-        continue;
-      }
-      indexedBytes += result.fingerprint.size;
-      const cached = cache.entries.get(path);
-      if (cached && fingerprintMatches(cached.fingerprint, result.fingerprint) && cached.aliases === result.aliases.key) {
-        slots.set(path, { kind: 'cached', edges: cached.edges });
-      } else {
-        slots.set(path, { kind: 'read', fingerprint: result.fingerprint, aliases: result.aliases });
-      }
+  for (const [position, path] of candidates.entries()) {
+    const slot = slots[position];
+    if (!slot || slot.kind === 'interrupted') {
+      deadlineReached = true;
+      break;
     }
-
-    const reads = batch.slice(0, prefix).flatMap(path => {
-      const slot = slots.get(path);
-      return slot?.kind === 'read' ? [{ path, fingerprint: slot.fingerprint, aliases: slot.aliases }] : [];
-    });
-    const readResults = await bounded<{ path: string; fingerprint: Fingerprint; aliases: Aliases }, ReadResult>(reads, stopped, async ({ path, fingerprint, aliases }) => {
-      try {
-        const content = await readSource(physicalRoot, path, signal);
-        if (content.includes('\0')) throw new Error('Binary file');
-        if (hasSecret(content)) throw new Error('File with a potential credential');
-        const after = await metadata(physicalRoot, path, signal);
-        if (!fingerprintMatches(fingerprint, after)) throw new Error('File changed during collection');
-        const edges = importsFor(path, content, options.known, aliases.aliases).sort();
-        if (stopped()) return { kind: 'interrupted' };
-        return { kind: 'indexed', fingerprint: after, aliases: aliases.key, edges };
-      } catch (error) {
-        options.signal?.throwIfAborted();
-        return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
-      }
-    });
-    const readByPath = new Map(reads.map((entry, index) => [entry.path, readResults[index]]));
-
-    for (let index = 0; index < prefix; index++) {
-      const path = batch[index]!;
-      const slot = slots.get(path)!;
-      if (slot.kind === 'omitted') {
-        cache.entries.delete(path);
-        omit(slot.reason, path);
-        completed++;
-        continue;
-      }
-      if (slot.kind === 'cached') {
-        imports.set(path, [...slot.edges]);
-        completed++;
-        continue;
-      }
-      const result = readByPath.get(path);
-      if (!result || result.kind === 'interrupted') {
-        deadlineReached = true;
-        break;
-      }
-      if (result.kind === 'omitted') {
-        cache.entries.delete(path);
-        omit(result.reason, path);
-        completed++;
-        continue;
-      }
+    if (slot.kind === 'omitted') {
+      cache.entries.delete(path);
+      omit(slot.reason, path);
+    } else if (slot.kind === 'cached') {
+      imports.set(path, [...slot.edges]);
+    } else {
       if (cache.entries.size < MAX_CACHE_ENTRIES || cache.entries.has(path)) {
-        cache.entries.set(path, { fingerprint: result.fingerprint, aliases: result.aliases, edges: result.edges });
+        cache.entries.set(path, { fingerprint: slot.fingerprint, aliases: slot.aliases, edges: slot.edges });
       }
-      imports.set(path, [...result.edges]);
-      completed++;
+      imports.set(path, [...slot.edges]);
     }
-    if (deadlineReached) break;
+    completed++;
   }
 
   const discovery = options.discovery
