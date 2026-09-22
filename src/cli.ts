@@ -100,7 +100,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error('assess requires --input context.json');
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(ASSESS_TIMEOUT_MS)]);
+    const signal = AbortSignal.any([controller.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const input = qualityInputSchema.parse(JSON.parse(await readFile(values.input, 'utf8')));
     if (values.previous) input.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
     const evaluation = await assess(input, jevFromEnv(signal), signal);

@@ -58385,7 +58385,7 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: qualityEvaluationSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(ASSESS_TIMEOUT_MS)]);
+    const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const output2 = await assess(args, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
@@ -58634,7 +58634,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error("assess requires --input context.json");
     const controller2 = new AbortController();
     process.once("SIGINT", () => controller2.abort());
-    const signal = AbortSignal.any([controller2.signal, AbortSignal.timeout(ASSESS_TIMEOUT_MS)]);
+    const signal = AbortSignal.any([controller2.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
     if (values.previous) input2.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
     const evaluation = await assess(input2, jevFromEnv(signal), signal);

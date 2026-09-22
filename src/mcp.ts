@@ -71,7 +71,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     inputSchema: qualityInputSchema, outputSchema: qualityEvaluationSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(ASSESS_TIMEOUT_MS)]);
+    const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const output = await assess(args, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
   });
