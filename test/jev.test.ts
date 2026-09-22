@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Jev, jevSettings, providerEnvironment } from '../src/jev.js';
+import { deadline } from '../src/deadline.js';
 import { questionsFor } from '../src/review.js';
 import { fixtureEvaluator, planFor } from './helpers.js';
 
@@ -62,14 +63,16 @@ test('turns the provider context-limit code into actionable scope guidance', asy
 });
 
 test('selects TypeSafe or OpenRouter from the configured credentials', () => {
-  assert.deepEqual(jevSettings({ OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-latest' });
+  assert.deepEqual(jevSettings({ OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-latest', timeoutMs: 45_000 });
   // A TypeSafe key wins when both are present, and keeps the TypeSafe endpoint.
-  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'ts-key', OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'ts-key', baseUrl: 'https://api.typesafe.ai', model: 'jev-latest' });
+  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'ts-key', OPENROUTER_API_KEY: 'or-key' }), { apiKey: 'ts-key', baseUrl: 'https://api.typesafe.ai', model: 'jev-latest', timeoutMs: 45_000 });
   assert.equal(jevSettings({ JEV_API_KEY: ' jev-key ', TYPESAFE_API_KEY: 'ts-key' }).apiKey, 'jev-key');
   // OpenRouter's documented setup reuses TYPESAFE_API_KEY with an explicit base URL.
-  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'or-key', TYPESAFE_BASE_URL: 'https://openrouter.ai/api', JEV_MODEL: 'jev-1.13' }),
-    { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-1.13' });
-  assert.deepEqual(providerEnvironment({ OPENROUTER_API_KEY: 'or-key', TYPESAFE_API_KEY: '', HOME: '/home/user' }), { OPENROUTER_API_KEY: 'or-key' });
+  assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'or-key', TYPESAFE_BASE_URL: 'https://openrouter.ai/api', JEV_MODEL: 'jev-1.13', JEV_TIMEOUT_MS: '120000' }),
+    { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-1.13', timeoutMs: 120_000 });
+  assert.deepEqual(providerEnvironment({ OPENROUTER_API_KEY: 'or-key', TYPESAFE_API_KEY: '', JEV_TIMEOUT_MS: '5000', HOME: '/home/user' }),
+    { OPENROUTER_API_KEY: 'or-key', JEV_TIMEOUT_MS: '5000' });
+  for (const value of ['0', '-1', '1.5', '10s', '3600001']) assert.throws(() => jevSettings({ JEV_TIMEOUT_MS: value }), /JEV_TIMEOUT_MS/);
 });
 
 test('sends requests to the OpenRouter System One endpoint and accepts its extra response fields', async () => {
@@ -90,4 +93,113 @@ test('refuses base URLs that would expose the API key', () => {
   assert.throws(() => new Jev({ apiKey: 'key', baseUrl: 'https://user:pass@example.com' }), /credentials/);
   assert.throws(() => new Jev({ apiKey: 'key', baseUrl: 'https://openrouter.ai/api/alpha/decisions#' }), /fragment/);
   assert.throws(() => new Jev({ apiKey: 'key', baseUrl: 'openrouter.ai/api' }), /absolute URL/);
+});
+
+async function choiceFixture() {
+  const plan = planFor(); const questions = questionsFor(plan.candidates[0]!);
+  return { questions, response: await fixtureEvaluator().evaluate({}, questions) };
+}
+
+/**
+ * A fetch that never answers and rejects with a generic abort once its signal fires, as fetch does.
+ * A pending socket keeps the event loop alive; the interval stands in for it so unref'd deadlines can fire.
+ */
+const hangingFetch = (onCall: () => void) => (async (_url: unknown, options?: RequestInit) => {
+  onCall();
+  const socket = setInterval(() => {}, 1_000);
+  return new Promise<globalThis.Response>((_, reject) => options!.signal!.addEventListener('abort', () => {
+    clearInterval(socket);
+    reject(new DOMException('This operation was aborted', 'AbortError'));
+  }));
+}) as typeof fetch;
+
+test('retries server errors and gives up after three attempts', async () => {
+  const { questions, response } = await choiceFixture();
+  let count = 0;
+  const recovers = new Jev({ apiKey: 'fixture-key', fetch: async () => ++count < 3
+    ? new Response('', { status: 503, headers: { 'retry-after': '0' } }) : Response.json(response) });
+  await recovers.evaluate({}, questions); assert.equal(count, 3);
+  count = 0;
+  const failing = new Jev({ apiKey: 'fixture-key', fetch: async () => { count++; return new Response('private', { status: 500, headers: { 'retry-after': '0' } }); } });
+  await assert.rejects(failing.evaluate({}, questions), error => error instanceof Error && /HTTP 500/.test(error.message) && !/private/.test(error.message));
+  assert.equal(count, 3);
+});
+
+test('honors Retry-After as an HTTP date and refuses delays above 10 seconds', async () => {
+  const { questions, response } = await choiceFixture();
+  const retryAfter = (value: string) => {
+    let count = 0;
+    const client = new Jev({ apiKey: 'fixture-key', fetch: async () => ++count === 1
+      ? new Response('', { status: 429, headers: { 'retry-after': value } }) : Response.json(response) });
+    return { run: () => client.evaluate({}, questions), calls: () => count };
+  };
+  const past = retryAfter(new Date(Date.now() - 60_000).toUTCString());
+  await past.run(); assert.equal(past.calls(), 2);
+  for (const value of ['11', new Date(Date.now() + 60_000).toUTCString()]) {
+    const long = retryAfter(value);
+    await assert.rejects(long.run(), /longer retry delay/);
+    assert.equal(long.calls(), 1);
+  }
+});
+
+test('retries network failures and reports them without provider detail', async () => {
+  const { questions, response } = await choiceFixture();
+  let count = 0;
+  const recovers = new Jev({ apiKey: 'fixture-key', fetch: async () => {
+    if (++count === 1) throw new TypeError('fetch failed', { cause: Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }) });
+    return Response.json(response);
+  } });
+  await recovers.evaluate({}, questions); assert.equal(count, 2);
+  count = 0;
+  const failing = new Jev({ apiKey: 'fixture-key', fetch: async () => { count++; throw new TypeError('fetch failed'); } });
+  await assert.rejects(failing.evaluate({}, questions), { message: 'Jev request failed (network error); no successful review was recorded.' });
+  assert.equal(count, 3);
+});
+
+test('propagates the caller abort reason without retrying', async () => {
+  const { questions } = await choiceFixture();
+  const reason = new Error('caller stopped');
+  let count = 0;
+  const inFlight = new AbortController();
+  const client = new Jev({ apiKey: 'fixture-key', signal: inFlight.signal, fetch: hangingFetch(() => { count++; setTimeout(() => inFlight.abort(reason), 10); }) });
+  await assert.rejects(client.evaluate({}, questions), error => error === reason);
+  assert.equal(count, 1);
+  // An abort during a retry delay also stops at once with the caller's reason.
+  count = 0;
+  const waiting = new AbortController();
+  const delayed = new Jev({ apiKey: 'fixture-key', signal: waiting.signal, fetch: async () => {
+    count++; setTimeout(() => waiting.abort(reason), 10);
+    return new Response('', { status: 503, headers: { 'retry-after': '5' } });
+  } });
+  const started = Date.now();
+  await assert.rejects(delayed.evaluate({}, questions), error => error === reason);
+  assert.equal(count, 1);
+  assert.ok(Date.now() - started < 2_000);
+});
+
+test('names the per-request and overall timeouts with their durations', async () => {
+  const { questions } = await choiceFixture();
+  let count = 0;
+  const perRequest = new Jev({ apiKey: 'fixture-key', timeoutMs: 20, fetch: hangingFetch(() => count++) });
+  await assert.rejects(perRequest.evaluate({}, questions), /Jev request timed out after 20 ms\. Set JEV_TIMEOUT_MS/);
+  assert.equal(count, 1);
+  const overall = new Jev({ apiKey: 'fixture-key', signal: deadline(20, 'Review timed out after 20 ms.'), fetch: hangingFetch(() => {}) });
+  await assert.rejects(overall.evaluate({}, questions), { message: 'Review timed out after 20 ms.' });
+});
+
+test('rejects answers whose probabilities do not sum to one', async () => {
+  const { questions, response } = await choiceFixture();
+  const client = new Jev({ apiKey: 'fixture-key', fetch: async () => Response.json(response) });
+  await client.evaluate({}, questions);
+  const answer = response.answers[Object.keys(questions)[0]!]!;
+  const [first] = Object.keys(answer.probabilities);
+  answer.probabilities[first!] = answer.probabilities[first!]! + 0.05;
+  await assert.rejects(client.evaluate({}, questions), /invalid decision/);
+});
+
+test('refuses requests over the local size budget before sending', async () => {
+  let count = 0;
+  const client = new Jev({ apiKey: 'fixture-key', fetch: async () => { count++; throw new Error('Must not send'); } });
+  await assert.rejects(client.evaluate({ files: [{ content: 'x'.repeat(180_001) }] }, {}), /180 KB request budget/);
+  assert.equal(count, 0);
 });
