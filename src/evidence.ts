@@ -53,6 +53,29 @@ export const isSource = (path: string) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|sw
   && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path)
   && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
 
+/** Test files, by directory or by file name convention. */
+export const isTest = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
+
+/** Files grouped by the reason they were omitted or limited, reported as one limitation per reason. */
+export class FileTally {
+  private readonly reasons = new Map<string, { count: number; samples: string[] }>();
+  /** `namesEvery` selects the reasons whose limitation names every file rather than the first three. */
+  constructor(private readonly namesEvery: (reason: string) => boolean = () => false) {}
+
+  add(reason: string, path: string): void {
+    const entry = this.reasons.get(reason) ?? { count: 0, samples: [] };
+    entry.count++;
+    if (entry.samples.length < 3 || this.namesEvery(reason)) entry.samples.push(path);
+    this.reasons.set(reason, entry);
+  }
+
+  /** One `${lead} N file(s): reason (samples).` limitation per reason, in reason order. */
+  limitations(lead: string): string[] {
+    return [...this.reasons].sort(([left], [right]) => left.localeCompare(right))
+      .map(([reason, { count, samples }]) => `${lead} ${count} file(s): ${reason} (${samples.join(', ')}).`);
+  }
+}
+
 const PYTHON_TARGETS = ['.py', '/__init__.py'];
 // Extensionless specifiers and directory imports, in resolution order.
 const SCRIPT_TARGETS = ['.ts', '.tsx', '.js', '.jsx',

@@ -3,7 +3,7 @@ import { assertSafeOutbound } from './safety.js';
 import { deadline } from './deadline.js';
 import type { Choice, Evaluator, Response, Question, TypedResponse, TypedEvaluator } from './domain.js';
 
-const answerSchema = z.object({
+export const answerSchema = z.object({
   type: z.literal('choice'), choice: z.string(), confidence: z.number().min(0).max(1),
   probabilities: z.record(z.string(), z.number().min(0).max(1)),
 });

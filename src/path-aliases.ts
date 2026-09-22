@@ -1,5 +1,5 @@
 import { posix } from 'node:path';
-import { readSource } from './safety.js';
+import { failureReason, readSource } from './safety.js';
 
 /** Module resolution settings for one file; every path is repository-relative. */
 export type PathAliases = { baseUrl?: string; paths?: Record<string, string[]> };
@@ -98,8 +98,7 @@ export function createPathAliasLoader(root: string, known: Set<string>, signal?:
       } catch (error) {
         signal?.throwIfAborted();
         if ((error as NodeJS.ErrnoException).code === 'ENOENT') return 'missing' as const;
-        const reason = error instanceof Error && /Symlink|external path|oversized|changed during/i.test(error.message) ? error.message : 'Unreadable file';
-        problem(`TypeScript config could not be read (${reason}); its path aliases are ignored`, path);
+        problem(`TypeScript config could not be read (${failureReason(error, 'Unreadable file')}); its path aliases are ignored`, path);
         return undefined;
       }
       try {

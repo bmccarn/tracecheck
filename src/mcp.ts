@@ -38,6 +38,11 @@ export class ExpiringCache<V> {
   }
 }
 
+/** A tool result that carries `output` both as structured content and as JSON text. */
+function toolResult<T extends Record<string, unknown>>(output: T) {
+  return { content: [{ type: 'text' as const, text: JSON.stringify(output) }], structuredContent: output };
+}
+
 export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSignal) => TypedEvaluator) {
   const server = new McpServer({ name: 'tracecheck', version: releaseVersion });
   const cache = new ExpiringCache<Report>(CACHE_LIMIT, CACHE_TTL_MS);
@@ -61,7 +66,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const selected = repo || args.repo ? await target(args.repo) : undefined;
     const output = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
-    return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
+    return toolResult(output);
   });
   server.registerTool('tracecheck_assess', {
     description: `Review caller-supplied task, diff, files, and repository context across 19 independent quality dimensions with Jev. Language-agnostic; no filesystem reads. Optional previousEvaluation is compared locally. Returns scores, confidence, prioritized concerns, and changes. Times out after ${ASSESS_TIMEOUT_MS / 1000} seconds.`,
@@ -70,7 +75,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   }, async (args, ctx) => {
     const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const output = await assess(args, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
-    return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
+    return toolResult(output);
   });
   server.registerTool('tracecheck_preview', {
     description: 'Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.',
@@ -90,7 +95,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length, limitations: plan.limitations };
-    return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
+    return toolResult(output);
   });
   server.registerTool('tracecheck_review', {
     description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
@@ -122,7 +127,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
     const output = { cached, report: compared };
-    return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
+    return toolResult(output);
   });
   return server;
 }

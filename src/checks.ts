@@ -123,11 +123,3 @@ export function findCandidates(path: string, content: string, changed: Range[]):
   visit(file);
   return candidates;
 }
-
-export function changedRanges(diff: string): Range[] {
-  return [...diff.matchAll(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/gm)].map(match => {
-    const start = Math.max(1, Number(match[1]));
-    const count = match[2] === undefined ? 1 : Number(match[2]);
-    return { start, end: start + Math.max(1, count) - 1 };
-  });
-}

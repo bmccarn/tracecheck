@@ -1,16 +1,16 @@
 import { createHash } from 'node:crypto';
-import type { QualityEvaluation } from './quality.js';
+import type { z } from 'zod';
+import type { answerSchema } from './jev.js';
+import type { candidateSchema, rangeSchema, reportSchema } from './schema.js';
 
 export const CHECK_VERSION = '1';
 export const POLICY_VERSION = '2';
 export const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 
 export type Source = { path: string; previousPath?: string; content: string; role: 'changed' | 'dependency' | 'caller' | 'test'; before?: string; evidence?: { currentRanges: Range[]; beforeRanges?: Range[]; totalLines: number; complete: boolean; digest: string } };
-export type Range = { start: number; end: number };
-export type Candidate = {
-  id: string; check: string; path: string; symbol: string; range: Range;
-  quote: string; hypothesis: string; verification: string;
-};
+// Types that saved reports carry are inferred from the schemas that validate them.
+export type Range = z.infer<typeof rangeSchema>;
+export type Candidate = z.infer<typeof candidateSchema>;
 export type ReviewPacket = {
   id: string; changedPaths: string[]; sourcePaths: string[]; candidateIds: string[]; limitations: string[];
 };
@@ -22,7 +22,7 @@ export type ReviewPlan = {
   task?: string; repositoryContext?: string;
 };
 export type Choice = { type: 'choice'; instructions: string; criteria: Record<string, string> };
-export type Answer = { type: 'choice'; choice: string; confidence: number; probabilities: Record<string, number> };
+export type Answer = z.infer<typeof answerSchema>;
 export type Noul = { type: 'noul'; instructions: string; criteria: { true: string; false: string } };
 export type Score = { type: 'score'; instructions: string; criteria: string[] };
 export type Question = Choice | Noul | Score;
@@ -38,19 +38,5 @@ export interface Evaluator {
 }
 export type TypedResponse = Omit<Response, 'answers'> & { answers: Record<string, TypedAnswer> };
 export interface TypedEvaluator { evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<TypedResponse> }
-export type Decision = Candidate & {
-  status: 'supported' | 'uncertain' | 'needs_context' | 'not_supported';
-  confidence: number; probability: number;
-  impact: 'high' | 'medium' | 'low' | 'unknown'; impactConfidence: number;
-  raw: { assessment: Answer; impact: Answer };
-};
-export type Report = {
-  schemaVersion: 1; id: string; createdAt: string; snapshot: string;
-  root: string; base: string; head: string;
-  checkVersion: string; policyVersion: string; models: string[];
-  status: 'needs_attention' | 'inconclusive' | 'no_findings';
-  decisions: Decision[]; limitations: string[];
-  quality?: QualityEvaluation;
-  packetQualities?: { packetId: string; changedPaths: string[]; evaluation: QualityEvaluation }[];
-  usage: { inputTokens: number; outputTokens: number; requests: number; elapsedMs: number };
-};
+export type Report = z.infer<typeof reportSchema>;
+export type Decision = Report['decisions'][number];

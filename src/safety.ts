@@ -87,6 +87,23 @@ export function assertSafeOutbound(value: unknown): void {
   visit(value, '', undefined);
 }
 
+/** Whether the absolute `path` lies inside the absolute `root`. */
+export function isInside(root: string, path: string): boolean {
+  const inside = relative(root, path);
+  return inside !== '..' && !inside.startsWith('../') && !inside.startsWith('..\\') && !isAbsolute(inside);
+}
+
+// Read and screening failures whose messages name their cause without quoting file content.
+const NAMED_FAILURE = /Symlink|external path|Nonregular|oversized|credential|Binary|changed during|Base version unavailable/i;
+
+/**
+ * The message of a read or screening failure that Tracecheck raised, or `fallback` for any other failure. System
+ * errors carry a `code` and quote absolute paths, so their messages are never reported.
+ */
+export function failureReason(error: unknown, fallback: string): string {
+  return error instanceof Error && !('code' in error) && NAMED_FAILURE.test(error.message) ? error.message : fallback;
+}
+
 /** The checked physical path of a file and the identity of its last observed state. */
 export type FileIdentity = { physical: string; dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
 
@@ -102,9 +119,7 @@ export async function readSourceFile(root: string, path: string, signal?: AbortS
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   const physical = await realpath(absolute);
-  const inside = relative(root, physical);
-  if (inside === '..' || inside.startsWith('../') || inside.startsWith('..\\') || isAbsolute(inside)
-    || (await lstat(absolute)).isSymbolicLink()) throw new Error('Symlink or external path');
+  if (!isInside(root, physical) || (await lstat(absolute)).isSymbolicLink()) throw new Error('Symlink or external path');
   // Open the checked physical path without following a final-component symlink.
   const file = await open(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
