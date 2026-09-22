@@ -90,6 +90,21 @@ const scenarios = {
     },
     change: { 'src/app.tsx': "import { scale } from './lib.mjs';\nimport { offset } from './legacy.cjs';\nimport { label } from './widgets';\nimport logo from './logo.png';\nimport './app.css';\n\nexport function size(value: number) {\n  return `${label}=${value / scale + offset} ${logo}`;\n}\n" },
   },
+  'symbol-focus': {
+    description: 'src/pricing.ts changes an `export const` arrow function (applyDiscount stops clamping the percent) next to `export function $round`. The caller src/checkout.ts is over 12,000 characters, with the applyDiscount call on line 302 and the $round call on line 453.',
+    baseline: {
+      'src/pricing.ts': 'export const applyDiscount = (price: number, percent: number) => price * (1 - Math.min(Math.max(percent, 0), 100) / 100);\n\nexport function $round(value: number) {\n  return Math.round(value * 100) / 100;\n}\n',
+      'src/checkout.ts': [
+        "import { applyDiscount, $round } from './pricing.js';",
+        ...Array.from({ length: 300 }, (_value, index) => `export const SKU_${index} = { id: 'SKU-${index}', cents: ${1000 + index} };`),
+        'export const discounted = (price: number, couponPercent: number) => applyDiscount(price, couponPercent);',
+        ...Array.from({ length: 150 }, (_value, index) => `export const SKU_${300 + index} = { id: 'SKU-${300 + index}', cents: ${1300 + index} };`),
+        'export const total = (prices: number[]) => $round(prices.reduce((sum, price) => sum + price, 0));',
+        ...Array.from({ length: 150 }, (_value, index) => `export const SKU_${450 + index} = { id: 'SKU-${450 + index}', cents: ${1450 + index} };`),
+      ].join('\n') + '\n',
+    },
+    change: { 'src/pricing.ts': 'export const applyDiscount = (price: number, percent: number) => price * (1 - percent / 100);\n\nexport function $round(value: number) {\n  return Math.round(value * 100) / 100;\n}\n' },
+  },
   'blank-packet': {
     description: 'A new whitespace-only file is staged. Expect one packet with no source evidence, no provider request, and no quality result.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },

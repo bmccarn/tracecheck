@@ -80,6 +80,23 @@ test('borrows tracked dependencies and callers as packet-local support without e
   assert.deepEqual(plan.packets[0]!.sourcePaths, ['average.ts', 'average.test.ts', 'caller.ts', 'helper.ts']);
 });
 
+test('focuses a large caller on call sites of const arrow and $-named exports', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const filler = (from: number, count: number) => Array.from({ length: count }, (_value, index) => `export const filler${from + index} = ${from + index};`);
+  const caller = ['import { ratio, $pick } from "./math.js";', ...filler(0, 400),
+    'export const scaled = ratio(4, 2);', ...filler(400, 200), 'export const first = $pick([1, 2]);', ...filler(600, 200)].join('\n');
+  assert.ok(caller.length > 12_000);
+  await writeFile(join(repo.root, 'math.ts'), 'export const ratio = (a: number, b: number) => b ? a / b : 0;\nexport function $pick(xs: number[]) { return xs[0]; }\n');
+  await writeFile(join(repo.root, 'caller.ts'), caller);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add math');
+  await writeFile(join(repo.root, 'math.ts'), 'export const ratio = (a: number, b: number) => a / b;\nexport function $pick(xs: number[]) { return xs[0]; }\n');
+  const source = (await collect({ repo: repo.root })).sources.find(item => item.path === 'caller.ts')!;
+  assert.equal(source.role, 'caller');
+  assert.equal(source.evidence!.complete, false);
+  assert.match(source.content, /^402: export const scaled = ratio\(4, 2\);$/m);
+  assert.match(source.content, /^603: export const first = \$pick\(\[1, 2\]\);$/m);
+});
+
 test('retains non-JS source for quality review and binds task context to the snapshot', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'decode.py'), 'import json\ndef decode(text): return json.loads(text)');

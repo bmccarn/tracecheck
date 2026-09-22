@@ -6,7 +6,7 @@ import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionOptionsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { readGitChangeContext, type GitChange } from './git-context.js';
-import { focusSource, isSource, symbolRanges } from './evidence.js';
+import { definedSymbols, focusSource, isSource, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { hasSecret, readSource } from './safety.js';
 
@@ -126,7 +126,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
             complete: current.complete && (!old || old.complete), digest: hash([raw, before]) },
         };
       }
-      const names = role === 'changed' ? [...raw.matchAll(/(?:def|function|class)\s+([A-Za-z_$][\w$]*)/g)].map(match => match[1]!) : undefined;
+      const names = role === 'changed' ? definedSymbols(raw) : undefined;
       loaded.set(path, { source, names });
       if (!source.evidence!.complete) noteSource(path, `Focused excerpts only; omitted lines are not reviewed: ${path}`);
       if (role === 'changed' && !ranges.every(range => current.ranges.some(captured => captured.start <= range.start && captured.end >= range.end))) {
