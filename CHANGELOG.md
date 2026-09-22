@@ -23,6 +23,7 @@
 - Detect more credential shapes (unquoted YAML, TOML, and `.env` values, padded base64, PGP, DSA, and encrypted private keys, common provider tokens, and passwords in URLs), stop flagging identifier-like literals, and name the file or field that triggered screening without its value.
 - Read optional project settings from `.tracecheck.json` (base, untracked files, task and context, collection limits, timeouts, and model), below flags, MCP arguments, and environment variables. Unknown keys and credential fields are rejected by name.
 - Candidate selection no longer bundles `@babel/types` (the bundle is about 237 KB smaller), walks syntax trees with one ancestor stack, and now checks decorator arguments on TypeScript parameter properties.
+- Resolve imports through TypeScript `paths` and `baseUrl` settings from the nearest `tsconfig.json` or `jsconfig.json`, following `extends` only inside the repository, and report configs that cannot be read or parsed.
 
 ## 0.3.0 — 2026-09-18
 

@@ -182,3 +182,97 @@ test('resolves NodeNext module specifiers to TypeScript sources and links only r
   }
   assert.deepEqual(importsFor('lib/main.cts', "const y = require('../y.cjs'); import '../logo.png';", known), ['y.cts']);
 });
+
+async function writeFiles(root: string, files: Record<string, string>) {
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(join(root, path, '..'), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+  return Object.keys(files).filter(path => !path.startsWith('../'));
+}
+
+test('resolves tsconfig paths and baseUrl aliases through an in-repository extends chain', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = await writeFiles(repo.root, {
+    // JSONC: comments and trailing commas, as TypeScript accepts.
+    'config/tsconfig.base.json': '{\n  // Shared settings\n  "compilerOptions": {\n    "baseUrl": "../src", /* relative to this file */\n    "paths": { "@/*": ["./*", "../generated/*"], "#config": ["../app.config.ts"], },\n  },\n}\n',
+    'tsconfig.json': '{ "extends": "./config/tsconfig.base", "compilerOptions": { "strict": true } }',
+    'src/components/Button.tsx': 'export const Button = 1;',
+    'src/lib/format.ts': 'export const format = 1;',
+    'src/widgets/index.ts': 'export const widgets = 1;',
+    'generated/api.ts': 'export const api = 1;',
+    'app.config.ts': 'export const config = 1;',
+    'src/app.ts': "import { Button } from '@/components/Button';\nimport { format } from '@/lib/format.js';\nimport { widgets } from 'widgets';\nimport { api } from '@/api';\nimport config from '#config';\nimport React from 'react';\n",
+  });
+  const result = await index(repo.root, paths, ['src/components/Button.tsx']);
+  assert.deepEqual(result.imports.get('src/app.ts'), ['app.config.ts', 'generated/api.ts', 'src/components/Button.tsx', 'src/lib/format.ts', 'src/widgets/index.ts']);
+  assert.deepEqual(result.reverse.get('src/components/Button.tsx'), ['src/app.ts']);
+  assert.equal(result.limitations.some(value => /TypeScript config/.test(value)), false);
+});
+
+test('uses the nearest config, resolving paths without baseUrl from the declaring config', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = await writeFiles(repo.root, {
+    'tsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["./shared/*"] } } }',
+    'packages/web/jsconfig.json': '{ "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }',
+    'packages/web/src/view.js': 'export const view = 1;',
+    'packages/web/src/page.js': "import { view } from '@/view';",
+    'shared/view.ts': 'export const view = 1;',
+    'tools/run.ts': "import { view } from '@/view';",
+  });
+  const result = await index(repo.root, paths);
+  assert.deepEqual(result.imports.get('packages/web/src/page.js'), ['packages/web/src/view.js']);
+  assert.deepEqual(result.imports.get('tools/run.ts'), ['shared/view.ts']);
+});
+
+test('does not follow extends outside the repository and reports it', async t => {
+  const outer = await fixture(); t.after(outer.cleanup);
+  const root = join(outer.root, 'repo');
+  await writeFiles(outer.root, { 'shared/tsconfig.json': '{ "compilerOptions": { "baseUrl": "../repo/src" } }' });
+  const paths = await writeFiles(root, {
+    'tsconfig.json': '{ "extends": ["@tsconfig/node22/tsconfig.json", "../shared/tsconfig.json"] }',
+    'src/util.ts': 'export const util = 1;',
+    'src/main.ts': "import { util } from 'util';",
+  });
+  const result = await index(root, paths);
+  assert.deepEqual(result.imports.get('src/main.ts'), []);
+  assert.match(result.limitations.join('\n'), /TypeScript config extends targets outside the repository were not followed \(tsconfig\.json -> \.\.\/shared\/tsconfig\.json, tsconfig\.json -> @tsconfig\/node22\/tsconfig\.json\)/);
+});
+
+test('reports a malformed tsconfig and keeps indexing', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = await writeFiles(repo.root, {
+    'tsconfig.json': '{ "compilerOptions": { "baseUrl": "." ',
+    'lib.ts': 'export const lib = 1;',
+    'main.ts': "import { lib } from './lib.js'; import { other } from 'lib';",
+  });
+  const result = await index(repo.root, paths);
+  assert.deepEqual(result.imports.get('main.ts'), ['lib.ts']);
+  assert.match(result.limitations.join('\n'), /TypeScript config could not be parsed; its path aliases are ignored \(tsconfig\.json\)/);
+});
+
+test('re-resolves cached edges when alias settings change', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = await writeFiles(repo.root, {
+    'tsconfig.json': '{ "compilerOptions": { "paths": { "~/*": ["./a/*"] } } }',
+    'a/value.ts': 'export const value = 1;',
+    'b/value.ts': 'export const value = 2;',
+    'main.ts': "import { value } from '~/value';",
+  });
+  assert.deepEqual((await index(repo.root, paths)).imports.get('main.ts'), ['a/value.ts']);
+  await writeFile(join(repo.root, 'tsconfig.json'), '{ "compilerOptions": { "paths": { "~/*": ["./b/*"] } } }');
+  assert.deepEqual((await index(repo.root, paths)).imports.get('main.ts'), ['b/value.ts']);
+});
+
+test('stops a circular extends chain with a limitation', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = await writeFiles(repo.root, {
+    'tsconfig.json': '{ "extends": "./base.json", "compilerOptions": { "paths": { "@/*": ["./src/*"] } } }',
+    'base.json': '{ "extends": "./tsconfig.json", "compilerOptions": { "baseUrl": "./src" } }',
+    'src/util.ts': 'export const util = 1;',
+    'src/main.ts': "import { util } from '@/util'; import { again } from 'util';",
+  });
+  const result = await index(repo.root, paths);
+  assert.deepEqual(result.imports.get('src/main.ts'), ['src/util.ts']);
+  assert.match(result.limitations.join('\n'), /TypeScript config extends chain is circular or deeper than 8 levels \(base\.json -> \.\/tsconfig\.json\)/);
+});
