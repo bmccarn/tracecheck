@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
-import { Jev } from './jev.js';
+import { jevFromEnv } from './jev.js';
 import { reviewAll, render } from './review.js';
 import { assess, qualityInputSchema, qualityEvaluationSchema, renderQuality } from './quality.js';
 import { compare } from './history.js';
@@ -57,8 +57,10 @@ Collection limits: --index-max-files N, --index-max-bytes N,
 --index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
 All values are positive safe integers. Review timeout defaults to 300000 ms.
 
-Preview is local. Review sends bounded evidence for all change packets to TypeSafe and requires
-JEV_API_KEY or TYPESAFE_API_KEY. Optional JEV_MODEL selects the model (default: jev-latest).
+Preview is local. Review sends bounded evidence for all change packets to Jev and requires
+JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
+TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
+(default: jev-latest).
 Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
@@ -84,7 +86,7 @@ Use --task and --context to supply requirements and repository facts.`);
     process.once('SIGINT', () => controller.abort());
     const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
     const input = JSON.parse(await readFile(values.input, 'utf8'));
-    const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal }), signal);
+    const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, jevFromEnv(signal), signal);
     if (values.out) {
       await mkdir(dirname(resolve(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(output, null, 2) + '\n', { mode: 0o600 });
@@ -97,7 +99,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error('assess requires --input context.json');
     const input = qualityInputSchema.parse(JSON.parse(await readFile(values.input, 'utf8')));
     if (values.previous) input.previousEvaluation = qualityEvaluationSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
-    const evaluation = await assess(input, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL }));
+    const evaluation = await assess(input, jevFromEnv());
     if (values.out) {
       await mkdir(dirname(resolve(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + '\n', { mode: 0o600 });
@@ -123,7 +125,7 @@ Use --task and --context to supply requirements and repository facts.`);
   const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, 'utf8'))) : undefined;
   if (values.previous && !previousReport?.quality) throw new Error('Previous report has no single-packet quality evaluation to compare.');
   const previous = previousReport?.quality;
-  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL, signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
+  const report = await reviewAll(plan, jevFromEnv(reviewSignal), { signal: reviewSignal, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');

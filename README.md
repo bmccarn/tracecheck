@@ -67,6 +67,8 @@ npm run build
 # Set one of these in the environment that launches Tracecheck.
 export TYPESAFE_API_KEY="your-key"
 # JEV_API_KEY is also supported and takes precedence if both are set.
+# Without a TypeSafe key, an OpenRouter key routes requests through OpenRouter.
+# export OPENROUTER_API_KEY="your-openrouter-key"
 ```
 
 The built `dist/plugin.mjs` includes its runtime dependencies and can run without `node_modules`. You can also use the npm CLI or install the plugin directly from GitHub; see [distribution](#distribution).
@@ -283,7 +285,7 @@ Configure your MCP client with:
 | --- | --- |
 | Command | `node` |
 | Arguments | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
-| Environment | Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`; optionally `JEV_MODEL`. |
+| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL` and `JEV_MODEL`. |
 
 Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
@@ -334,15 +336,25 @@ Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins`
 
 | Environment variable | Default | Purpose |
 | --- | --- | --- |
-| `TYPESAFE_API_KEY` | Required unless `JEV_API_KEY` is set | TypeSafe authentication. |
+| `TYPESAFE_API_KEY` | Required unless `JEV_API_KEY` or `OPENROUTER_API_KEY` is set | TypeSafe authentication. |
 | `JEV_API_KEY` | Unset | Alternative key name; takes precedence. |
+| `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. |
 | `JEV_MODEL` | `jev-latest` | Model selection. Use an available concrete version for repeatable evaluations. |
 
-Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api). The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
+Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
 - `preview` is local. `preview --json` shows the captured source as well as the collection metadata.
 - The collector skips generated paths, symlinks, binary files, and some recognizable secret patterns. Known credential patterns are also checked at the provider boundary for manually supplied context. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
+
+### Using Jev through OpenRouter
+
+OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts the same requests as TypeSafe's API and returns the same answers. Set `OPENROUTER_API_KEY` to use it. OpenRouter's documented TypeSafe SDK setup also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
+
+OpenRouter maps bare model IDs such as `jev-latest` and `jev-1.13` to its `typesafe/` models, so `JEV_MODEL` needs no prefix. Reports record the model ID that OpenRouter returns, for example `typesafe/jev-1.13-20260917`. OpenRouter bills these requests to your OpenRouter account, and the review context passes through OpenRouter on its way to TypeSafe.
+
+OpenRouter lists a 32,000-token context for Jev. A review request larger than that fails, and Tracecheck reports the failure instead of a partial review.
 - Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
 
 ### Collection limits

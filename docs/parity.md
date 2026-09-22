@@ -17,7 +17,7 @@ The first Tracecheck build implemented a narrow source-review path and omitted i
 | Repeated implement/validate/review workflow | `skills/tracecheck/SKILL.md` | Skill validation |
 | Stop rules and resistance to score gaming | Skill prioritizes requirements and supported risks | Skill content review |
 | Local stdio MCP process; direct Jev API access | MCP v2 server and direct provider client | SDK handshake plus live MCP |
-| Key kept in launching environment | `JEV_API_KEY` / `TYPESAFE_API_KEY`; no stored credential | Client boundary tests and live environment use |
+| Key kept in launching environment | `JEV_API_KEY` / `TYPESAFE_API_KEY` / `OPENROUTER_API_KEY`; no stored credential | Client boundary tests and live environment use |
 | Retry, timeout, provider error handling | Deadline, cancellation, bounded retries, explicit context-limit guidance | Provider tests |
 | Standalone runtime distribution | Bundled `dist/plugin.mjs` | Copied outside the repository and launched without dependencies |
 | Portable plugin and client adapters | Root `plugin.json` / `mcp.json`, Codex and Claude adapters | Portable discovery; Codex validator; Claude strict validator |

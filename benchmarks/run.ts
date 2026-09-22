@@ -3,7 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { parseArgs } from 'node:util';
 import { dirname, resolve } from 'node:path';
 import { z } from 'zod';
-import { Jev } from '../src/jev.js';
+import { Jev, jevSettings } from '../src/jev.js';
 import { review } from '../src/review.js';
 import { hash, POLICY_VERSION, type ReviewPlan } from '../src/domain.js';
 import { summarize, type Observation } from '../src/benchmark.js';
@@ -16,7 +16,7 @@ if (!values.live) {
   console.log(JSON.stringify({ cases: data.cases.length, families: [...new Set(data.cases.map(item => item.family))], revision: data.revision, executedOracles: 'passed', live: false }, null, 2));
 } else {
   const signal = AbortSignal.timeout(180_000);
-  const evaluator = new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: values.model, signal });
+  const evaluator = new Jev({ ...jevSettings(), model: values.model, signal });
   const results: Array<Observation & { id: string; family: string; split: string; mode: string; model: string; requestHash: string; decision: unknown }> = [];
   // Alternate order to reduce systematic warm-up/order bias. Thresholds frozen before this run.
   for (const [index, item] of data.cases.entries()) {

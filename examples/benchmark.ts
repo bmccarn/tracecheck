@@ -1,4 +1,4 @@
-import { Jev } from '../src/jev.js';
+import { jevFromEnv } from '../src/jev.js';
 import { review } from '../src/review.js';
 import { cases, casePlan } from './cases.js';
 
@@ -7,7 +7,7 @@ if (!process.argv.includes('--live')) {
   process.exit(0);
 }
 
-const evaluator = new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? '', model: process.env.JEV_MODEL });
+const evaluator = jevFromEnv();
 const results = [];
 for (const fixture of cases) {
   // The expected answer is never sent to the provider.

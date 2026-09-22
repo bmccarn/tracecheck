@@ -44009,7 +44009,35 @@ async function boundedJson(response) {
     reader.releaseLock();
   }
 }
-var answerSchema, responseSchema, Jev;
+function jevSettings(env = process.env) {
+  const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  return {
+    apiKey: typesafeKey || openRouterKey || "",
+    baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
+    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL
+  };
+}
+function jevFromEnv(signal, env = process.env) {
+  return new Jev({ ...jevSettings(env), signal });
+}
+function systemOneEndpoint(baseUrl) {
+  let url2;
+  try {
+    url2 = new URL(baseUrl);
+  } catch {
+    throw new Error("TYPESAFE_BASE_URL must be an absolute URL.");
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url2.hostname);
+  if (url2.protocol !== "https:" && !(url2.protocol === "http:" && loopback)) {
+    throw new Error("TYPESAFE_BASE_URL must use HTTPS unless it points to a loopback host.");
+  }
+  if (url2.username || url2.password || /[?#]/.test(baseUrl)) {
+    throw new Error("TYPESAFE_BASE_URL must not contain credentials, a query, or a fragment.");
+  }
+  return `${url2.origin}${url2.pathname.replace(/\/+$/, "")}/v1/systemone`;
+}
+var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, Jev;
 var init_jev = __esm({
   "src/jev.ts"() {
     "use strict";
@@ -44036,14 +44064,19 @@ var init_jev = __esm({
       ])),
       usage: external_exports.object({ input_tokens: external_exports.number().int().nonnegative(), output_tokens: external_exports.number().int().nonnegative() })
     });
+    TYPESAFE_BASE_URL = "https://api.typesafe.ai";
+    OPENROUTER_BASE_URL = "https://openrouter.ai/api";
+    DEFAULT_MODEL = "jev-latest";
     Jev = class {
       constructor(options) {
         this.options = options;
-        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY or TYPESAFE_API_KEY before running a live review. Preview and demo do not require a key.");
-        this.model = options.model ?? "jev-latest";
+        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.");
+        this.model = options.model ?? DEFAULT_MODEL;
+        this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
       }
       options;
       model;
+      endpoint;
       async evaluate(state, questions) {
         assertSafeOutbound(state);
         const body = JSON.stringify({ model: this.model, state, questions });
@@ -44053,7 +44086,7 @@ var init_jev = __esm({
         const request = this.options.fetch ?? fetch;
         for (let attempt = 0; attempt < 3; attempt++) {
           signal.throwIfAborted();
-          const response = await request("https://api.typesafe.ai/v1/systemone", {
+          const response = await request(this.endpoint, {
             method: "POST",
             headers: { Authorization: `Bearer ${this.options.apiKey}`, "Content-Type": "application/json" },
             body,
@@ -58222,7 +58255,7 @@ function createServer(repo, evaluatorFactory) {
   }, async (args, ctx) => {
     const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(9e4)]);
     const selected = repo || args.repo ? await target(args.repo) : void 0;
-    const output2 = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal }), signal);
+    const output2 = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_assess", {
@@ -58231,7 +58264,7 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: qualityEvaluationSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const output2 = await assess(args, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal: ctx.mcpReq.signal }));
+    const output2 = await assess(args, jevFromEnv(ctx.mcpReq.signal));
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_preview", {
@@ -58277,11 +58310,11 @@ function createServer(repo, evaluatorFactory) {
     };
     const plan = await collect({ ...collectionRequest, repo: root, discovery, signal });
     if (plan.snapshot !== args.snapshot) throw new Error("Repository context changed since preview. Run tracecheck_preview again.");
-    const model = process.env.JEV_MODEL ?? "jev-latest";
-    const key = `${plan.root}:${plan.snapshot}:${model}`;
+    const settings = jevSettings();
+    const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     const existing = cache.get(key);
     const cached2 = Boolean(existing && existing.expires > Date.now());
-    const report = cached2 ? existing.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model, signal }), { signal });
+    const report = cached2 ? existing.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal });
     signal.throwIfAborted();
     const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
     if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
@@ -58405,8 +58438,10 @@ Collection limits: --index-max-files N, --index-max-bytes N,
 --index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
 All values are positive safe integers. Review timeout defaults to 300000 ms.
 
-Preview is local. Review sends bounded evidence for all change packets to TypeSafe and requires
-JEV_API_KEY or TYPESAFE_API_KEY. Optional JEV_MODEL selects the model (default: jev-latest).
+Preview is local. Review sends bounded evidence for all change packets to Jev and requires
+JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
+TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
+(default: jev-latest).
 Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
@@ -58432,7 +58467,7 @@ Use --task and --context to supply requirements and repository facts.`);
     process.once("SIGINT", () => controller2.abort());
     const signal = AbortSignal.any([controller2.signal, AbortSignal.timeout(9e4)]);
     const input2 = JSON.parse(await readFile(values.input, "utf8"));
-    const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal }), signal);
+    const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, jevFromEnv(signal), signal);
     if (values.out) {
       await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(output2, null, 2) + "\n", { mode: 384 });
@@ -58445,7 +58480,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error("assess requires --input context.json");
     const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
     if (values.previous) input2.previousEvaluation = qualityEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
-    const evaluation = await assess(input2, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL }));
+    const evaluation = await assess(input2, jevFromEnv());
     if (values.out) {
       await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });
@@ -58482,7 +58517,7 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))) : void 0;
   if (values.previous && !previousReport?.quality) throw new Error("Previous report has no single-packet quality evaluation to compare.");
   const previous = previousReport?.quality;
-  const report = await reviewAll(plan, new Jev({ apiKey: process.env.JEV_API_KEY ?? process.env.TYPESAFE_API_KEY ?? "", model: process.env.JEV_MODEL, signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
+  const report = await reviewAll(plan, jevFromEnv(reviewSignal), { signal: reviewSignal, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
