@@ -25,8 +25,23 @@ const scenarios = {
   rename: {
     description: 'git mv old.ts new.ts, then delete the divisor guard. The baseline of new.ts should be old.ts.',
     baseline: { 'old.ts': 'export function ratio(a: number, b: number) {\n  if (!b) return 0;\n  return a / b;\n}\n' },
-    move: ['old.ts', 'new.ts'],
+    moves: [['old.ts', 'new.ts']],
     change: { 'new.ts': 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n' },
+  },
+  'rename-pure': {
+    description: 'git mv ratio.ts quotient.ts with no content change. Expect quotient.ts recorded as renamed from ratio.ts, with its baseline and no candidates.',
+    baseline: { 'ratio.ts': 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n' },
+    moves: [['ratio.ts', 'quotient.ts']],
+    change: {},
+  },
+  'rename-ineligible': {
+    description: 'Renames across eligibility: dist/ratio.ts (generated) to ratio.ts with the guard removed, and notes.ts to notes.txt (unsupported). Expect a limitation for each, naming both paths.',
+    baseline: {
+      'dist/ratio.ts': 'export function ratio(a: number, b: number) {\n  if (!b) return 0;\n  return a / b;\n}\n',
+      'notes.ts': Array.from({ length: 12 }, (_value, index) => `export const note${index} = ${index};\n`).join(''),
+    },
+    moves: [['dist/ratio.ts', 'ratio.ts'], ['notes.ts', 'notes.txt']],
+    change: { 'ratio.ts': 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n' },
   },
   'python-import': {
     description: 'Python module changes; a caller imports it with a parenthesized multi-line import and a test imports it plainly.',
@@ -71,7 +86,7 @@ try {
   write(scenario.baseline);
   git('add', '-A');
   git('commit', '-q', '-m', 'Fixture baseline');
-  if (scenario.move) git('mv', ...scenario.move);
+  for (const [from, to] of scenario.moves ?? []) git('mv', from, to);
   write(scenario.change);
   const changed = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', env: gitEnv }).trim().split('\n').filter(Boolean);
   console.log(JSON.stringify({ scenario: scenarioName, root, description: scenario.description, changed }, null, 2));

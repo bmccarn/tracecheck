@@ -13,19 +13,20 @@ function patchRange(start: string, count: string | undefined): Range {
   return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
 }
 
-function pathBatches(paths: string[]): string[][] {
+/** Batches pathspecs for argv limits; each group, such as a rename's two paths, stays in one batch. */
+function pathBatches(groups: string[][]): string[][] {
   const batches: string[][] = [];
   let batch: string[] = [];
   let argumentBytes = 0;
-  for (const path of paths) {
-    const nextBytes = argumentBytes + Buffer.byteLength(path) + 1;
-    if (batch.length && (batch.length >= 512 || nextBytes > 60_000)) {
+  for (const group of groups) {
+    const groupBytes = group.reduce((total, path) => total + Buffer.byteLength(path) + 1, 0);
+    if (batch.length && (batch.length + group.length > 512 || argumentBytes + groupBytes > 60_000)) {
       batches.push(batch);
       batch = [];
       argumentBytes = 0;
     }
-    batch.push(path);
-    argumentBytes += Buffer.byteLength(path) + 1;
+    batch.push(...group);
+    argumentBytes += groupBytes;
   }
   if (batch.length) batches.push(batch);
   return batches;
@@ -66,17 +67,26 @@ async function streamGit(root: string, args: string[], signal: AbortSignal, onDa
   });
 }
 
-export async function readGitChangeContext({ root, base, paths, signal, onBaseline }: {
-  root: string; base: string; paths: string[]; signal: AbortSignal; onBaseline?: BaselineConsumer;
+/**
+ * `renames` maps a requested path to the base path Git paired it with. Those paths take their
+ * baseline and changed ranges from the rename source; every other path is diffed without renames.
+ */
+export async function readGitChangeContext({ root, base, paths, renames = new Map(), signal, onBaseline }: {
+  root: string; base: string; paths: string[]; renames?: ReadonlyMap<string, string>; signal: AbortSignal; onBaseline?: BaselineConsumer;
 }): Promise<GitChangeContext> {
   const context: GitChangeContext = new Map([...new Set(paths)].map(path => [path, { ranges: [], beforeRanges: [] }]));
   const requested = new Set(context.keys());
   if (!requested.size) return context;
-
+  const requestedByBase = new Map<string, string[]>();
+  for (const path of requested) {
+    const basePath = renames.get(path) ?? path;
+    requestedByBase.set(basePath, [...(requestedByBase.get(basePath) ?? []), path]);
+  }
+  const renameSources = new Set([...requested].flatMap(path => renames.has(path) ? [renames.get(path)!] : []));
 
   const pathsByBlob = new Map<string, string[]>();
   let treeBuffer = Buffer.alloc(0);
-  for (const batch of pathBatches(paths)) await streamGit(root, ['ls-tree', '-rlz', base, '--', ...batch], signal, chunk => {
+  for (const batch of pathBatches([...requestedByBase.keys()].map(path => [path]))) await streamGit(root, ['ls-tree', '-rlz', base, '--', ...batch], signal, chunk => {
     treeBuffer = Buffer.concat([treeBuffer, chunk]);
     for (;;) {
       const end = treeBuffer.indexOf(0);
@@ -89,47 +99,63 @@ export async function readGitChangeContext({ root, base, paths, signal, onBaseli
       const type = fields[1];
       const blob = fields[2];
       const size = Number(fields[3]);
-      const path = record.subarray(tab + 1).toString('utf8');
-      if (type !== 'blob' || !blob || !requested.has(path)) continue;
+      const targets = requestedByBase.get(record.subarray(tab + 1).toString('utf8'));
+      if (type !== 'blob' || !blob || !targets) continue;
       if (!Number.isSafeInteger(size) || size < 0) {
-        context.get(path)!.error = 'Base version unavailable';
+        for (const path of targets) context.get(path)!.error = 'Base version unavailable';
         continue;
       }
       if (size > MAX_BASELINE_BYTES) {
-        context.get(path)!.error = 'Oversized base version';
+        for (const path of targets) context.get(path)!.error = 'Oversized base version';
         continue;
       }
       const entries = pathsByBlob.get(blob) ?? [];
-      entries.push(path);
+      entries.push(...targets);
       pathsByBlob.set(blob, entries);
     }
   });
   if (treeBuffer.length) throw new Error('Git context command failed');
-  const pathsForDiff = paths.filter(path => !context.get(path)?.error);
-  for (const batch of pathBatches(pathsForDiff)) {
-    const rawChanges: Array<{ path: string; status: string }> = [];
+  const pathsForDiff = [...requested].filter(path => !context.get(path)?.error);
+  const diffBatch = async (batch: string[], renameMode: '--no-renames' | '--find-renames') => {
+    // Raw records name the requested path each patch section belongs to; rename sources have none.
+    const rawChanges: Array<{ path?: string; status: string }> = [];
     let rawBuffer = Buffer.alloc(0);
-    let rawStatus: string | undefined;
-    await streamGit(root, ['-c', 'core.quotePath=true', 'diff', '--no-ext-diff', '--no-textconv', '--raw', '-z', '--no-renames', base, '--', ...batch], signal, chunk => {
+    let rawRecord: { status: string; paths: string[] } | undefined;
+    const attribute = (status: string, recordPaths: string[]) => {
+      const path = recordPaths.at(-1)!;
+      if (recordPaths.length === 2) {
+        if (!requested.has(path)) throw new Error('Git context command failed');
+        if (!status.startsWith('R') || renames.get(path) !== recordPaths[0]) context.get(path)!.error = 'Rename pairing changed during collection';
+        rawChanges.push({ path, status });
+      } else if (requested.has(path)) {
+        if (renames.has(path)) context.get(path)!.error = 'Rename pairing changed during collection';
+        rawChanges.push({ path, status });
+      } else if (renameSources.has(path)) rawChanges.push({ status });
+      else throw new Error('Git context command failed');
+    };
+    await streamGit(root, ['-c', 'core.quotePath=true', 'diff', '--no-ext-diff', '--no-textconv', '--raw', '-z', renameMode, base, '--', ...batch], signal, chunk => {
       rawBuffer = Buffer.concat([rawBuffer, chunk]);
       for (;;) {
         const end = rawBuffer.indexOf(0);
         if (end < 0) break;
         const record = rawBuffer.subarray(0, end);
         rawBuffer = rawBuffer.subarray(end + 1);
-        if (record[0] === 58) {
-          rawStatus = record.toString('ascii').trim().split(/\s+/).at(-1);
-        } else if (rawStatus) {
-          rawChanges.push({ path: record.toString('utf8'), status: rawStatus });
-          rawStatus = undefined;
-        } else throw new Error('Git context command failed');
+        if (!rawRecord) {
+          if (record[0] !== 58) throw new Error('Git context command failed');
+          rawRecord = { status: record.toString('ascii').trim().split(/\s+/).at(-1) ?? '', paths: [] };
+          continue;
+        }
+        rawRecord.paths.push(record.toString('utf8'));
+        if (rawRecord.paths.length < (/^[RC]/.test(rawRecord.status) ? 2 : 1)) continue;
+        attribute(rawRecord.status, rawRecord.paths);
+        rawRecord = undefined;
       }
     });
-    if (rawBuffer.length || rawStatus) throw new Error('Git context command failed');
+    if (rawBuffer.length || rawRecord) throw new Error('Git context command failed');
     let diffBuffer = '';
     const decoder = new StringDecoder('utf8');
     let rawOffset = 0;
-    let lastRaw: { path: string; status: string } | undefined;
+    let lastRaw: { path?: string; status: string } | undefined;
     let reusedTypeChange = false;
     let activePath: string | undefined;
     let inHunk = false;
@@ -144,7 +170,6 @@ export async function readGitChangeContext({ root, base, paths, signal, onBaseli
           raw = lastRaw;
           reusedTypeChange = true;
         } else throw new Error('Git context command failed');
-        if (!requested.has(raw.path)) throw new Error('Git context command failed');
         activePath = raw.path;
         inHunk = false;
         return;
@@ -158,7 +183,7 @@ export async function readGitChangeContext({ root, base, paths, signal, onBaseli
       entry.beforeRanges.push(patchRange(hunk[1]!, hunk[2]));
       entry.ranges.push(patchRange(hunk[3]!, hunk[4]));
     };
-    await streamGit(root, ['-c', 'core.quotePath=true', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', '--no-renames', '--unified=0', '--src-prefix=a/', '--dst-prefix=b/', base, '--', ...batch], signal, chunk => {
+    await streamGit(root, ['-c', 'core.quotePath=true', 'diff', '--no-ext-diff', '--no-textconv', '--no-color', renameMode, '--unified=0', '--src-prefix=a/', '--dst-prefix=b/', base, '--', ...batch], signal, chunk => {
       diffBuffer += decoder.write(chunk);
       for (;;) {
         const newline = diffBuffer.indexOf('\n');
@@ -170,7 +195,10 @@ export async function readGitChangeContext({ root, base, paths, signal, onBaseli
     diffBuffer += decoder.end();
     if (diffBuffer) processDiffLine(diffBuffer);
     if (rawOffset !== rawChanges.length) throw new Error('Git context command failed');
-  }
+  };
+  for (const batch of pathBatches(pathsForDiff.filter(path => !renames.has(path)).map(path => [path]))) await diffBatch(batch, '--no-renames');
+  // Rename detection runs on each pair only, with the default similarity threshold the change listing used.
+  for (const batch of pathBatches(pathsForDiff.filter(path => renames.has(path)).map(path => [path, renames.get(path)!]))) await diffBatch(batch, '--find-renames');
 
   const delivered = new Set<string>();
   const deliver = async (path: string, before?: string) => {

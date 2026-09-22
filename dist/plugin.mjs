@@ -43085,19 +43085,19 @@ function patchRange(start, count) {
   const first = Math.max(1, Number(start));
   return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
 }
-function pathBatches(paths) {
+function pathBatches(groups) {
   const batches = [];
   let batch = [];
   let argumentBytes = 0;
-  for (const path of paths) {
-    const nextBytes = argumentBytes + Buffer.byteLength(path) + 1;
-    if (batch.length && (batch.length >= 512 || nextBytes > 6e4)) {
+  for (const group of groups) {
+    const groupBytes = group.reduce((total, path) => total + Buffer.byteLength(path) + 1, 0);
+    if (batch.length && (batch.length + group.length > 512 || argumentBytes + groupBytes > 6e4)) {
       batches.push(batch);
       batch = [];
       argumentBytes = 0;
     }
-    batch.push(path);
-    argumentBytes += Buffer.byteLength(path) + 1;
+    batch.push(...group);
+    argumentBytes += groupBytes;
   }
   if (batch.length) batches.push(batch);
   return batches;
@@ -43138,13 +43138,19 @@ async function streamGit(root, args, signal, onData, input2) {
     child.stdin.end(input2);
   });
 }
-async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
+async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ */ new Map(), signal, onBaseline }) {
   const context = new Map([...new Set(paths)].map((path) => [path, { ranges: [], beforeRanges: [] }]));
   const requested = new Set(context.keys());
   if (!requested.size) return context;
+  const requestedByBase = /* @__PURE__ */ new Map();
+  for (const path of requested) {
+    const basePath = renames.get(path) ?? path;
+    requestedByBase.set(basePath, [...requestedByBase.get(basePath) ?? [], path]);
+  }
+  const renameSources = new Set([...requested].flatMap((path) => renames.has(path) ? [renames.get(path)] : []));
   const pathsByBlob = /* @__PURE__ */ new Map();
   let treeBuffer = Buffer.alloc(0);
-  for (const batch of pathBatches(paths)) await streamGit(root, ["ls-tree", "-rlz", base, "--", ...batch], signal, (chunk) => {
+  for (const batch of pathBatches([...requestedByBase.keys()].map((path) => [path]))) await streamGit(root, ["ls-tree", "-rlz", base, "--", ...batch], signal, (chunk) => {
     treeBuffer = Buffer.concat([treeBuffer, chunk]);
     for (; ; ) {
       const end = treeBuffer.indexOf(0);
@@ -43157,43 +43163,58 @@ async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
       const type = fields[1];
       const blob = fields[2];
       const size = Number(fields[3]);
-      const path = record2.subarray(tab + 1).toString("utf8");
-      if (type !== "blob" || !blob || !requested.has(path)) continue;
+      const targets = requestedByBase.get(record2.subarray(tab + 1).toString("utf8"));
+      if (type !== "blob" || !blob || !targets) continue;
       if (!Number.isSafeInteger(size) || size < 0) {
-        context.get(path).error = "Base version unavailable";
+        for (const path of targets) context.get(path).error = "Base version unavailable";
         continue;
       }
       if (size > MAX_BASELINE_BYTES) {
-        context.get(path).error = "Oversized base version";
+        for (const path of targets) context.get(path).error = "Oversized base version";
         continue;
       }
       const entries = pathsByBlob.get(blob) ?? [];
-      entries.push(path);
+      entries.push(...targets);
       pathsByBlob.set(blob, entries);
     }
   });
   if (treeBuffer.length) throw new Error("Git context command failed");
-  const pathsForDiff = paths.filter((path) => !context.get(path)?.error);
-  for (const batch of pathBatches(pathsForDiff)) {
+  const pathsForDiff = [...requested].filter((path) => !context.get(path)?.error);
+  const diffBatch = async (batch, renameMode) => {
     const rawChanges = [];
     let rawBuffer = Buffer.alloc(0);
-    let rawStatus;
-    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--raw", "-z", "--no-renames", base, "--", ...batch], signal, (chunk) => {
+    let rawRecord;
+    const attribute = (status, recordPaths) => {
+      const path = recordPaths.at(-1);
+      if (recordPaths.length === 2) {
+        if (!requested.has(path)) throw new Error("Git context command failed");
+        if (!status.startsWith("R") || renames.get(path) !== recordPaths[0]) context.get(path).error = "Rename pairing changed during collection";
+        rawChanges.push({ path, status });
+      } else if (requested.has(path)) {
+        if (renames.has(path)) context.get(path).error = "Rename pairing changed during collection";
+        rawChanges.push({ path, status });
+      } else if (renameSources.has(path)) rawChanges.push({ status });
+      else throw new Error("Git context command failed");
+    };
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--raw", "-z", renameMode, base, "--", ...batch], signal, (chunk) => {
       rawBuffer = Buffer.concat([rawBuffer, chunk]);
       for (; ; ) {
         const end = rawBuffer.indexOf(0);
         if (end < 0) break;
         const record2 = rawBuffer.subarray(0, end);
         rawBuffer = rawBuffer.subarray(end + 1);
-        if (record2[0] === 58) {
-          rawStatus = record2.toString("ascii").trim().split(/\s+/).at(-1);
-        } else if (rawStatus) {
-          rawChanges.push({ path: record2.toString("utf8"), status: rawStatus });
-          rawStatus = void 0;
-        } else throw new Error("Git context command failed");
+        if (!rawRecord) {
+          if (record2[0] !== 58) throw new Error("Git context command failed");
+          rawRecord = { status: record2.toString("ascii").trim().split(/\s+/).at(-1) ?? "", paths: [] };
+          continue;
+        }
+        rawRecord.paths.push(record2.toString("utf8"));
+        if (rawRecord.paths.length < (/^[RC]/.test(rawRecord.status) ? 2 : 1)) continue;
+        attribute(rawRecord.status, rawRecord.paths);
+        rawRecord = void 0;
       }
     });
-    if (rawBuffer.length || rawStatus) throw new Error("Git context command failed");
+    if (rawBuffer.length || rawRecord) throw new Error("Git context command failed");
     let diffBuffer = "";
     const decoder = new StringDecoder("utf8");
     let rawOffset = 0;
@@ -43212,7 +43233,6 @@ async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
           raw = lastRaw;
           reusedTypeChange = true;
         } else throw new Error("Git context command failed");
-        if (!requested.has(raw.path)) throw new Error("Git context command failed");
         activePath = raw.path;
         inHunk = false;
         return;
@@ -43226,7 +43246,7 @@ async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
       entry.beforeRanges.push(patchRange(hunk[1], hunk[2]));
       entry.ranges.push(patchRange(hunk[3], hunk[4]));
     };
-    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", "--unified=0", "--src-prefix=a/", "--dst-prefix=b/", base, "--", ...batch], signal, (chunk) => {
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--no-color", renameMode, "--unified=0", "--src-prefix=a/", "--dst-prefix=b/", base, "--", ...batch], signal, (chunk) => {
       diffBuffer += decoder.write(chunk);
       for (; ; ) {
         const newline = diffBuffer.indexOf("\n");
@@ -43238,7 +43258,9 @@ async function readGitChangeContext({ root, base, paths, signal, onBaseline }) {
     diffBuffer += decoder.end();
     if (diffBuffer) processDiffLine(diffBuffer);
     if (rawOffset !== rawChanges.length) throw new Error("Git context command failed");
-  }
+  };
+  for (const batch of pathBatches(pathsForDiff.filter((path) => !renames.has(path)).map((path) => [path]))) await diffBatch(batch, "--no-renames");
+  for (const batch of pathBatches(pathsForDiff.filter((path) => renames.has(path)).map((path) => [path, renames.get(path)]))) await diffBatch(batch, "--find-renames");
   const delivered = /* @__PURE__ */ new Set();
   const deliver = async (path, before) => {
     delivered.add(path);
@@ -43664,7 +43686,18 @@ async function collect(options) {
   const root = await realpath4((await git(resolve3(options.repo), ["rev-parse", "--show-toplevel"])).trim());
   const base = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`])).trim();
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
-  const changed = (await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-only", "-z", base, "--"])).split("\0").filter(Boolean);
+  const changed = [];
+  const renames = /* @__PURE__ */ new Map();
+  const statusFields = (await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"])).split("\0");
+  if (statusFields.pop() !== "") throw new Error("Git change listing failed");
+  for (let index2 = 0; index2 < statusFields.length; ) {
+    const status = statusFields[index2++];
+    const recordPaths = statusFields.slice(index2, index2 += /^[RC]/.test(status) ? 2 : 1);
+    if (!status || recordPaths.length !== (/^[RC]/.test(status) ? 2 : 1) || recordPaths.some((path2) => !path2)) throw new Error("Git change listing failed");
+    const path = recordPaths.at(-1);
+    changed.push(path);
+    if (status.startsWith("R")) renames.set(path, recordPaths[0]);
+  }
   const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
   const tracked = (await git(root, ["ls-files", "-z"])).split("\0").filter(Boolean);
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
@@ -43684,6 +43717,7 @@ async function collect(options) {
     if (entry.samples.length < 3) entry.samples.push(path);
     omissions.set(reason, entry);
   };
+  const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path, message) => {
     const issues = sourceIssues.get(path) ?? [];
     if (!issues.includes(message)) issues.push(message);
@@ -43715,8 +43749,10 @@ async function collect(options) {
       let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
       let old = before === void 0 ? void 0 : focusSource(before, beforeRanges, excerptBudget);
+      const previousPath = role === "changed" ? renames.get(path) : void 0;
       let source = {
         path,
+        ...previousPath ? { previousPath } : {},
         role,
         content: current.content,
         ...old ? { before: old.content } : {},
@@ -43734,6 +43770,7 @@ async function collect(options) {
         old = before === void 0 ? void 0 : focusSource(before, beforeRanges, excerptBudget);
         source = {
           path,
+          ...previousPath ? { previousPath } : {},
           role,
           content: current.content,
           ...old ? { before: old.content } : {},
@@ -43775,7 +43812,7 @@ async function collect(options) {
     } catch (error62) {
       signal.throwIfAborted();
       const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
-      recordOmission(`${message} omitted`, path);
+      recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
       return void 0;
     }
@@ -43783,7 +43820,7 @@ async function collect(options) {
   const eligibleChanges = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
-      recordOmission("Unsupported or generated file", path);
+      recordOmission("Unsupported or generated file", label(path));
       noteSource(path, `Unsupported or generated file omitted: ${path}`);
       continue;
     }
@@ -43794,14 +43831,22 @@ async function collect(options) {
     } catch (error62) {
       signal.throwIfAborted();
       const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
-      recordOmission(`${message} omitted`, path);
+      recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
     }
+  }
+  const baselineRenames = /* @__PURE__ */ new Map();
+  for (const path of eligibleChanges) {
+    const from = renames.get(path);
+    if (!from) continue;
+    if (isSource(from)) baselineRenames.set(path, from);
+    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline: ${path}`);
   }
   await readGitChangeContext({
     root,
     base,
     paths: eligibleChanges,
+    renames: baselineRenames,
     signal,
     onBaseline: async (path, change, baseline) => {
       await load(path, "changed", void 0, change, baseline);
@@ -43953,7 +43998,7 @@ async function collect(options) {
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
   const sources = [...sourceByPath.values()].sort((a, b2) => a.path.localeCompare(b2.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
+  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
 var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, isSource, sourceChars, sourceBytes;
@@ -58274,7 +58319,7 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: external_exports.object({
       snapshot: external_exports.string(),
       packets: external_exports.array(external_exports.object({ id: external_exports.string(), changedPaths: external_exports.array(external_exports.string()) })),
-      files: external_exports.array(external_exports.object({ path: external_exports.string(), role: external_exports.string(), characters: external_exports.number() })),
+      files: external_exports.array(external_exports.object({ path: external_exports.string(), previousPath: external_exports.string().optional(), role: external_exports.string(), characters: external_exports.number() })),
       candidates: external_exports.number(),
       limitations: external_exports.array(external_exports.string())
     }),
@@ -58286,7 +58331,7 @@ function createServer(repo, evaluatorFactory) {
     const output2 = {
       snapshot: plan.snapshot,
       packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
-      files: plan.sources.map((source) => ({ path: source.path, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
+      files: plan.sources.map((source) => ({ path: source.path, ...source.previousPath ? { previousPath: source.previousPath } : {}, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length,
       limitations: plan.limitations
     };
@@ -58509,7 +58554,7 @@ Snapshot: ${plan.snapshot}
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
 Review implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.
 ${packets}
-${plan.sources.map((source) => `${source.role}: ${source.path}`).join("\n")}
+${plan.sources.map((source) => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ""}`).join("\n")}
 ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     return;
   }
