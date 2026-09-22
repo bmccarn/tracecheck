@@ -16,9 +16,7 @@ coverage/
 *.release-prepare-*.next
 .firecrawl/
 
-# Local authentication and per-user client overrides, including the local client settings
-# file that agent tooling creates; distributable manifests stay tracked.
+# Local authentication and client overrides; distributable manifests stay tracked.
 /.npmrc
 /.cursor/mcp.json
 /.mcp.local.json
-/.claude/settings.local.json
