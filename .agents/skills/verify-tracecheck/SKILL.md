@@ -47,7 +47,7 @@ Offline paths need no key: `preview`, `compare`, the MCP `tracecheck_preview` to
   echo '[{"tool":"tracecheck_preview","arguments":{}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}}]' > "$RUN/calls.json"
   node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"
   ```
-  `$snapshot` is replaced with the snapshot from the latest successful preview in the same run. A step `{"run": ["cmd", "arg", ...]}` runs a local command between tool calls in the same server session, for example to edit the fixture after a preview. `--list` records `tools/list`. Each call is saved as `NN-<tool>.json` with its arguments, `isError`, `structuredContent`, and text content; server stderr goes to `server-stderr.log`.
+  The server receives only `PATH`, `HOME`, provider variables, and variables named with `--env NAME`. `$snapshot` is replaced with the snapshot from the latest successful preview in the same run. A step `{"run": ["cmd", "arg", ...]}` runs a local command between tool calls in the same server session, for example to edit the fixture after a preview. `--list` records `tools/list`. Each call is saved as `NN-<tool>.json` with its arguments, `isError`, `structuredContent`, and text content; server stderr goes to `server-stderr.log`.
 
 Drive every entry point the feature map lists for the behavior under test. A CLI run does not prove the MCP path, or the reverse.
 
@@ -75,5 +75,5 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 | `doctor.mjs` | `node $S/doctor.mjs` | Readiness JSON; exit 1 when not ready |
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
 | `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |
-| `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored |
+| `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored |
 | `scripts/build.mjs --check` | `node scripts/build.mjs --check` (repository script) | Exit 1 when `dist/plugin.mjs` differs from a fresh build; `dist/` is untouched |

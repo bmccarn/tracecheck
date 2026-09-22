@@ -1,8 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, writeFile, symlink } from 'node:fs/promises';
+import { chmod, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { collect } from '../src/collector.js';
+import { resolveSettings } from '../src/project-config.js';
 import { findCandidates } from '../src/checks.js';
 import type { ReviewPacket, ReviewPlan } from '../src/domain.js';
 import { repository } from './helpers.js';
@@ -279,4 +281,73 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   assert.match(limitations, /Unsupported or generated file \(notes\.ts -> notes\.txt\)/);
   assert.match(limitations, /File with a potential credential omitted \(keys\.ts -> credentials\.ts\)/);
   assert.ok(!JSON.stringify(plan).includes(credential));
+});
+
+test('streams a tracked-file listing larger than the old 8 MiB output buffer', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  // About 8.8 MB of paths, recorded in the index only and marked skip-worktree so no files are written.
+  const blob = execFileSync('git', ['-C', repo.root, 'hash-object', '-w', '--stdin'], { input: 'x\n', encoding: 'utf8' }).trim();
+  const paths = Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`);
+  execFileSync('git', ['-C', repo.root, 'update-index', '-z', '--index-info'], { input: paths.map(path => `100644 ${blob}\t${path}\0`).join('') });
+  execFileSync('git', ['-C', repo.root, 'update-index', '-z', '--skip-worktree', '--stdin'], { input: paths.map(path => `${path}\0`).join('') });
+  repo.git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'Add many paths');
+  assert.ok(execFileSync('git', ['-C', repo.root, 'ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 }).length > 8 * 1024 * 1024);
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a,b) => a+b, 0) / xs.length; }\n');
+
+  const plan = await collect({ repo: repo.root });
+  assert.deepEqual(plan.packets.flatMap(packet => packet.changedPaths), ['average.ts']);
+  assert.equal(plan.candidates.length, 1);
+});
+
+test('collects the requested repository when Git environment variables name another one', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const other = await repository(); t.after(other.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a,b) => a+b, 0) / xs.length; }\n');
+  await writeFile(join(other.root, 'other.ts'), 'export const other = 1;\n');
+  other.git('add', 'other.ts');
+  const redirect = { GIT_DIR: join(other.root, '.git'), GIT_WORK_TREE: other.root, GIT_INDEX_FILE: join(other.root, '.git', 'index') };
+  const saved = Object.fromEntries(Object.keys(redirect).map(name => [name, process.env[name]]));
+  Object.assign(process.env, redirect);
+  let plan: ReviewPlan;
+  let settingsRoot: string;
+  try {
+    settingsRoot = (await resolveSettings(repo.root, {})).root;
+    plan = await collect({ repo: repo.root });
+  } finally {
+    for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
+  }
+  assert.equal(settingsRoot, await realpath(repo.root));
+  assert.equal(plan.root, await realpath(repo.root));
+  assert.deepEqual(plan.sources.map(source => source.path), ['average.ts']);
+});
+
+test('records a limitation for changed files without textual hunks', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, '.gitattributes'), 'opaque.ts -diff\n');
+  await writeFile(join(repo.root, 'mode.ts'), 'export const mode = 1;\n');
+  await writeFile(join(repo.root, 'opaque.ts'), 'export const opaque = 1;\n');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add hunkless fixtures');
+  await chmod(join(repo.root, 'mode.ts'), 0o755);
+  await writeFile(join(repo.root, 'opaque.ts'), 'export const opaque = 2;\n');
+  const plan = await collect({ repo: repo.root });
+  const limitations = plan.limitations.join('\n');
+
+  assert.deepEqual(plan.sources.map(source => source.path), ['mode.ts', 'opaque.ts']);
+  assert.match(limitations, /File mode changed without a content change; no changed lines to review \(mode\.ts\)/);
+  assert.match(limitations, /Git reported no textual diff \(binary or -diff attribute\); changed lines are unknown \(opaque\.ts\)/);
+});
+
+test('counts source limitations for paths containing colons under one reason', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const large = (name: string) => Array.from({ length: 800 }, (_value, index) => `export const ${name}${index} = ${index};\n`).join('');
+  await mkdir(join(repo.root, 'src'));
+  await writeFile(join(repo.root, 'src/a:one.ts'), large('one'));
+  await writeFile(join(repo.root, 'src/b:two.ts'), large('two'));
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add colon paths');
+  await writeFile(join(repo.root, 'src/a:one.ts'), large('one').replace('one400 = 400', 'one400 = 0'));
+  await writeFile(join(repo.root, 'src/b:two.ts'), large('two').replace('two400 = 400', 'two400 = 0'));
+  const plan = await collect({ repo: repo.root });
+
+  assert.ok(plan.limitations.includes('Collected source limitation for 2 file(s): Focused excerpts only; omitted lines are not reviewed (src/a:one.ts, src/b:two.ts).'), plan.limitations.join('\n'));
+  assert.ok(plan.packets[0]!.limitations.includes('Focused excerpts only; omitted lines are not reviewed: src/a:one.ts'));
 });

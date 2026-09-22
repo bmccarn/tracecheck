@@ -3,8 +3,14 @@ import { StringDecoder } from 'node:string_decoder';
 import type { Range } from './domain.js';
 
 const MAX_BASELINE_BYTES = 8 * 1024 * 1024;
+// Git's own list of repository-local variables (`git rev-parse --local-env-vars`) minus the
+// configuration ones: each can point Git at a different repository, index, or object store.
+const REPOSITORY_ENVIRONMENT = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_IMPLICIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
+  'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_GRAFT_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE']);
+const WORKING_TREE_CHANGED = 'Working tree changed during collection; retry the preview.';
 
-export type GitChange = { ranges: Range[]; beforeRanges: Range[]; error?: string };
+/** `noHunks` records why a changed path has no textual hunks, so its changed lines are unknown. */
+export type GitChange = { ranges: Range[]; beforeRanges: Range[]; error?: string; noHunks?: 'mode-only' | 'diff-suppressed' };
 export type GitChangeContext = Map<string, GitChange>;
 type BaselineConsumer = (path: string, change: GitChange, before?: string) => Promise<void> | void;
 
@@ -32,10 +38,15 @@ function pathBatches(groups: string[][]): string[][] {
   return batches;
 }
 
-async function streamGit(root: string, args: string[], signal: AbortSignal, onData: (data: Buffer) => Promise<void> | void, input?: Buffer): Promise<void> {
+/** The caller's environment without variables that would make Git read another repository than `-C` names. */
+export function gitEnvironment(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
+}
+
+async function streamGit(root: string, args: string[], signal: AbortSignal, onData: (data: Buffer) => Promise<void> | void, input?: Buffer, failure = 'Git context command failed'): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['--literal-pathspecs', '-C', root, ...args], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const child = spawn('git', ['--literal-pathspecs', '-C', root, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env: gitEnvironment() });
     let settled = false;
     let output = Promise.resolve();
     const finish = (error?: Error) => {
@@ -49,22 +60,39 @@ async function streamGit(root: string, args: string[], signal: AbortSignal, onDa
     };
     const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error('Git context collection aborted'));
     signal.addEventListener('abort', abort, { once: true });
-    child.once('error', () => finish(new Error('Git context command failed')));
-    child.stdout.once('error', () => finish(new Error('Git context command failed')));
-    child.stderr.once('error', () => finish(new Error('Git context command failed')));
+    child.once('error', () => finish(new Error(failure)));
+    child.stdout.once('error', () => finish(new Error(failure)));
+    child.stderr.once('error', () => finish(new Error(failure)));
     child.stdout.on('data', (chunk: Buffer) => {
       child.stdout.pause();
-      output = output.then(() => onData(chunk)).then(() => { child.stdout.resume(); }).catch(() => {
-        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : new Error('Git context command failed'));
+      output = output.then(() => onData(chunk)).then(() => { child.stdout.resume(); }).catch(error => {
+        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : error instanceof Error ? error : new Error(failure));
       });
     });
     child.stderr.resume();
     child.once('close', code => {
-      void output.then(() => finish(code === 0 ? undefined : new Error('Git context command failed'))).catch(() => finish(new Error('Git context command failed')));
+      void output.then(() => finish(code === 0 ? undefined : new Error(failure))).catch(() => finish(new Error(failure)));
     });
-    child.stdin.once('error', () => finish(new Error('Git context command failed')));
+    child.stdin.once('error', () => finish(new Error(failure)));
     child.stdin.end(input);
   });
+}
+
+/** Streams a NUL-terminated listing into records, so its size is bounded by the collection budget rather than a buffer. */
+export async function readGitRecords(root: string, args: string[], signal: AbortSignal, failure: string): Promise<string[]> {
+  const records: string[] = [];
+  let pending: Buffer = Buffer.alloc(0);
+  await streamGit(root, args, signal, chunk => {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+    let start = 0;
+    for (let end = pending.indexOf(0); end >= 0; end = pending.indexOf(0, start)) {
+      records.push(pending.toString('utf8', start, end));
+      start = end + 1;
+    }
+    pending = pending.subarray(start);
+  }, undefined, failure);
+  if (pending.length) throw new Error(failure);
+  return records;
 }
 
 /**
@@ -159,6 +187,8 @@ export async function readGitChangeContext({ root, base, paths, renames = new Ma
     let reusedTypeChange = false;
     let activePath: string | undefined;
     let inHunk = false;
+    // Headers before a section's first hunk explain a section without hunks.
+    const noHunkReasons = new Map<string, NonNullable<GitChange['noHunks']>>();
     const processDiffLine = (line: string) => {
       if (line.startsWith('diff --git ')) {
         let raw = rawChanges[rawOffset];
@@ -169,12 +199,16 @@ export async function readGitChangeContext({ root, base, paths, renames = new Ma
         } else if (lastRaw?.status.startsWith('T') && !reusedTypeChange) {
           raw = lastRaw;
           reusedTypeChange = true;
-        } else throw new Error('Git context command failed');
+        } else throw new Error(WORKING_TREE_CHANGED);
         activePath = raw.path;
         inHunk = false;
         return;
       }
       if (inHunk && (!activePath || !line.startsWith('@@ '))) return;
+      if (!inHunk && activePath) {
+        if (/^Binary files .* differ$/.test(line)) noHunkReasons.set(activePath, 'diff-suppressed');
+        else if (/^(?:old|new) mode /.test(line) && !noHunkReasons.has(activePath)) noHunkReasons.set(activePath, 'mode-only');
+      }
       const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!hunk) return;
       inHunk = true;
@@ -194,7 +228,11 @@ export async function readGitChangeContext({ root, base, paths, renames = new Ma
     });
     diffBuffer += decoder.end();
     if (diffBuffer) processDiffLine(diffBuffer);
-    if (rawOffset !== rawChanges.length) throw new Error('Git context command failed');
+    if (rawOffset !== rawChanges.length) throw new Error(WORKING_TREE_CHANGED);
+    for (const [path, reason] of noHunkReasons) {
+      const entry = context.get(path)!;
+      if (!entry.ranges.length) entry.noHunks = reason;
+    }
   };
   for (const batch of pathBatches(pathsForDiff.filter(path => !renames.has(path)).map(path => [path]))) await diffBatch(batch, '--no-renames');
   // Rename detection runs on each pair only, with the default similarity threshold the change listing used.

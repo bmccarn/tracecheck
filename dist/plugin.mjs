@@ -35788,10 +35788,13 @@ function pathBatches(groups) {
   if (batch.length) batches.push(batch);
   return batches;
 }
-async function streamGit(root, args, signal, onData, input2) {
+function gitEnvironment() {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
+}
+async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
   signal.throwIfAborted();
   await new Promise((resolve6, reject) => {
-    const child = spawn("git", ["--literal-pathspecs", "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn("git", ["--literal-pathspecs", "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
     let settled = false;
     let output2 = Promise.resolve();
     const finish = (error62) => {
@@ -35805,24 +35808,39 @@ async function streamGit(root, args, signal, onData, input2) {
     };
     const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
     signal.addEventListener("abort", abort, { once: true });
-    child.once("error", () => finish(new Error("Git context command failed")));
-    child.stdout.once("error", () => finish(new Error("Git context command failed")));
-    child.stderr.once("error", () => finish(new Error("Git context command failed")));
+    child.once("error", () => finish(new Error(failure2)));
+    child.stdout.once("error", () => finish(new Error(failure2)));
+    child.stderr.once("error", () => finish(new Error(failure2)));
     child.stdout.on("data", (chunk) => {
       child.stdout.pause();
       output2 = output2.then(() => onData(chunk)).then(() => {
         child.stdout.resume();
-      }).catch(() => {
-        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : new Error("Git context command failed"));
+      }).catch((error62) => {
+        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : error62 instanceof Error ? error62 : new Error(failure2));
       });
     });
     child.stderr.resume();
     child.once("close", (code2) => {
-      void output2.then(() => finish(code2 === 0 ? void 0 : new Error("Git context command failed"))).catch(() => finish(new Error("Git context command failed")));
+      void output2.then(() => finish(code2 === 0 ? void 0 : new Error(failure2))).catch(() => finish(new Error(failure2)));
     });
-    child.stdin.once("error", () => finish(new Error("Git context command failed")));
+    child.stdin.once("error", () => finish(new Error(failure2)));
     child.stdin.end(input2);
   });
+}
+async function readGitRecords(root, args, signal, failure2) {
+  const records = [];
+  let pending = Buffer.alloc(0);
+  await streamGit(root, args, signal, (chunk) => {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+    let start = 0;
+    for (let end = pending.indexOf(0); end >= 0; end = pending.indexOf(0, start)) {
+      records.push(pending.toString("utf8", start, end));
+      start = end + 1;
+    }
+    pending = pending.subarray(start);
+  }, void 0, failure2);
+  if (pending.length) throw new Error(failure2);
+  return records;
 }
 async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ */ new Map(), signal, onBaseline }) {
   const context = new Map([...new Set(paths)].map((path) => [path, { ranges: [], beforeRanges: [] }]));
@@ -35908,6 +35926,7 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
     let reusedTypeChange = false;
     let activePath;
     let inHunk = false;
+    const noHunkReasons = /* @__PURE__ */ new Map();
     const processDiffLine = (line) => {
       if (line.startsWith("diff --git ")) {
         let raw = rawChanges[rawOffset];
@@ -35918,12 +35937,16 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
         } else if (lastRaw?.status.startsWith("T") && !reusedTypeChange) {
           raw = lastRaw;
           reusedTypeChange = true;
-        } else throw new Error("Git context command failed");
+        } else throw new Error(WORKING_TREE_CHANGED);
         activePath = raw.path;
         inHunk = false;
         return;
       }
       if (inHunk && (!activePath || !line.startsWith("@@ "))) return;
+      if (!inHunk && activePath) {
+        if (/^Binary files .* differ$/.test(line)) noHunkReasons.set(activePath, "diff-suppressed");
+        else if (/^(?:old|new) mode /.test(line) && !noHunkReasons.has(activePath)) noHunkReasons.set(activePath, "mode-only");
+      }
       const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
       if (!hunk) return;
       inHunk = true;
@@ -35943,7 +35966,11 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
     });
     diffBuffer += decoder.end();
     if (diffBuffer) processDiffLine(diffBuffer);
-    if (rawOffset !== rawChanges.length) throw new Error("Git context command failed");
+    if (rawOffset !== rawChanges.length) throw new Error(WORKING_TREE_CHANGED);
+    for (const [path, reason] of noHunkReasons) {
+      const entry = context.get(path);
+      if (!entry.ranges.length) entry.noHunks = reason;
+    }
   };
   for (const batch of pathBatches(pathsForDiff.filter((path) => !renames.has(path)).map((path) => [path]))) await diffBatch(batch, "--no-renames");
   for (const batch of pathBatches(pathsForDiff.filter((path) => renames.has(path)).map((path) => [path, renames.get(path)]))) await diffBatch(batch, "--find-renames");
@@ -36013,11 +36040,26 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
   for (const path of context.keys()) if (!delivered.has(path)) await deliver(path);
   return context;
 }
-var MAX_BASELINE_BYTES;
+var MAX_BASELINE_BYTES, REPOSITORY_ENVIRONMENT, WORKING_TREE_CHANGED;
 var init_git_context = __esm({
   "src/git-context.ts"() {
     "use strict";
     MAX_BASELINE_BYTES = 8 * 1024 * 1024;
+    REPOSITORY_ENVIRONMENT = /* @__PURE__ */ new Set([
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_IMPLICIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      "GIT_COMMON_DIR",
+      "GIT_GRAFT_FILE",
+      "GIT_NO_REPLACE_OBJECTS",
+      "GIT_REPLACE_REF_BASE",
+      "GIT_PREFIX",
+      "GIT_SHALLOW_FILE"
+    ]);
+    WORKING_TREE_CHANGED = "Working tree changed during collection; retry the preview.";
   }
 });
 
@@ -36594,15 +36636,14 @@ async function collect(options) {
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...options.signal ? [options.signal] : []]);
   const git = async (root2, args) => {
     signal.throwIfAborted();
-    return (await exec("git", ["-C", root2, ...args], { maxBuffer: 8 * 1024 * 1024, timeout: 1e4, signal })).stdout;
+    return (await exec("git", ["-C", root2, ...args], { signal, env: gitEnvironment() })).stdout;
   };
   const root = await realpath4((await git(resolve3(options.repo), ["rev-parse", "--show-toplevel"])).trim());
   const base = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`])).trim();
   const head = (await git(root, ["rev-parse", "HEAD"])).trim();
   const changed = [];
   const renames = /* @__PURE__ */ new Map();
-  const statusFields = (await git(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"])).split("\0");
-  if (statusFields.pop() !== "") throw new Error("Git change listing failed");
+  const statusFields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"], signal, "Git change listing failed");
   for (let index2 = 0; index2 < statusFields.length; ) {
     const status = statusFields[index2++];
     const recordPaths = statusFields.slice(index2, index2 += /^[RC]/.test(status) ? 2 : 1);
@@ -36611,8 +36652,8 @@ async function collect(options) {
     changed.push(path);
     if (status.startsWith("R")) renames.set(path, recordPaths[0]);
   }
-  const untracked = (await git(root, ["ls-files", "--others", "--exclude-standard", "-z"])).split("\0").filter(Boolean);
-  const tracked = (await git(root, ["ls-files", "-z"])).split("\0").filter(Boolean);
+  const untracked = (await readGitRecords(root, ["ls-files", "--others", "--exclude-standard", "-z"], signal, "Git untracked-file listing failed")).filter(Boolean);
+  const tracked = (await readGitRecords(root, ["ls-files", "-z"], signal, "Git tracked-file listing failed")).filter(Boolean);
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
   const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
@@ -36631,11 +36672,12 @@ async function collect(options) {
     omissions.set(reason, entry);
   };
   const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
-  const noteSource = (path, message) => {
+  const noteSource = (path, reason) => {
     const issues = sourceIssues.get(path) ?? [];
-    if (!issues.includes(message)) issues.push(message);
+    if (!issues.includes(reason)) issues.push(reason);
     sourceIssues.set(path, issues);
   };
+  const issueMessages = (path) => (sourceIssues.get(path) ?? []).map((reason) => `${reason}: ${path}`);
   async function load(path, role, targets, change, baseline) {
     const existing = loaded.get(path);
     if (existing) {
@@ -36644,7 +36686,7 @@ async function collect(options) {
     }
     if (!isSource(path)) {
       recordOmission("Unsupported or generated file", path);
-      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      noteSource(path, "Unsupported or generated file omitted");
       return void 0;
     }
     try {
@@ -36659,6 +36701,8 @@ async function collect(options) {
         if (before && hasSecret(before)) throw new Error("Base version with a potential credential");
         ranges = untracked.includes(path) ? [{ start: 1, end: raw.split("\n").length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
+        if (change?.noHunks === "mode-only") noteSource(path, "File mode changed without a content change; no changed lines to review");
+        if (change?.noHunks === "diff-suppressed") noteSource(path, "Git reported no textual diff (binary or -diff attribute); changed lines are unknown");
       }
       let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
@@ -36699,12 +36743,12 @@ async function collect(options) {
       }
       const names = role === "changed" ? definedSymbols(raw) : void 0;
       loaded.set(path, { source, names });
-      if (!source.evidence.complete) noteSource(path, `Focused excerpts only; omitted lines are not reviewed: ${path}`);
+      if (!source.evidence.complete) noteSource(path, "Focused excerpts only; omitted lines are not reviewed");
       if (role === "changed" && !ranges.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {
-        noteSource(path, `Changed ranges outside captured evidence omitted: ${path}`);
+        noteSource(path, "Changed ranges outside captured evidence omitted");
       }
       if (role !== "changed" && targets?.length && !targets.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {
-        noteSource(path, `Relevant support ranges outside captured evidence omitted: ${path}`);
+        noteSource(path, "Relevant support ranges outside captured evidence omitted");
       }
       if (role === "changed") {
         changedSourcePaths.add(path);
@@ -36716,9 +36760,9 @@ async function collect(options) {
               candidateIds.add(candidate.id);
               candidates.push(candidate);
             }
-            if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
+            if (covered.length !== found.length) noteSource(path, "Candidates outside captured evidence omitted");
           } catch (error62) {
-            noteSource(path, `Source could not be parsed (${parseErrorCategory(error62)}); no candidates collected: ${path}`);
+            noteSource(path, `Source could not be parsed (${parseErrorCategory(error62)}); no candidates collected`);
           }
         }
       }
@@ -36727,7 +36771,7 @@ async function collect(options) {
       signal.throwIfAborted();
       const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
       recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted: ${path}`);
+      noteSource(path, `${message} omitted`);
       return void 0;
     }
   }
@@ -36735,7 +36779,7 @@ async function collect(options) {
   for (const path of changePaths) {
     if (!isSource(path)) {
       recordOmission("Unsupported or generated file", label(path));
-      noteSource(path, `Unsupported or generated file omitted: ${path}`);
+      noteSource(path, "Unsupported or generated file omitted");
       continue;
     }
     try {
@@ -36747,7 +36791,7 @@ async function collect(options) {
       signal.throwIfAborted();
       const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
       recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted: ${path}`);
+      noteSource(path, `${message} omitted`);
     }
   }
   const baselineRenames = /* @__PURE__ */ new Map();
@@ -36755,7 +36799,7 @@ async function collect(options) {
     const from = renames.get(path);
     if (!from) continue;
     if (isSource(from)) baselineRenames.set(path, from);
-    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline: ${path}`);
+    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline`);
   }
   await readGitChangeContext({
     root,
@@ -36842,7 +36886,7 @@ async function collect(options) {
     };
     for (const path of primary) {
       if (!add(path, true)) throw new Error(`Focused changed evidence cannot fit packet: ${path}`);
-      packetLimitations2.push(...sourceIssues.get(path) ?? []);
+      packetLimitations2.push(...issueMessages(path));
     }
     const relatedRoles = ["test", "caller", "dependency"];
     const relatedQueues = primary.map((path) => relatedRoles.map((role) => [...relatedByChange.get(path) ?? []].filter(([, relatedRole]) => relatedRole === role).sort(([left], [right]) => left.localeCompare(right))));
@@ -36882,13 +36926,13 @@ async function collect(options) {
       const source = await load(relatedPath, role, targets);
       if (source) sourceByPath.set(relatedPath, source);
       if (source && add(relatedPath, false)) {
-        packetLimitations2.push(...sourceIssues.get(relatedPath) ?? []);
+        packetLimitations2.push(...issueMessages(relatedPath));
       } else if (source && !wasLoaded) {
         sourceByPath.delete(relatedPath);
         loaded.delete(relatedPath);
         sourceIssues.delete(relatedPath);
       } else if (!source) {
-        packetLimitations2.push(...sourceIssues.get(relatedPath) ?? []);
+        packetLimitations2.push(...issueMessages(relatedPath));
       }
     }
     const packetCandidates = candidates.filter((candidate) => primary.includes(candidate.path)).map((candidate) => candidate.id);
@@ -36899,8 +36943,7 @@ async function collect(options) {
   }
   const sourceIssueCounts = /* @__PURE__ */ new Map();
   for (const path of sourceByPath.keys()) {
-    for (const issue2 of sourceIssues.get(path) ?? []) {
-      const reason = issue2.replace(/: [^:]+$/, "");
+    for (const reason of sourceIssues.get(path) ?? []) {
       const entry = sourceIssueCounts.get(reason) ?? { count: 0, samples: [] };
       entry.count++;
       if (entry.samples.length < 3) entry.samples.push(path);
@@ -37193,7 +37236,7 @@ function parseProjectConfig(text) {
   throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
 }
 async function loadProjectConfig(repo, signal) {
-  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal });
+  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal, env: gitEnvironment() });
   const root = await realpath5(stdout.trim());
   let text;
   try {
@@ -37228,6 +37271,7 @@ var init_project_config = __esm({
     "use strict";
     init_zod();
     init_collection_options();
+    init_git_context();
     init_jev();
     init_safety();
     exec2 = promisify2(execFile2);
