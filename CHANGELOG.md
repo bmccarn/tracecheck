@@ -21,6 +21,7 @@
 - `tracecheck_assess` has a bounded timeout and honors client cancellation, CLI `assess` stops on Ctrl-C, `tracecheck_verify` limits evidence by UTF-8 bytes, and the `previousEvaluation` input schema is smaller.
 - Focus related-file excerpts on call sites of `const` and `let` arrow functions and function expressions, and match symbol names that contain `$`.
 - Detect more credential shapes (unquoted YAML, TOML, and `.env` values, padded base64, PGP, DSA, and encrypted private keys, common provider tokens, and passwords in URLs), stop flagging identifier-like literals, and name the file or field that triggered screening without its value.
+- Read optional project settings from `.tracecheck.json` (base, untracked files, task and context, collection limits, timeouts, and model), below flags, MCP arguments, and environment variables. Unknown keys and credential fields are rejected by name.
 
 ## 0.3.0 — 2026-09-18
 
