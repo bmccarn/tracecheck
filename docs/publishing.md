@@ -11,7 +11,7 @@ One version covers the standalone CLI, four-tool MCP server, review skill, and p
 | GitHub releases | The verified npm and marketplace archives for the matching immutable tag |
 | `bmccarn/tracecheck-plugins` | Generated stable marketplace payload for Claude and Codex; never release candidates |
 
-Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. Before its first stable publication it does not provide an installation catalog; after a successful stable publication it is the canonical Claude/Codex marketplace source. The in-repo marketplace catalogs pin the latest stable release tag, so adding `bmccarn/tracecheck` as a marketplace installs that release. They never track development commits or release candidates.
+Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. Before its first stable publication it does not provide an installation catalog; after a successful stable publication it is the canonical marketplace source. The in-repo marketplace catalogs pin the latest stable release tag, so adding `bmccarn/tracecheck` as a marketplace installs that release. They never track development commits or release candidates.
 
 A prerelease must not move npm's `latest` tag or update the stable marketplace. Published versions and release tags are immutable. The workflow is not a cross-service transaction: npm, GitHub releases, and the marketplace can succeed independently; use the recovery procedure below after a partial publication.
 
