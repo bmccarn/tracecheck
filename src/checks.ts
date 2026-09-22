@@ -1,5 +1,5 @@
 import { parse, type ParserPlugin } from '@babel/parser';
-import * as t from '@babel/types';
+import type { Node } from '@babel/types';
 import { hash, type Candidate, type Range } from './domain.js';
 
 // Syntax identifies review opportunities, not bugs. Jev judges each hypothesis
@@ -41,20 +41,33 @@ export function parseErrorCategory(error: unknown) {
   return typeof code === 'string' && /^\w+$/.test(code) ? code : 'UnknownError';
 }
 
+// Babel's Function alias: the nodes that open a function scope.
+const functionTypes: Record<string, true> = {
+  FunctionDeclaration: true, FunctionExpression: true, ObjectMethod: true,
+  ArrowFunctionExpression: true, ClassMethod: true, ClassPrivateMethod: true,
+};
+// Parser fields that hold positions or comments rather than syntax children.
+const nonChildKeys: Record<string, true> = { loc: true, leadingComments: true, trailingComments: true, innerComments: true, comments: true };
+
+function isNode(value: unknown): value is Node {
+  return typeof value === 'object' && value !== null && 'type' in value && typeof value.type === 'string';
+}
+
 /**
  * Sites that cannot be defects: a non-zero literal divisor, a catch handler that
  * always rethrows, and a JSON.parse that its enclosing try statement handles.
  */
-function isObviousNonIssue(node: t.Node, parents: t.Node[]) {
-  if (t.isBinaryExpression(node) || t.isAssignmentExpression(node)) {
-    return (t.isNumericLiteral(node.right) && node.right.value !== 0) || (t.isBigIntLiteral(node.right) && node.right.value !== 0n);
+function isObviousNonIssue(node: Node, ancestors: Node[]) {
+  if (node.type === 'BinaryExpression' || node.type === 'AssignmentExpression') {
+    return (node.right.type === 'NumericLiteral' && node.right.value !== 0) || (node.right.type === 'BigIntLiteral' && node.right.value !== 0n);
   }
-  if (t.isCatchClause(node)) return node.body.body.some(statement => t.isThrowStatement(statement));
+  if (node.type === 'CatchClause') return node.body.body.some(statement => statement.type === 'ThrowStatement');
   // A try block protects only code that runs while it executes, so the search stops at the nearest function.
-  const chain = [...parents, node];
-  for (let index = chain.length - 2; index >= 0 && !t.isFunction(chain[index]); index--) {
-    const parent = chain[index]!;
-    if (t.isTryStatement(parent) && parent.handler && parent.block === chain[index + 1]) return true;
+  let child: Node = node;
+  for (let index = ancestors.length - 1; index >= 0 && !functionTypes[ancestors[index]!.type]; index--) {
+    const parent = ancestors[index]!;
+    if (parent.type === 'TryStatement' && parent.handler && parent.block === child) return true;
+    child = parent;
   }
   return false;
 }
@@ -63,43 +76,51 @@ export function findCandidates(path: string, content: string, changed: Range[]):
   const file = parseSource(path, content);
   const candidates: Candidate[] = [];
   const occurrences = new Map<string, number>();
-  function visit(node: t.Node, parents: t.Node[]) {
+  // The visited node's ancestors, outermost first. One stack serves the whole walk.
+  const ancestors: Node[] = [];
+  function visit(node: Node) {
     let check: keyof typeof checks | undefined;
-    if ((t.isBinaryExpression(node) && ['/', '%'].includes(node.operator))
-      || (t.isAssignmentExpression(node) && ['/=', '%='].includes(node.operator))) check = 'zero-divisor';
-    if (t.isCatchClause(node)) check = 'swallowed-failure';
-    if (t.isCallExpression(node) && t.isMemberExpression(node.callee) && !node.callee.computed
-      && t.isIdentifier(node.callee.object, { name: 'JSON' }) && t.isIdentifier(node.callee.property, { name: 'parse' })) check = 'unhandled-json';
+    if ((node.type === 'BinaryExpression' && (node.operator === '/' || node.operator === '%'))
+      || (node.type === 'AssignmentExpression' && (node.operator === '/=' || node.operator === '%='))) check = 'zero-divisor';
+    if (node.type === 'CatchClause') check = 'swallowed-failure';
+    if (node.type === 'CallExpression' && node.callee.type === 'MemberExpression' && !node.callee.computed
+      && node.callee.object.type === 'Identifier' && node.callee.object.name === 'JSON'
+      && node.callee.property.type === 'Identifier' && node.callee.property.name === 'parse') check = 'unhandled-json';
     if (check) {
-      const container = [...parents].reverse().find(parent => t.isFunction(parent));
-      // Outside any function, the enclosing top-level statement bounds the site; parents start [File, Program, statement].
-      const bounds = container ?? parents[2] ?? node;
+      let containerIndex = ancestors.length - 1;
+      while (containerIndex >= 0 && !functionTypes[ancestors[containerIndex]!.type]) containerIndex--;
+      const container = ancestors[containerIndex];
+      // Outside any function, the enclosing top-level statement bounds the site; ancestors start [File, Program, statement].
+      const bounds = container ?? ancestors[2] ?? node;
       const scope = { start: bounds.loc!.start.line, end: bounds.loc!.end.line };
-      const owner = container && parents[parents.indexOf(container) - 1];
+      const owner = ancestors[containerIndex - 1];
       const name = container === undefined ? '<anonymous-or-module>'
-        : ('id' in container && t.isIdentifier(container.id)) ? container.id.name
-        : ('key' in container && t.isIdentifier(container.key)) ? container.key.name
-        : owner && t.isVariableDeclarator(owner) && t.isIdentifier(owner.id) ? owner.id.name : '<anonymous-or-module>';
+        : ('id' in container && container.id?.type === 'Identifier') ? container.id.name
+        : ('key' in container && container.key.type === 'Identifier') ? container.key.name
+        : owner?.type === 'VariableDeclarator' && owner.id.type === 'Identifier' ? owner.id.name : '<anonymous-or-module>';
       const symbol = name;
       const quote = content.slice(node.start!, node.end!);
       const key = hash([path, symbol, check, quote.replace(/\s+/g, ' ')]);
       const occurrence = occurrences.get(key) ?? 0;
       occurrences.set(key, occurrence + 1);
       // Skipped sites still count as occurrences, so selected sites keep their IDs.
-      if (!isObviousNonIssue(node, parents) && changed.some(range => range.start <= scope.end && range.end >= scope.start)) {
+      if (!isObviousNonIssue(node, ancestors) && changed.some(range => range.start <= scope.end && range.end >= scope.start)) {
         candidates.push({ id: hash([key, occurrence]).slice(0, 24), check, path, symbol,
           range: { start: node.loc!.start.line, end: node.loc!.end.line },
           quote, ...checks[check] });
       }
     }
-    for (const key of t.VISITOR_KEYS[node.type] ?? []) {
+    ancestors.push(node);
+    for (const key in node) {
+      if (nonChildKeys[key]) continue;
       const value = (node as unknown as Record<string, unknown>)[key];
-      for (const child of Array.isArray(value) ? value : [value]) {
-        if (child && typeof child === 'object' && 'type' in child) visit(child as t.Node, [...parents, node]);
-      }
+      if (Array.isArray(value)) {
+        for (const child of value) if (isNode(child)) visit(child);
+      } else if (isNode(value)) visit(value);
     }
+    ancestors.pop();
   }
-  visit(file, []);
+  visit(file);
   return candidates;
 }
 

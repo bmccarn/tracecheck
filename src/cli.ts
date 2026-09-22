@@ -4,7 +4,7 @@ import { parseArgs } from 'node:util';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
-import { jevFromEnv } from './jev.js';
+import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { deadline } from './deadline.js';
 import { reviewAll, render } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, renderQuality, type PreviousEvaluation } from './quality.js';
@@ -12,6 +12,7 @@ import { compare } from './history.js';
 import { reportSchema } from './schema.js';
 import { toSarif } from './sarif.js';
 import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
+import { CONFIG_FILE, resolveSettings } from './project-config.js';
 
 function positiveSafeInteger(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -52,9 +53,9 @@ async function readPrevious(file: string): Promise<PreviousEvaluation> {
 }
 
 async function main() {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
-    repo: { type: 'string' }, base: { type: 'string', default: 'HEAD' },
-    'include-untracked': { type: 'boolean', default: false }, json: { type: 'boolean', default: false },
+  const { values, positionals } = parseArgs({ allowPositionals: true, allowNegative: true, options: {
+    repo: { type: 'string' }, base: { type: 'string' },
+    'include-untracked': { type: 'boolean' }, json: { type: 'boolean', default: false },
     out: { type: 'string' }, current: { type: 'string' }, previous: { type: 'string' }, help: { type: 'boolean', short: 'h' },
     input: { type: 'string' }, task: { type: 'string' }, context: { type: 'string' },
     'index-max-files': { type: 'string' }, 'index-max-bytes': { type: 'string' },
@@ -67,11 +68,11 @@ async function main() {
     console.log(`Tracecheck: evidence-backed review powered by Jev
 
 Usage:
-  tracecheck preview [--repo PATH] [--base REF] [--include-untracked] [--task TEXT] [--context TEXT]
-                     [collection limits] [--json]
-  tracecheck review  [--repo PATH] [--base REF] [--include-untracked] [--task TEXT] [--context TEXT]
-                     [collection limits] [--review-timeout-ms N] [--previous FILE] [--json]
-                     [--out FILE] [--sarif FILE]
+  tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--json]
+  tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--review-timeout-ms N]
+                     [--previous FILE] [--json] [--out FILE] [--sarif FILE]
   tracecheck verify  --input FILE [--repo PATH] [--out FILE]
   tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
   tracecheck compare --previous FILE --current FILE
@@ -82,6 +83,7 @@ Options:
                               matches excerpts against it; mcp uses it when a call names none.
   --base REF                  Git baseline (default: HEAD).
   --include-untracked         Include supported, non-ignored untracked files.
+  --no-include-untracked      Exclude untracked files even when the config file includes them.
   --task TEXT                 Requested behavior or acceptance criteria.
   --context TEXT              Repository facts, contracts, or observed test results.
   --review-timeout-ms N       Review deadline (default: 300000).
@@ -115,7 +117,12 @@ TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects th
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
-Use --task and --context to supply requirements and repository facts.`);
+Use --task and --context to supply requirements and repository facts.
+
+Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: base,
+includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model, and
+requestTimeoutMs. Flags override the file, and JEV_MODEL and JEV_TIMEOUT_MS override its
+model and requestTimeoutMs. The file cannot hold credentials or the endpoint.`);
     return;
   }
   if (command === 'mcp') {
@@ -164,20 +171,20 @@ Use --task and --context to supply requirements and repository facts.`);
   if (!['preview', 'review'].includes(command)) throw new Error(`Unknown command: ${command}`);
   const controller = new AbortController();
   process.once('SIGINT', () => controller.abort());
-  const collection = collectionOptions(values);
-  const reviewTimeoutMs = reviewTimeoutSchema.parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms'));
-  const collectionRequest = { base: values.base, includeUntracked: values['include-untracked'], task: values.task,
-    repositoryContext: values.context, collection };
-  const plan = await collect({ repo: values.repo ?? '.', ...collectionRequest, signal: controller.signal });
+  const settings = await resolveSettings(values.repo ?? '.', { base: values.base, includeUntracked: values['include-untracked'],
+    task: values.task, repositoryContext: values.context, collection: collectionOptions(values),
+    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')) }, controller.signal);
+  const { reviewTimeoutMs, request: collectionRequest } = settings;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal });
   if (command === 'preview') {
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.join(', ')}`).join('\n');
-    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\nSnapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
+    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
     return;
   }
   const reviewSignal = AbortSignal.any([controller.signal,
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)]);
   const previous = values.previous ? await readPrevious(values.previous) : undefined;
-  const report = await reviewAll(plan, jevFromEnv(reviewSignal), { signal: reviewSignal, previousEvaluation: previous });
+  const report = await reviewAll(plan, new Jev({ ...jevSettings(process.env, settings.provider), signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');

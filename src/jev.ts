@@ -44,26 +44,31 @@ const RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
 export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS'] as const;
 
 export type JevSettings = { apiKey: string; baseUrl: string; model: string; timeoutMs: number };
+/** Model and request timeout from the project configuration file; the environment overrides both. */
+export type ConfiguredJevSettings = { model?: string; timeoutMs?: number };
+export const modelSchema = z.string().trim().min(1);
+export const requestTimeoutSchema = z.number().int().positive().max(MAX_TIMEOUT_MS);
 
 /**
  * Resolves provider settings from the environment. A TypeSafe key takes precedence over an
  * OpenRouter key. OpenRouter serves TypeSafe's System One API, so only the base URL differs.
- * An explicit TYPESAFE_BASE_URL always wins.
+ * An explicit TYPESAFE_BASE_URL always wins. The credential and endpoint come only from the environment;
+ * the configured model and request timeout apply when the environment does not set them.
  */
-export function jevSettings(env: NodeJS.ProcessEnv = process.env): JevSettings {
+export function jevSettings(env: NodeJS.ProcessEnv = process.env, configured: ConfiguredJevSettings = {}): JevSettings {
   const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
   const openRouterKey = env.OPENROUTER_API_KEY?.trim();
   return {
     apiKey: typesafeKey || openRouterKey || '',
     baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
-    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL,
-    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS),
+    model: env.JEV_MODEL?.trim() || configured.model || DEFAULT_MODEL,
+    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS) ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS,
   };
 }
 
-function requestTimeout(value: string | undefined): number {
+function requestTimeout(value: string | undefined): number | undefined {
   const text = value?.trim();
-  if (!text) return DEFAULT_TIMEOUT_MS;
+  if (!text) return undefined;
   if (!/^[1-9]\d*$/.test(text) || Number(text) > MAX_TIMEOUT_MS) {
     throw new Error(`JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`);
   }

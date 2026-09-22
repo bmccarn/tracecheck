@@ -146,7 +146,8 @@ test('a cached MCP review collects once and still compares the supplied previous
   const output = z.object({ cached: z.boolean(), report: z.object({ quality: qualityEvaluationSchema }) }).parse(second.structuredContent);
   assert.equal(output.cached, true); assert.equal(calls, 1);
   assert.ok(hitCalls > 0);
-  assert.equal(missCalls, 2 * hitCalls, 'a miss collects before and after inference; a hit collects once');
+  // Each review first runs one Git call to locate the configuration file.
+  assert.equal(missCalls - 1, 2 * (hitCalls - 1), 'a miss collects before and after inference; a hit collects once');
   assert.equal(output.report.quality.comparison.find(row => row.metric === 'readability')!.delta, 4);
 });
 
