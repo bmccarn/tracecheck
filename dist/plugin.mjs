@@ -21158,16 +21158,54 @@ var init_review = __esm({
 import { open as open2, lstat, realpath } from "node:fs/promises";
 import { constants } from "node:fs";
 import { relative, isAbsolute, resolve } from "node:path";
+function identifierShaped(value) {
+  if (!/^[\w$.\-/:@=+;,~?!#]+$/.test(value)) return false;
+  const parts = value.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  let letterWords = 0, letterChars = 0, digitWords = 0, irregular = 0;
+  for (const part of parts) {
+    const mixedCase = /[a-z]/.test(part) && /[A-Z]/.test(part);
+    for (const word of part.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g) ?? []) {
+      if (/^[0-9]/.test(word)) {
+        if (word.length > 6) return false;
+        digitWords++;
+        continue;
+      }
+      if (word.length > 5 && /[bcdfghjklmnpqrstvwxz]{5}/i.test(word)) return false;
+      letterWords++;
+      letterChars += word.length;
+      if (word.length === 1 || mixedCase && /^[A-Z]+$/.test(word)) irregular++;
+    }
+  }
+  return letterWords > 0 && letterChars / letterWords >= 3 && irregular <= parts.length && digitWords <= Math.max(1, letterWords / 2);
+}
+function credentialValue(value) {
+  if (new Set(value).size < 6 || REFERENCE.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false;
+  return !identifierShaped(value);
+}
+function urlPassword(value) {
+  if (new Set(value).size < 4 || REFERENCE.test(value)) return false;
+  return /\d/.test(value) || !identifierShaped(value);
+}
 function hasSecret(text) {
-  return /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----|(?:api[_-]?key|password|secret|token)\s*["']?\s*[:=]\s*["'][A-Za-z0-9_+\/-]{20,}["']|\b(?:AKIA|ASIA)[A-Z0-9]{16}\b|\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b/i.test(text);
+  if (PRIVATE_KEY.test(text) || PROVIDER_TOKEN.test(text)) return true;
+  for (const match of text.matchAll(ASSIGNMENT)) if (credentialValue(match[2] ?? match[3])) return true;
+  for (const match of text.matchAll(URL_PASSWORD)) if (urlPassword(match[1])) return true;
+  return false;
 }
 function assertSafeOutbound(value) {
-  const visit2 = (item) => {
-    if (typeof item === "string" && hasSecret(item)) throw new Error("Potential credential in review context. Remove it before sending a review.");
-    if (Array.isArray(item)) item.forEach(visit2);
-    else if (item && typeof item === "object") Object.values(item).forEach(visit2);
+  const visit2 = (item, field, file3) => {
+    if (typeof item === "string") {
+      if (!hasSecret(item)) return;
+      const location = file3 === void 0 ? `field ${field || "input"}` : `${file3} (field ${field})`;
+      throw new Error(`Potential credential in ${location}. Remove it before sending this request.`);
+    }
+    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file3));
+    else if (item && typeof item === "object") {
+      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file3;
+      for (const [key, entry] of Object.entries(item)) visit2(entry, field ? `${field}.${key}` : key, path);
+    }
   };
-  visit2(value);
+  visit2(value, "", void 0);
 }
 async function readSource(root, path, signal, maxBytes = 256e3) {
   signal?.throwIfAborted();
@@ -21196,9 +21234,30 @@ async function readSource(root, path, signal, maxBytes = 256e3) {
     await file3.close();
   }
 }
+var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE;
 var init_safety = __esm({
   "src/safety.ts"() {
     "use strict";
+    PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+    PROVIDER_TOKEN = new RegExp([
+      String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
+      // AWS access key ID
+      String.raw`\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}`,
+      // GitHub
+      String.raw`\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b`,
+      // OpenAI-style secret key
+      String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}|\bxapp-[A-Za-z0-9-]{10,}|hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{16,}`,
+      // Slack
+      String.raw`\bAIza[A-Za-z0-9_-]{35}|\bGOCSPX-[A-Za-z0-9_-]{28}|\bya29\.[A-Za-z0-9_-]{20,}`,
+      // Google
+      String.raw`\b[rs]k_live_[A-Za-z0-9]{16,}`,
+      // Stripe
+      String.raw`\bnpm_[A-Za-z0-9]{36}\b`
+      // npm
+    ].join("|"));
+    ASSIGNMENT = new RegExp(String.raw`(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|secret|token|passw(?:or)?d)["'\x60]?\s*(?::=|=>|[:=])` + String.raw`(?:\s*(["'\x60])([^\s"'\x60\\]{12,})\1|[ \t]*([^\s"'\x60\\#;,(){}\[\]<>=$%*][^\s"'\x60\\#;,(){}\[\]<>]{11,})[ \t]*(?:[#;].*)?$)`, "gim");
+    URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/?#"'`]*:([^\s@/?#"'`]+)@/gi;
+    REFERENCE = /^[$%{<[*(]|\$\{|\{\{|<%|\.\.\.|…/;
   }
 });
 
@@ -43578,7 +43637,7 @@ function boundedCache(root, cache) {
   while (caches.size > MAX_CACHE_ROOTS) caches.delete(caches.keys().next().value);
 }
 function errorDetail(error62) {
-  if (error62 instanceof Error && /Symlink|External path|Nonregular|oversized|secret|Binary|changed during/.test(error62.message)) return error62.message;
+  if (error62 instanceof Error && /Symlink|External path|Nonregular|oversized|credential|Binary|changed during/.test(error62.message)) return error62.message;
   return "Unreadable file";
 }
 async function bounded(values, stopped, task) {
@@ -43676,7 +43735,7 @@ async function buildImportIndex(options) {
       try {
         const content = await readSource(physicalRoot, path, signal);
         if (content.includes("\0")) throw new Error("Binary file");
-        if (hasSecret(content)) throw new Error("Potential secret-bearing file");
+        if (hasSecret(content)) throw new Error("File with a potential credential");
         const after = await metadata(physicalRoot, path, signal);
         if (!fingerprintMatches(fingerprint, after)) throw new Error("File changed during collection");
         const edges = importsFor(path, content, options.known).sort();
@@ -43803,7 +43862,7 @@ async function collect(options) {
   const recordOmission = (reason, path) => {
     const entry = omissions.get(reason) ?? { count: 0, samples: [] };
     entry.count++;
-    if (entry.samples.length < 3) entry.samples.push(path);
+    if (entry.samples.length < 3 || reason.includes("potential credential")) entry.samples.push(path);
     omissions.set(reason, entry);
   };
   const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
@@ -43825,13 +43884,14 @@ async function collect(options) {
     }
     try {
       const raw = await readSource(root, path, signal);
-      if (raw.includes("\0") || hasSecret(raw)) throw new Error("Binary or potential secret-bearing file");
+      if (raw.includes("\0")) throw new Error("Binary file");
+      if (hasSecret(raw)) throw new Error("File with a potential credential");
       let before = baseline;
       let ranges = targets ?? [{ start: 1, end: 80 }];
       let beforeRanges = ranges;
       if (role === "changed") {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error("Potential secret in base version");
+        if (before && hasSecret(before)) throw new Error("Base version with a potential credential");
         ranges = untracked.includes(path) ? [{ start: 1, end: raw.split("\n").length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
       }
@@ -43900,7 +43960,7 @@ async function collect(options) {
       return source;
     } catch (error62) {
       signal.throwIfAborted();
-      const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
+      const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
       recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
       return void 0;
@@ -43915,11 +43975,12 @@ async function collect(options) {
     }
     try {
       const raw = await readSource(root, path, signal);
-      if (raw.includes("\0") || hasSecret(raw)) throw new Error("Binary or potential secret-bearing file");
+      if (raw.includes("\0")) throw new Error("Binary file");
+      if (hasSecret(raw)) throw new Error("File with a potential credential");
       eligibleChanges.push(path);
     } catch (error62) {
       signal.throwIfAborted();
-      const message = error62 instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
+      const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
       recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
     }
