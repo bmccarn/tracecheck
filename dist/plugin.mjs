@@ -4511,7 +4511,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve5) {
+function isRecursive(inst, stack, resolve6) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -4521,7 +4521,7 @@ function isRecursive(inst, stack, resolve5) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer2 = isRecursive(child, stack, resolve5);
+      const answer2 = isRecursive(child, stack, resolve6);
       if (answer2 > result)
         result = answer2;
     }
@@ -4532,7 +4532,7 @@ function isRecursive(inst, stack, resolve5) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
       if (child > answer2)
         answer2 = child;
     }
@@ -4596,7 +4596,7 @@ function isRecursive(inst, stack, resolve5) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -36442,14 +36442,14 @@ function chain(...fns) {
 }
 function defineAliasedType(...aliases) {
   return (type, opts = {}) => {
-    let defined = opts.aliases;
-    if (!defined) {
-      if (opts.inherits) defined = store[opts.inherits].aliases?.slice();
-      defined ??= [];
-      opts.aliases = defined;
+    let defined2 = opts.aliases;
+    if (!defined2) {
+      if (opts.inherits) defined2 = store[opts.inherits].aliases?.slice();
+      defined2 ??= [];
+      opts.aliases = defined2;
     }
-    const additional = aliases.filter((a) => !defined.includes(a));
-    defined.unshift(...additional);
+    const additional = aliases.filter((a) => !defined2.includes(a));
+    defined2.unshift(...additional);
     defineType$5(type, opts);
   };
 }
@@ -43184,18 +43184,32 @@ var init_checks3 = __esm({
 });
 
 // src/collection-options.ts
-var collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS;
+var timeoutMs, collectionOptionsSchema, collectionSettingsSchema, reviewScopeFields, DEFAULT_BASE, reviewTimeoutSchema, DEFAULT_REVIEW_TIMEOUT_MS, VERIFY_TIMEOUT_MS;
 var init_collection_options = __esm({
   "src/collection-options.ts"() {
     "use strict";
     init_zod();
+    timeoutMs = external_exports.number().int().positive().max(36e5);
     collectionOptionsSchema = external_exports.object({
       maxIndexFiles: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
       maxIndexBytes: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-      indexTimeoutMs: external_exports.number().int().positive().max(36e5).default(2e4),
-      collectionTimeoutMs: external_exports.number().int().positive().max(36e5).default(12e4)
+      indexTimeoutMs: timeoutMs.optional(),
+      collectionTimeoutMs: timeoutMs.optional()
     }).strict();
-    reviewTimeoutSchema = external_exports.number().int().positive().max(36e5).default(3e5);
+    collectionSettingsSchema = collectionOptionsSchema.extend({
+      indexTimeoutMs: timeoutMs.default(2e4),
+      collectionTimeoutMs: timeoutMs.default(12e4)
+    });
+    reviewScopeFields = {
+      base: external_exports.string().min(1),
+      includeUntracked: external_exports.boolean(),
+      task: external_exports.string().min(1),
+      repositoryContext: external_exports.string().min(1),
+      collection: collectionOptionsSchema
+    };
+    DEFAULT_BASE = "HEAD";
+    reviewTimeoutSchema = timeoutMs;
+    DEFAULT_REVIEW_TIMEOUT_MS = 3e5;
     VERIFY_TIMEOUT_MS = 9e4;
   }
 });
@@ -43226,7 +43240,7 @@ function pathBatches(groups) {
 }
 async function streamGit(root, args, signal, onData, input2) {
   signal.throwIfAborted();
-  await new Promise((resolve5, reject) => {
+  await new Promise((resolve6, reject) => {
     const child = spawn("git", ["--literal-pathspecs", "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"] });
     let settled = false;
     let output2 = Promise.resolve();
@@ -43237,7 +43251,7 @@ async function streamGit(root, args, signal, onData, input2) {
       if (error62) {
         child.kill();
         reject(error62);
-      } else resolve5();
+      } else resolve6();
     };
     const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
     signal.addEventListener("abort", abort, { once: true });
@@ -43825,7 +43839,7 @@ import { realpath as realpath4 } from "node:fs/promises";
 import { posix as posix3, resolve as resolve3 } from "node:path";
 import { promisify } from "node:util";
 async function collect(options) {
-  const settings = collectionOptionsSchema.parse(options.collection ?? {});
+  const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...options.signal ? [options.signal] : []]);
   const git = async (root2, args) => {
     signal.throwIfAborted();
@@ -44148,7 +44162,7 @@ async function collect(options) {
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
   const sources = [...sourceByPath.values()].sort((a, b2) => a.path.localeCompare(b2.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
+  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
 var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, sourceChars, sourceBytes;
@@ -44215,19 +44229,19 @@ async function boundedJson(response) {
     reader.releaseLock();
   }
 }
-function jevSettings(env = process.env) {
+function jevSettings(env = process.env, configured = {}) {
   const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
   const openRouterKey = env.OPENROUTER_API_KEY?.trim();
   return {
     apiKey: typesafeKey || openRouterKey || "",
     baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
-    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL,
-    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS)
+    model: env.JEV_MODEL?.trim() || configured.model || DEFAULT_MODEL,
+    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS) ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS
   };
 }
 function requestTimeout(value) {
   const text = value?.trim();
-  if (!text) return DEFAULT_TIMEOUT_MS;
+  if (!text) return void 0;
   if (!/^[1-9]\d*$/.test(text) || Number(text) > MAX_TIMEOUT_MS) {
     throw new Error(`JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`);
   }
@@ -44269,7 +44283,7 @@ function pause(ms, signal) {
     signal.addEventListener("abort", abort, { once: true });
   });
 }
-var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, MAX_ATTEMPTS, RETRYABLE_STATUSES, Jev;
+var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, MAX_ATTEMPTS, RETRYABLE_STATUSES, modelSchema, requestTimeoutSchema, Jev;
 var init_jev = __esm({
   "src/jev.ts"() {
     "use strict";
@@ -44304,6 +44318,8 @@ var init_jev = __esm({
     MAX_TIMEOUT_MS = 36e5;
     MAX_ATTEMPTS = 3;
     RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
+    modelSchema = external_exports.string().trim().min(1);
+    requestTimeoutSchema = external_exports.number().int().positive().max(MAX_TIMEOUT_MS);
     Jev = class {
       constructor(options) {
         this.options = options;
@@ -44318,8 +44334,8 @@ var init_jev = __esm({
         assertSafeOutbound(state);
         const body = JSON.stringify({ model: this.model, state, questions });
         if (Buffer.byteLength(body) > 18e4) throw new Error("Review request exceeds the local 180 KB request budget. Reduce the review scope.");
-        const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-        const timeout = deadline(timeoutMs, `Jev request timed out after ${timeoutMs} ms. Set JEV_TIMEOUT_MS to allow more time.`);
+        const timeoutMs2 = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeout = deadline(timeoutMs2, `Jev request timed out after ${timeoutMs2} ms. Set JEV_TIMEOUT_MS to allow more time.`);
         const caller = this.options.signal;
         const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
         try {
@@ -44383,6 +44399,89 @@ var init_jev = __esm({
         }
       }
     };
+  }
+});
+
+// src/project-config.ts
+import { execFile as execFile2 } from "node:child_process";
+import { realpath as realpath5 } from "node:fs/promises";
+import { resolve as resolve4 } from "node:path";
+import { promisify as promisify2 } from "node:util";
+function parseProjectConfig(text) {
+  let value;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new Error(`${CONFIG_FILE} is not valid JSON.`);
+  }
+  const visit2 = (item, path) => {
+    if (typeof item === "string" && hasSecret(item)) {
+      throw new Error(`${CONFIG_FILE}: ${where(path)} contains a potential credential. Provider keys belong in the environment only.`);
+    }
+    if (!item || typeof item !== "object") return;
+    for (const [key, child] of Object.entries(item)) {
+      if (CREDENTIAL_KEY.test(key)) {
+        throw new Error(`${CONFIG_FILE}: ${where([...path, key])} looks like a credential field. Provider keys belong in the environment only.`);
+      }
+      visit2(child, [...path, key]);
+    }
+  };
+  visit2(value, []);
+  const parsed = projectConfigSchema.safeParse(value);
+  if (parsed.success) return parsed.data;
+  const problems = parsed.error.issues.flatMap((issue2) => issue2.code === "unrecognized_keys" ? issue2.keys.map((key) => `unknown key ${where([...issue2.path, key])}`) : [`${where(issue2.path)}: ${issue2.message}`]);
+  throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
+}
+async function loadProjectConfig(repo, signal) {
+  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal });
+  const root = await realpath5(stdout.trim());
+  let text;
+  try {
+    text = await readSource(root, CONFIG_FILE, signal, MAX_CONFIG_BYTES);
+  } catch (error62) {
+    signal?.throwIfAborted();
+    if (error62.code === "ENOENT") return { root };
+    throw new Error(`Cannot read ${CONFIG_FILE}: ${error62 instanceof Error ? error62.message : "unexpected failure"}.`);
+  }
+  return { root, config: parseProjectConfig(text) };
+}
+async function resolveSettings(repo, explicit, signal) {
+  const { root, config: config2 } = await loadProjectConfig(repo, signal);
+  const file3 = config2 ?? {};
+  return {
+    root,
+    request: {
+      base: explicit.base ?? file3.base ?? DEFAULT_BASE,
+      includeUntracked: explicit.includeUntracked ?? file3.includeUntracked ?? false,
+      task: explicit.task ?? file3.task,
+      repositoryContext: explicit.repositoryContext ?? file3.repositoryContext,
+      collection: { ...file3.collection, ...defined(explicit.collection) },
+      ...config2 ? { projectConfig: config2 } : {}
+    },
+    reviewTimeoutMs: explicit.reviewTimeoutMs ?? file3.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
+    provider: { model: file3.model, timeoutMs: file3.requestTimeoutMs }
+  };
+}
+var exec2, CONFIG_FILE, MAX_CONFIG_BYTES, CREDENTIAL_KEY, projectConfigSchema, where, defined;
+var init_project_config = __esm({
+  "src/project-config.ts"() {
+    "use strict";
+    init_zod();
+    init_collection_options();
+    init_jev();
+    init_safety();
+    exec2 = promisify2(execFile2);
+    CONFIG_FILE = ".tracecheck.json";
+    MAX_CONFIG_BYTES = 64e3;
+    CREDENTIAL_KEY = /key|token|secret|password|passphrase|credential|bearer|^auth/i;
+    projectConfigSchema = external_exports.object({
+      ...reviewScopeFields,
+      reviewTimeoutMs: reviewTimeoutSchema,
+      model: modelSchema,
+      requestTimeoutMs: requestTimeoutSchema
+    }).partial().strict();
+    where = (path) => path.length ? `"${path.map(String).join(".")}"` : "the top level";
+    defined = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([, item]) => item !== void 0));
   }
 });
 
@@ -47877,14 +47976,14 @@ function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
 }
 function sleep(ms, signal) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof SdkError ? signal.reason : new SdkError(SdkErrorCode.RequestTimeout, String(signal.reason)));
       return;
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
-      resolve5();
+      resolve6();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
@@ -49676,7 +49775,7 @@ var init_src_CX2iR2pK = __esm({
         const flowStartedAt = Date.now();
         let onAbort;
         let cleanupMessageId;
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve6, reject) => {
           const earlyReject = (error62) => {
             reject(error62);
           };
@@ -49744,7 +49843,7 @@ var init_src_CX2iR2pK = __esm({
             }
             if (decoded.kind === "invalid") return reject(decoded.error);
             if (decoded.kind === "input_required") {
-              if (options?.allowInputRequired === true) return resolve5(manualInputRequiredValue(decoded));
+              if (options?.allowInputRequired === true) return resolve6(manualInputRequiredValue(decoded));
               const flow2 = {
                 codec: codec2,
                 request,
@@ -49756,11 +49855,11 @@ var init_src_CX2iR2pK = __esm({
                   params
                 }, resultSchema, legOptions)
               };
-              return resolve5(this._resolveNonCompleteResult(decoded, flow2));
+              return resolve6(this._resolveNonCompleteResult(decoded, flow2));
             }
             const result = decoded.result;
             validateStandardSchema(resultSchema, result).then((parseResult) => {
-              if (parseResult.success) resolve5(parseResult.data);
+              if (parseResult.success) resolve6(parseResult.data);
               else reject(new SdkError(SdkErrorCode.InvalidResult, `Invalid result for ${request.method}: ${parseResult.error}`));
             }, reject);
           });
@@ -52576,7 +52675,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
         const schOrFunc = root.refs[ref];
         if (schOrFunc) return schOrFunc;
-        let _sch = resolve5.call(this, root, ref);
+        let _sch = resolve6.call(this, root, ref);
         if (_sch === void 0) {
           const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
           const { schemaId } = this.opts;
@@ -52602,7 +52701,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       function sameSchemaEnv(s1, s2) {
         return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
       }
-      function resolve5(root, ref) {
+      function resolve6(root, ref) {
         let sch;
         while (typeof (sch = this.refs[ref]) == "string") ref = sch;
         return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
@@ -53052,7 +53151,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         else if (typeof uri === "object") uri = parse4(serialize(uri, options), options);
         return uri;
       }
-      function resolve5(baseURI, relativeURI, options) {
+      function resolve6(baseURI, relativeURI, options) {
         const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
         const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
         schemelessOptions.skipEscape = true;
@@ -53226,7 +53325,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const fastUri = {
         SCHEMES,
         normalize,
-        resolve: resolve5,
+        resolve: resolve6,
         resolveComponent,
         equal,
         serialize,
@@ -58425,7 +58524,7 @@ var init_stdio = __esm({
       }
       send(message) {
         if (this._closed) return Promise.reject(/* @__PURE__ */ new Error("StdioServerTransport is closed"));
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve6, reject) => {
           const json2 = serializeMessage(message);
           let settled = false;
           const onError = (error62) => {
@@ -58440,14 +58539,14 @@ var init_stdio = __esm({
             settled = true;
             this._stdout.off("error", onError);
             this._stdout.off("drain", onDrain);
-            resolve5();
+            resolve6();
           };
           this._stdout.once("error", onError);
           if (this._stdout.write(json2)) {
             if (settled) return;
             settled = true;
             this._stdout.off("error", onError);
-            resolve5();
+            resolve6();
           } else if (!settled) this._stdout.once("drain", onDrain);
         });
       }
@@ -58462,21 +58561,21 @@ __export(mcp_exports, {
   createServer: () => createServer,
   serve: () => serve
 });
-import { realpath as realpath5 } from "node:fs/promises";
+import { realpath as realpath6 } from "node:fs/promises";
 function createServer(repo, evaluatorFactory) {
   const server = new McpServer({ name: "tracecheck", version: releaseVersion });
   const cache = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = {
     repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
-    base: external_exports.string().min(1).default("HEAD").describe("Git baseline; the working tree is compared against this commit."),
-    includeUntracked: external_exports.boolean().default(false),
-    task: external_exports.string().min(1).optional(),
-    repositoryContext: external_exports.string().min(1).optional(),
-    collection: collectionOptionsSchema.optional().describe("Bounded local collection settings. Matching settings are required when reviewing a preview snapshot.")
+    base: reviewScopeFields.base.optional().describe(`Git baseline; the working tree is compared against this commit. Defaults to base in the repository's ${CONFIG_FILE}, then HEAD.`),
+    includeUntracked: reviewScopeFields.includeUntracked.optional().describe(`Include untracked files. Defaults to ${CONFIG_FILE}, then false.`),
+    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to ${CONFIG_FILE}.`),
+    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to ${CONFIG_FILE}.`),
+    collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`)
   };
   const target = async (requested) => {
-    if (repo && requested && await realpath5(repo) !== await realpath5(requested)) throw new Error("This server is bound to a different repository.");
+    if (repo && requested && await realpath6(repo) !== await realpath6(requested)) throw new Error("This server is bound to a different repository.");
     if (!repo && !requested) throw new Error("Supply repo or launch the server with --repo.");
     return repo ?? requested;
   };
@@ -58513,7 +58612,8 @@ function createServer(repo, evaluatorFactory) {
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async (args, ctx) => {
-    const plan = await collect({ ...args, repo: await target(args.repo), signal: ctx.mcpReq.signal });
+    const settings = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const plan = await collect({ repo: settings.root, ...settings.request, signal: ctx.mcpReq.signal });
     if (!plan.discovery) throw new Error("Collection did not produce a discovery scope. Run tracecheck_preview again.");
     previewScopes.set(plan.snapshot, plan.discovery);
     const output2 = {
@@ -58527,28 +58627,21 @@ function createServer(repo, evaluatorFactory) {
   });
   server.registerTool("tracecheck_review", {
     description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
-    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.describe("Maximum review duration in milliseconds."), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
+    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
+    const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const { reviewTimeoutMs, request: collectionRequest } = effective;
     const signal = AbortSignal.any([
       ctx.mcpReq.signal,
-      deadline(args.reviewTimeoutMs, `Review timed out after ${args.reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)
+      deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)
     ]);
-    const root = await target(args.repo);
     const discovery = previewScopes.get(args.snapshot);
     if (!discovery) throw new Error("Preview snapshot is unknown or expired. Run tracecheck_preview again.");
-    const collectionRequest = {
-      repo: args.repo,
-      base: args.base,
-      includeUntracked: args.includeUntracked,
-      task: args.task,
-      repositoryContext: args.repositoryContext,
-      collection: args.collection
-    };
-    const plan = await collect({ ...collectionRequest, repo: root, discovery, signal });
+    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal });
     if (plan.snapshot !== args.snapshot) throw new Error("Repository context changed since preview. Run tracecheck_preview again.");
-    const settings = jevSettings();
+    const settings = jevSettings(process.env, effective.provider);
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     let report = cache.get(key);
     const cached2 = report !== void 0;
@@ -58590,6 +58683,7 @@ var init_mcp = __esm({
     init_quality();
     init_schema();
     init_collection_options();
+    init_project_config();
     init_deadline();
     releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
     CACHE_LIMIT = 16;
@@ -58630,7 +58724,7 @@ init_review();
 init_quality();
 import { parseArgs } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve as resolve4 } from "node:path";
+import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
 function compare(previous, current) {
@@ -58655,6 +58749,7 @@ function compare(previous, current) {
 // src/cli.ts
 init_schema();
 init_collection_options();
+init_project_config();
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -58671,10 +58766,10 @@ function collectionOptions(values) {
   });
 }
 async function main() {
-  const { values, positionals } = parseArgs({ allowPositionals: true, options: {
+  const { values, positionals } = parseArgs({ allowPositionals: true, allowNegative: true, options: {
     repo: { type: "string" },
-    base: { type: "string", default: "HEAD" },
-    "include-untracked": { type: "boolean", default: false },
+    base: { type: "string" },
+    "include-untracked": { type: "boolean" },
     json: { type: "boolean", default: false },
     out: { type: "string" },
     current: { type: "string" },
@@ -58693,8 +58788,8 @@ async function main() {
   if (values.help || !command) {
     console.log(`Tracecheck \u2014 evidence-backed review powered by Jev
 
-  tracecheck preview --repo PATH [--base HEAD] [--include-untracked] [collection limits] [--json]
-  tracecheck review  --repo PATH [--base HEAD] [collection limits] [--review-timeout-ms N] [--json] [--out report.json]
+  tracecheck preview --repo PATH [--base HEAD] [--[no-]include-untracked] [collection limits] [--json]
+  tracecheck review  --repo PATH [--base HEAD] [--[no-]include-untracked] [collection limits] [--review-timeout-ms N] [--json] [--out report.json]
   tracecheck verify  --input evidence.json [--repo PATH] [--out result.json]
   tracecheck assess  --input context.json [--previous evaluation.json] [--out evaluation.json]
   tracecheck compare --previous old.json --current current.json
@@ -58712,12 +58807,17 @@ Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
-Use --task and --context to supply requirements and repository facts.`);
+Use --task and --context to supply requirements and repository facts.
+
+Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: base,
+includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model, and
+requestTimeoutMs. Flags override the file, and JEV_MODEL and JEV_TIMEOUT_MS override its
+model and requestTimeoutMs. The file cannot hold credentials or the endpoint.`);
     return;
   }
   if (command === "mcp") {
     const { serve: serve2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-    await serve2(values.repo ? resolve4(values.repo) : void 0);
+    await serve2(values.repo ? resolve5(values.repo) : void 0);
     return;
   }
   if (command === "compare") {
@@ -58735,7 +58835,7 @@ Use --task and --context to supply requirements and repository facts.`);
     const input2 = JSON.parse(await readFile(values.input, "utf8"));
     const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, jevFromEnv(signal), signal);
     if (values.out) {
-      await mkdir(dirname(resolve4(values.out)), { recursive: true });
+      await mkdir(dirname(resolve5(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(output2, null, 2) + "\n", { mode: 384 });
     }
     console.log(JSON.stringify(output2, null, 2));
@@ -58751,7 +58851,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (values.previous) input2.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
     const evaluation = await assess(input2, jevFromEnv(signal), signal);
     if (values.out) {
-      await mkdir(dirname(resolve4(values.out)), { recursive: true });
+      await mkdir(dirname(resolve5(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });
     }
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
@@ -58760,20 +58860,21 @@ Use --task and --context to supply requirements and repository facts.`);
   if (!["preview", "review"].includes(command)) throw new Error(`Unknown command: ${command}`);
   const controller = new AbortController();
   process.once("SIGINT", () => controller.abort());
-  const collection = collectionOptions(values);
-  const reviewTimeoutMs = reviewTimeoutSchema.parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms"));
-  const collectionRequest = {
+  const settings = await resolveSettings(values.repo ?? ".", {
     base: values.base,
     includeUntracked: values["include-untracked"],
     task: values.task,
     repositoryContext: values.context,
-    collection
-  };
-  const plan = await collect({ repo: values.repo ?? ".", ...collectionRequest, signal: controller.signal });
+    collection: collectionOptions(values),
+    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms"))
+  }, controller.signal);
+  const { reviewTimeoutMs, request: collectionRequest } = settings;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal });
   if (command === "preview") {
     const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)
-Snapshot: ${plan.snapshot}
+${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}
+` : ""}Snapshot: ${plan.snapshot}
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
 Review implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.
 ${packets}
@@ -58789,12 +58890,12 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))) : void 0;
   if (values.previous && !previousReport?.quality) throw new Error("Previous report has no single-packet quality evaluation to compare.");
   const previous = previousReport?.quality;
-  const report = await reviewAll(plan, jevFromEnv(reviewSignal), { signal: reviewSignal, previousEvaluation: previous });
+  const report = await reviewAll(plan, new Jev({ ...jevSettings(process.env, settings.provider), signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
   if (values.out) {
-    const destination = resolve4(values.out);
+    const destination = resolve5(values.out);
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, JSON.stringify(report, null, 2) + "\n", { mode: 384 });
   }

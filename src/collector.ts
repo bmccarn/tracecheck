@@ -3,12 +3,13 @@ import { realpath } from 'node:fs/promises';
 import { posix, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { findCandidates, parseErrorCategory } from './checks.js';
-import { collectionOptionsSchema, type CollectionOptions } from './collection-options.js';
+import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { readGitChangeContext, type GitChange } from './git-context.js';
 import { definedSymbols, focusSource, isSource, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { hasSecret, readSource } from './safety.js';
+import type { ProjectConfig } from './project-config.js';
 
 const exec = promisify(execFile);
 const MAX_PACKET_CHARS = 60_000;
@@ -25,6 +26,8 @@ const isTest = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.p
 export type CollectOptions = {
   repo: string; base?: string; includeUntracked?: boolean; task?: string; repositoryContext?: string;
   signal?: AbortSignal; focus?: boolean; collection?: CollectionOptions; discovery?: DiscoveryScope;
+  /** Validated content of the repository configuration file, if any; a change to it changes the snapshot. */
+  projectConfig?: ProjectConfig;
 };
 
 type Loaded = { source: Source; names?: string[] };
@@ -32,7 +35,7 @@ const sourceChars = (source: Source) => source.content.length + (source.before?.
 const sourceBytes = (source: Source) => Buffer.byteLength(JSON.stringify(source));
 
 export async function collect(options: CollectOptions): Promise<ReviewPlan> {
-  const settings = collectionOptionsSchema.parse(options.collection ?? {});
+  const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...(options.signal ? [options.signal] : [])]);
   const git = async (root: string, args: string[]) => {
     signal.throwIfAborted();
@@ -326,6 +329,6 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   if ((await git(root, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('Repository HEAD changed during collection; retry the preview.');
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
+  const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...(options.projectConfig ? { projectConfig: options.projectConfig } : {}) });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
