@@ -21193,15 +21193,15 @@ function hasSecret(text) {
   return false;
 }
 function assertSafeOutbound(value) {
-  const visit2 = (item, field, file3) => {
+  const visit2 = (item, field, file2) => {
     if (typeof item === "string") {
       if (!hasSecret(item)) return;
-      const location = file3 === void 0 ? `field ${field || "input"}` : `${file3} (field ${field})`;
+      const location = file2 === void 0 ? `field ${field || "input"}` : `${file2} (field ${field})`;
       throw new Error(`Potential credential in ${location}. Remove it before sending this request.`);
     }
-    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file3));
+    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file2));
     else if (item && typeof item === "object") {
-      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file3;
+      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file2;
       for (const [key, entry] of Object.entries(item)) visit2(entry, field ? `${field}.${key}` : key, path);
     }
   };
