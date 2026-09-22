@@ -29,7 +29,8 @@ Preconditions:
 - **Rename.** Use the `rename` fixture. `new.ts` is `changed` with `previousPath: "old.ts"`, and its `before` is the base content of `old.ts`, including the removed `if (!b) return 0;` guard. The human output lists `changed: new.ts (renamed from old.ts)`, and the MCP `files` entry carries `previousPath`.
 - **Pure rename.** Use the `rename-pure` fixture. `quotient.ts` has `previousPath: "ratio.ts"` and a baseline, and `candidates` is empty because a rename without edits has no changed ranges.
 - **Rename across eligibility.** Use the `rename-ineligible` fixture. `limitations` include `Unsupported or generated file (notes.ts -> notes.txt)` and `Renamed from unsupported or generated path dist/ratio.ts; reviewed without a baseline (ratio.ts)`; `ratio.ts` has no `before`.
-- **Python imports.** Use the `python-import` fixture. Inspect whether `pkg/report.py` appears as a caller and `tests/test_calc.py` as a test.
+- **Python imports.** Use the `python-import` fixture. Expect `pkg/report.py` as a `caller` (it uses a parenthesized multi-line import) and `tests/test_calc.py` as a `test`.
+- **JS/TS module paths.** Use the `module-paths` fixture. Expect `src/app.tsx` as `changed`, `src/main.ts` as `caller` (imports `./app.jsx`), and `src/lib.mts`, `src/legacy.cts`, `src/widgets/index.tsx`, and `src/app.css` as `dependency` sources. `src/logo.png` is not a source and appears in no limitation.
 - **MCP entry.** Write `[{"tool":"tracecheck_preview","arguments":{}}]` to `$RUN/calls.json` and run `node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"`. The record `01-tracecheck_preview.json` has `isError: false` and `structuredContent.snapshot` equal to the CLI snapshot for the same fixture, settings, and task.
 
 ## Gotchas
