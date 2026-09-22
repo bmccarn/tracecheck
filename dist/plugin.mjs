@@ -4521,26 +4521,26 @@ function isRecursive(inst, stack, resolve6) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer2 = isRecursive(child, stack, resolve6);
-      if (answer2 > result)
-        result = answer2;
+      const answer = isRecursive(child, stack, resolve6);
+      if (answer > result)
+        result = answer;
     }
   };
   const shape = (sh, spread) => {
-    let answer2 = NONE;
+    let answer = NONE;
     for (const key of Reflect.ownKeys(sh)) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
       const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
-      if (child > answer2)
-        answer2 = child;
+      if (child > answer)
+        answer = child;
     }
-    return answer2;
+    return answer;
   };
-  const merge2 = (answer2) => {
-    if (answer2 > result)
-      result = answer2;
+  const merge2 = (answer) => {
+    if (answer > result)
+      result = answer;
   };
   const def = inst._zod.def;
   const kind = def.type;
@@ -4643,10 +4643,10 @@ function isRecursive(inst, stack, resolve6) {
   stack.delete(inst);
   return settle(inst, result);
 }
-function settle(inst, answer2) {
-  if (answer2 !== ASSUMED)
-    recursive.set(inst, answer2 === PROVEN);
-  return answer2;
+function settle(inst, answer) {
+  if (answer !== ASSUMED)
+    recursive.set(inst, answer === PROVEN);
+  return answer;
 }
 function isRecursiveSchema(inst) {
   return isRecursive(inst, /* @__PURE__ */ new Set(), true) !== NONE;
@@ -20386,6 +20386,340 @@ var init_domain = __esm({
   }
 });
 
+// src/safety.ts
+import { open as open2, lstat, realpath } from "node:fs/promises";
+import { constants } from "node:fs";
+import { relative, isAbsolute, resolve } from "node:path";
+function identifierShaped(value) {
+  if (!/^[\w$.\-/:@=+;,~?!#]+$/.test(value)) return false;
+  const parts = value.split(/[^A-Za-z0-9]+/).filter(Boolean);
+  let letterWords = 0, letterChars = 0, digitWords = 0, irregular = 0;
+  for (const part of parts) {
+    const mixedCase = /[a-z]/.test(part) && /[A-Z]/.test(part);
+    for (const word of part.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g) ?? []) {
+      if (/^[0-9]/.test(word)) {
+        if (word.length > 6) return false;
+        digitWords++;
+        continue;
+      }
+      if (word.length > 5 && /[bcdfghjklmnpqrstvwxz]{5}/i.test(word)) return false;
+      letterWords++;
+      letterChars += word.length;
+      if (word.length === 1 || mixedCase && /^[A-Z]+$/.test(word)) irregular++;
+    }
+  }
+  return letterWords > 0 && letterChars / letterWords >= 3 && irregular <= parts.length && digitWords <= Math.max(1, letterWords / 2);
+}
+function credentialValue(value) {
+  if (new Set(value).size < 6 || REFERENCE.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false;
+  return !identifierShaped(value);
+}
+function urlPassword(value) {
+  if (new Set(value).size < 4 || REFERENCE.test(value)) return false;
+  return /\d/.test(value) || !identifierShaped(value);
+}
+function hasSecret(text) {
+  if (PRIVATE_KEY.test(text) || PROVIDER_TOKEN.test(text)) return true;
+  for (const match of text.matchAll(ASSIGNMENT)) if (credentialValue(match[2] ?? match[3])) return true;
+  for (const match of text.matchAll(URL_PASSWORD)) if (urlPassword(match[1])) return true;
+  return false;
+}
+function assertSafeOutbound(value) {
+  const visit2 = (item, field, file2) => {
+    if (typeof item === "string") {
+      if (!hasSecret(item)) return;
+      const location = file2 === void 0 ? `field ${field || "input"}` : `${file2} (field ${field})`;
+      throw new Error(`Potential credential in ${location}. Remove it before sending this request.`);
+    }
+    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file2));
+    else if (item && typeof item === "object") {
+      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file2;
+      for (const [key, entry] of Object.entries(item)) visit2(entry, field ? `${field}.${key}` : key, path);
+    }
+  };
+  visit2(value, "", void 0);
+}
+function isInside(root, path) {
+  const inside = relative(root, path);
+  return inside !== ".." && !inside.startsWith("../") && !inside.startsWith("..\\") && !isAbsolute(inside);
+}
+function failureReason(error62, fallback) {
+  return error62 instanceof Error && !("code" in error62) && NAMED_FAILURE.test(error62.message) ? error62.message : fallback;
+}
+async function readSource(root, path, signal, maxBytes = 256e3) {
+  return (await readSourceFile(root, path, signal, maxBytes)).content;
+}
+async function readSourceFile(root, path, signal, maxBytes = 256e3) {
+  signal?.throwIfAborted();
+  const absolute = resolve(root, path);
+  const physical = await realpath(absolute);
+  if (!isInside(root, physical) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
+  const file2 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const before = await file2.stat();
+    if (!before.isFile() || before.size > maxBytes) throw new Error("Nonregular or oversized file");
+    const buffer = Buffer.alloc(before.size + 1);
+    let size = 0;
+    while (size < buffer.length) {
+      signal?.throwIfAborted();
+      const read = await file2.read(buffer, size, buffer.length - size, null);
+      if (!read.bytesRead) break;
+      size += read.bytesRead;
+    }
+    const after = await file2.stat();
+    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
+    const current = await lstat(physical);
+    if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error("File changed during collection");
+    return {
+      content: buffer.subarray(0, size).toString("utf8"),
+      identity: { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs }
+    };
+  } finally {
+    await file2.close();
+  }
+}
+var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE, NAMED_FAILURE;
+var init_safety = __esm({
+  "src/safety.ts"() {
+    "use strict";
+    PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
+    PROVIDER_TOKEN = new RegExp([
+      String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
+      // AWS access key ID
+      String.raw`\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}`,
+      // GitHub
+      String.raw`\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b`,
+      // OpenAI-style secret key
+      String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}|\bxapp-[A-Za-z0-9-]{10,}|hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{16,}`,
+      // Slack
+      String.raw`\bAIza[A-Za-z0-9_-]{35}|\bGOCSPX-[A-Za-z0-9_-]{28}|\bya29\.[A-Za-z0-9_-]{20,}`,
+      // Google
+      String.raw`\b[rs]k_live_[A-Za-z0-9]{16,}`,
+      // Stripe
+      String.raw`\bnpm_[A-Za-z0-9]{36}\b`
+      // npm
+    ].join("|"));
+    ASSIGNMENT = new RegExp(String.raw`(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|secret|token|passw(?:or)?d)["'\x60]?\s*(?::=|=>|[:=])` + String.raw`(?:\s*(["'\x60])([^\s"'\x60\\]{12,})\1|[ \t]*([^\s"'\x60\\#;,(){}\[\]<>=$%*][^\s"'\x60\\#;,(){}\[\]<>]{11,})[ \t]*(?:[#;].*)?$)`, "gim");
+    URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/?#"'`]*:([^\s@/?#"'`]+)@/gi;
+    REFERENCE = /^[$%{<[*(]|\$\{|\{\{|<%|\.\.\.|…/;
+    NAMED_FAILURE = /Symlink|external path|Nonregular|oversized|credential|Binary|changed during|Base version unavailable/i;
+  }
+});
+
+// src/deadline.ts
+function deadline(ms, message) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(message)), ms).unref();
+  return controller.signal;
+}
+var init_deadline = __esm({
+  "src/deadline.ts"() {
+    "use strict";
+  }
+});
+
+// src/jev.ts
+async function boundedJson(response) {
+  const reader = response.body?.getReader();
+  if (!reader) throw new Error("Jev returned an empty response.");
+  const chunks = [];
+  let bytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      bytes += value.byteLength;
+      if (bytes > 512e3) throw new Error("Jev response exceeded the 512 KB response budget.");
+      chunks.push(value);
+    }
+    try {
+      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      throw new Error("Jev returned invalid JSON; review is incomplete.");
+    }
+  } finally {
+    await reader.cancel().catch(() => {
+    });
+    reader.releaseLock();
+  }
+}
+function jevSettings(env = process.env, configured = {}) {
+  const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
+  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
+  return {
+    apiKey: typesafeKey || openRouterKey || "",
+    baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
+    model: env.JEV_MODEL?.trim() || configured.model || DEFAULT_MODEL,
+    timeoutMs: wholeNumber(env.JEV_TIMEOUT_MS, MAX_TIMEOUT_MS, `JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`) ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    concurrency: wholeNumber(env.JEV_CONCURRENCY, MAX_CONCURRENCY, `JEV_CONCURRENCY must be a whole number from 1 to ${MAX_CONCURRENCY}.`) ?? configured.concurrency ?? DEFAULT_CONCURRENCY
+  };
+}
+function wholeNumber(value, max, message) {
+  const text = value?.trim();
+  if (!text) return void 0;
+  if (!/^[1-9]\d*$/.test(text) || Number(text) > max) throw new Error(message);
+  return Number(text);
+}
+function jevFromEnv(signal, env = process.env) {
+  return new Jev({ ...jevSettings(env), signal });
+}
+function systemOneEndpoint(baseUrl) {
+  let url2;
+  try {
+    url2 = new URL(baseUrl);
+  } catch {
+    throw new Error("TYPESAFE_BASE_URL must be an absolute URL.");
+  }
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url2.hostname);
+  if (url2.protocol !== "https:" && !(url2.protocol === "http:" && loopback)) {
+    throw new Error("TYPESAFE_BASE_URL must use HTTPS unless it points to a loopback host.");
+  }
+  if (url2.username || url2.password || /[?#]/.test(baseUrl)) {
+    throw new Error("TYPESAFE_BASE_URL must not contain credentials, a query, or a fragment.");
+  }
+  return `${url2.origin}${url2.pathname.replace(/\/+$/, "")}/v1/systemone`;
+}
+function backoff(attempt) {
+  return 500 * 2 ** (attempt - 1) + Math.random() * 150;
+}
+function pause(ms, signal) {
+  return new Promise((done, reject) => {
+    signal.throwIfAborted();
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      done();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ATTEMPTS, RETRYABLE_STATUSES, modelSchema, requestTimeoutSchema, requestConcurrencySchema, Jev;
+var init_jev = __esm({
+  "src/jev.ts"() {
+    "use strict";
+    init_zod();
+    init_safety();
+    init_deadline();
+    answerSchema = external_exports.object({
+      type: external_exports.literal("choice"),
+      choice: external_exports.string(),
+      confidence: external_exports.number().min(0).max(1),
+      probabilities: external_exports.record(external_exports.string(), external_exports.number().min(0).max(1))
+    });
+    responseSchema = external_exports.object({
+      model: external_exports.string().min(1),
+      answers: external_exports.record(external_exports.string(), external_exports.discriminatedUnion("type", [
+        answerSchema,
+        external_exports.object({ type: external_exports.literal("noul"), noul: external_exports.number().min(0).max(1) }),
+        external_exports.object({
+          type: external_exports.literal("score"),
+          score: external_exports.number().nonnegative(),
+          confidence: external_exports.number().min(0).max(1),
+          probabilities: external_exports.record(external_exports.string(), external_exports.number().min(0).max(1)),
+          legend: external_exports.record(external_exports.string(), external_exports.string())
+        })
+      ])),
+      usage: external_exports.object({ input_tokens: external_exports.number().int().nonnegative(), output_tokens: external_exports.number().int().nonnegative() })
+    });
+    TYPESAFE_BASE_URL = "https://api.typesafe.ai";
+    OPENROUTER_BASE_URL = "https://openrouter.ai/api";
+    DEFAULT_MODEL = "jev-latest";
+    DEFAULT_TIMEOUT_MS = 45e3;
+    MAX_TIMEOUT_MS = 36e5;
+    DEFAULT_CONCURRENCY = 4;
+    MAX_CONCURRENCY = 16;
+    MAX_ATTEMPTS = 3;
+    RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
+    modelSchema = external_exports.string().trim().min(1);
+    requestTimeoutSchema = external_exports.number().int().positive().max(MAX_TIMEOUT_MS);
+    requestConcurrencySchema = external_exports.number().int().positive().max(MAX_CONCURRENCY);
+    Jev = class {
+      constructor(options) {
+        this.options = options;
+        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.");
+        this.model = options.model ?? DEFAULT_MODEL;
+        this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
+      }
+      options;
+      model;
+      endpoint;
+      /** Aborting the client's signal or the per-call `request` signal cancels the request, including its retries. */
+      async evaluate(state, questions, request) {
+        assertSafeOutbound(state);
+        const body = JSON.stringify({ model: this.model, state, questions });
+        if (Buffer.byteLength(body) > 18e4) throw new Error("Review request exceeds the local 180 KB request budget. Reduce the review scope.");
+        const timeoutMs2 = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeout = deadline(timeoutMs2, `Jev request timed out after ${timeoutMs2} ms. Set JEV_TIMEOUT_MS to allow more time.`);
+        const callers = [this.options.signal, request].filter((value) => value !== void 0);
+        const caller = callers.length > 1 ? AbortSignal.any(callers) : callers[0];
+        const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
+        try {
+          return await this.send(body, questions, signal);
+        } catch (error62) {
+          if (caller?.aborted) throw caller.reason;
+          if (timeout.aborted) throw timeout.reason;
+          throw error62;
+        }
+      }
+      async send(body, questions, signal) {
+        const request = this.options.fetch ?? fetch;
+        for (let attempt = 1; ; attempt++) {
+          signal.throwIfAborted();
+          let response;
+          try {
+            response = await request(this.endpoint, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${this.options.apiKey}`, "Content-Type": "application/json" },
+              body,
+              signal
+            });
+          } catch (error62) {
+            if (signal.aborted || attempt === MAX_ATTEMPTS) {
+              throw new Error("Jev request failed (network error); no successful review was recorded.", { cause: error62 });
+            }
+            await pause(backoff(attempt), signal);
+            continue;
+          }
+          if (response.ok) {
+            const parsed = responseSchema.safeParse(await boundedJson(response));
+            if (!parsed.success) throw new Error("Jev returned an invalid response; review is incomplete.");
+            for (const [id, question] of Object.entries(questions)) {
+              const answer = parsed.data.answers[id];
+              if (!answer || answer.type !== question.type) throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
+              if (answer.type === "noul") continue;
+              const keys = Object.keys(question.criteria);
+              if (answer.type === "choice" && !keys.includes(answer.choice) || answer.type === "score" && (answer.score > keys.length - 1 || keys.some((key) => !answer.legend[key])) || keys.some((key) => answer.probabilities[key] === void 0) || Object.keys(answer.probabilities).some((key) => !keys.includes(key)) || Math.abs(Object.values(answer.probabilities).reduce((a, b) => a + b, 0) - 1) > 0.02) {
+                throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
+              }
+            }
+            return parsed.data;
+          }
+          if (response.status === 400) {
+            const body2 = await boundedJson(response).catch(() => null);
+            const direct = external_exports.object({ detail: external_exports.object({ error_type: external_exports.string() }) }).safeParse(body2);
+            const relayed = external_exports.object({ error: external_exports.object({ message: external_exports.string() }) }).safeParse(body2);
+            if (direct.success && direct.data.detail.error_type === "max_tokens_exceeded" || relayed.success && /"error_type"\s*:\s*"max_tokens_exceeded"/.test(relayed.data.error.message)) {
+              throw new Error("Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.");
+            }
+          } else await response.body?.cancel();
+          if (!RETRYABLE_STATUSES.includes(response.status) || attempt === MAX_ATTEMPTS) {
+            throw new Error(`Jev request failed (HTTP ${response.status}); no successful review was recorded.`);
+          }
+          const retryAfter = response.headers.get("retry-after");
+          const seconds = retryAfter === null ? NaN : Number(retryAfter);
+          const requestedDelay = Number.isFinite(seconds) ? seconds * 1e3 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
+          const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : backoff(attempt);
+          if (delay > 1e4) throw new Error("Jev requested a longer retry delay; try this review again later.");
+          await pause(delay, signal);
+        }
+      }
+    };
+  }
+});
+
 // src/quality/dimensions.ts
 var definitions, dimensions, dimensionKeys;
 var init_dimensions = __esm({
@@ -20717,13 +21051,24 @@ var init_quality = __esm({
 });
 
 // src/schema.ts
-var answer, reportSchema;
+var rangeSchema, candidateSchema, reportSchema;
 var init_schema = __esm({
   "src/schema.ts"() {
     "use strict";
     init_zod();
+    init_jev();
     init_quality();
-    answer = external_exports.object({ type: external_exports.literal("choice"), choice: external_exports.string(), confidence: external_exports.number().min(0).max(1), probabilities: external_exports.record(external_exports.string(), external_exports.number().min(0).max(1)) });
+    rangeSchema = external_exports.object({ start: external_exports.number().int().positive(), end: external_exports.number().int().positive() });
+    candidateSchema = external_exports.object({
+      id: external_exports.string(),
+      check: external_exports.string(),
+      path: external_exports.string(),
+      symbol: external_exports.string(),
+      range: rangeSchema,
+      quote: external_exports.string(),
+      hypothesis: external_exports.string(),
+      verification: external_exports.string()
+    });
     reportSchema = external_exports.object({
       schemaVersion: external_exports.literal(1),
       id: external_exports.string(),
@@ -20736,354 +21081,19 @@ var init_schema = __esm({
       policyVersion: external_exports.string(),
       models: external_exports.array(external_exports.string()),
       status: external_exports.enum(["needs_attention", "inconclusive", "no_findings"]),
-      decisions: external_exports.array(external_exports.object({
-        id: external_exports.string(),
-        check: external_exports.string(),
-        path: external_exports.string(),
-        symbol: external_exports.string(),
-        range: external_exports.object({ start: external_exports.number().int().positive(), end: external_exports.number().int().positive() }),
-        quote: external_exports.string(),
-        hypothesis: external_exports.string(),
-        verification: external_exports.string(),
+      decisions: external_exports.array(candidateSchema.extend({
         status: external_exports.enum(["supported", "uncertain", "needs_context", "not_supported"]),
         confidence: external_exports.number().min(0).max(1),
         probability: external_exports.number().min(0).max(1),
         impact: external_exports.enum(["high", "medium", "low", "unknown"]),
         impactConfidence: external_exports.number().min(0).max(1),
-        raw: external_exports.object({ assessment: answer, impact: answer })
+        raw: external_exports.object({ assessment: answerSchema, impact: answerSchema })
       })),
       limitations: external_exports.array(external_exports.string()),
       quality: qualityEvaluationSchema.optional(),
       packetQualities: external_exports.array(external_exports.object({ packetId: external_exports.string(), changedPaths: external_exports.array(external_exports.string()), evaluation: qualityEvaluationSchema })).optional(),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
     });
-  }
-});
-
-// src/safety.ts
-import { open as open2, lstat, realpath } from "node:fs/promises";
-import { constants } from "node:fs";
-import { relative, isAbsolute, resolve } from "node:path";
-function identifierShaped(value) {
-  if (!/^[\w$.\-/:@=+;,~?!#]+$/.test(value)) return false;
-  const parts = value.split(/[^A-Za-z0-9]+/).filter(Boolean);
-  let letterWords = 0, letterChars = 0, digitWords = 0, irregular = 0;
-  for (const part of parts) {
-    const mixedCase = /[a-z]/.test(part) && /[A-Z]/.test(part);
-    for (const word of part.match(/[A-Z]+(?![a-z])|[A-Z]?[a-z]+|[0-9]+/g) ?? []) {
-      if (/^[0-9]/.test(word)) {
-        if (word.length > 6) return false;
-        digitWords++;
-        continue;
-      }
-      if (word.length > 5 && /[bcdfghjklmnpqrstvwxz]{5}/i.test(word)) return false;
-      letterWords++;
-      letterChars += word.length;
-      if (word.length === 1 || mixedCase && /^[A-Z]+$/.test(word)) irregular++;
-    }
-  }
-  return letterWords > 0 && letterChars / letterWords >= 3 && irregular <= parts.length && digitWords <= Math.max(1, letterWords / 2);
-}
-function credentialValue(value) {
-  if (new Set(value).size < 6 || REFERENCE.test(value) || /^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return false;
-  return !identifierShaped(value);
-}
-function urlPassword(value) {
-  if (new Set(value).size < 4 || REFERENCE.test(value)) return false;
-  return /\d/.test(value) || !identifierShaped(value);
-}
-function hasSecret(text) {
-  if (PRIVATE_KEY.test(text) || PROVIDER_TOKEN.test(text)) return true;
-  for (const match of text.matchAll(ASSIGNMENT)) if (credentialValue(match[2] ?? match[3])) return true;
-  for (const match of text.matchAll(URL_PASSWORD)) if (urlPassword(match[1])) return true;
-  return false;
-}
-function assertSafeOutbound(value) {
-  const visit2 = (item, field, file2) => {
-    if (typeof item === "string") {
-      if (!hasSecret(item)) return;
-      const location = file2 === void 0 ? `field ${field || "input"}` : `${file2} (field ${field})`;
-      throw new Error(`Potential credential in ${location}. Remove it before sending this request.`);
-    }
-    if (Array.isArray(item)) item.forEach((entry, index) => visit2(entry, `${field}[${index}]`, file2));
-    else if (item && typeof item === "object") {
-      const path = "path" in item && typeof item.path === "string" && !hasSecret(item.path) ? item.path : file2;
-      for (const [key, entry] of Object.entries(item)) visit2(entry, field ? `${field}.${key}` : key, path);
-    }
-  };
-  visit2(value, "", void 0);
-}
-async function readSource(root, path, signal, maxBytes = 256e3) {
-  return (await readSourceFile(root, path, signal, maxBytes)).content;
-}
-async function readSourceFile(root, path, signal, maxBytes = 256e3) {
-  signal?.throwIfAborted();
-  const absolute = resolve(root, path);
-  const physical = await realpath(absolute);
-  const inside2 = relative(root, physical);
-  if (inside2 === ".." || inside2.startsWith("../") || inside2.startsWith("..\\") || isAbsolute(inside2) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
-  const file2 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
-  try {
-    const before = await file2.stat();
-    if (!before.isFile() || before.size > maxBytes) throw new Error("Nonregular or oversized file");
-    const buffer = Buffer.alloc(before.size + 1);
-    let size = 0;
-    while (size < buffer.length) {
-      signal?.throwIfAborted();
-      const read = await file2.read(buffer, size, buffer.length - size, null);
-      if (!read.bytesRead) break;
-      size += read.bytesRead;
-    }
-    const after = await file2.stat();
-    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
-    const current = await lstat(physical);
-    if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error("File changed during collection");
-    return {
-      content: buffer.subarray(0, size).toString("utf8"),
-      identity: { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs }
-    };
-  } finally {
-    await file2.close();
-  }
-}
-var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE;
-var init_safety = __esm({
-  "src/safety.ts"() {
-    "use strict";
-    PRIVATE_KEY = /-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----/;
-    PROVIDER_TOKEN = new RegExp([
-      String.raw`\b(?:AKIA|ASIA)[A-Z0-9]{16}\b`,
-      // AWS access key ID
-      String.raw`\bgh[pousr]_[A-Za-z0-9]{30,}\b|\bgithub_pat_[A-Za-z0-9_]{22,}`,
-      // GitHub
-      String.raw`\bsk-(?:proj-)?[A-Za-z0-9_-]{32,}\b`,
-      // OpenAI-style secret key
-      String.raw`\bxox[abposr]-[A-Za-z0-9-]{10,}|\bxapp-[A-Za-z0-9-]{10,}|hooks\.slack\.com/services/T[A-Z0-9]+/B[A-Z0-9]+/[A-Za-z0-9]{16,}`,
-      // Slack
-      String.raw`\bAIza[A-Za-z0-9_-]{35}|\bGOCSPX-[A-Za-z0-9_-]{28}|\bya29\.[A-Za-z0-9_-]{20,}`,
-      // Google
-      String.raw`\b[rs]k_live_[A-Za-z0-9]{16,}`,
-      // Stripe
-      String.raw`\bnpm_[A-Za-z0-9]{36}\b`
-      // npm
-    ].join("|"));
-    ASSIGNMENT = new RegExp(String.raw`(?:api[_-]?key|access[_-]?key|secret[_-]?key|private[_-]?key|secret|token|passw(?:or)?d)["'\x60]?\s*(?::=|=>|[:=])` + String.raw`(?:\s*(["'\x60])([^\s"'\x60\\]{12,})\1|[ \t]*([^\s"'\x60\\#;,(){}\[\]<>=$%*][^\s"'\x60\\#;,(){}\[\]<>]{11,})[ \t]*(?:[#;].*)?$)`, "gim");
-    URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/?#"'`]*:([^\s@/?#"'`]+)@/gi;
-    REFERENCE = /^[$%{<[*(]|\$\{|\{\{|<%|\.\.\.|…/;
-  }
-});
-
-// src/deadline.ts
-function deadline(ms, message) {
-  const controller = new AbortController();
-  setTimeout(() => controller.abort(new Error(message)), ms).unref();
-  return controller.signal;
-}
-var init_deadline = __esm({
-  "src/deadline.ts"() {
-    "use strict";
-  }
-});
-
-// src/jev.ts
-async function boundedJson(response) {
-  const reader = response.body?.getReader();
-  if (!reader) throw new Error("Jev returned an empty response.");
-  const chunks = [];
-  let bytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      bytes += value.byteLength;
-      if (bytes > 512e3) throw new Error("Jev response exceeded the 512 KB response budget.");
-      chunks.push(value);
-    }
-    try {
-      return JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    } catch {
-      throw new Error("Jev returned invalid JSON; review is incomplete.");
-    }
-  } finally {
-    await reader.cancel().catch(() => {
-    });
-    reader.releaseLock();
-  }
-}
-function jevSettings(env = process.env, configured = {}) {
-  const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
-  const openRouterKey = env.OPENROUTER_API_KEY?.trim();
-  return {
-    apiKey: typesafeKey || openRouterKey || "",
-    baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
-    model: env.JEV_MODEL?.trim() || configured.model || DEFAULT_MODEL,
-    timeoutMs: wholeNumber(env.JEV_TIMEOUT_MS, MAX_TIMEOUT_MS, `JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`) ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS,
-    concurrency: wholeNumber(env.JEV_CONCURRENCY, MAX_CONCURRENCY, `JEV_CONCURRENCY must be a whole number from 1 to ${MAX_CONCURRENCY}.`) ?? configured.concurrency ?? DEFAULT_CONCURRENCY
-  };
-}
-function wholeNumber(value, max, message) {
-  const text = value?.trim();
-  if (!text) return void 0;
-  if (!/^[1-9]\d*$/.test(text) || Number(text) > max) throw new Error(message);
-  return Number(text);
-}
-function jevFromEnv(signal, env = process.env) {
-  return new Jev({ ...jevSettings(env), signal });
-}
-function systemOneEndpoint(baseUrl) {
-  let url2;
-  try {
-    url2 = new URL(baseUrl);
-  } catch {
-    throw new Error("TYPESAFE_BASE_URL must be an absolute URL.");
-  }
-  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url2.hostname);
-  if (url2.protocol !== "https:" && !(url2.protocol === "http:" && loopback)) {
-    throw new Error("TYPESAFE_BASE_URL must use HTTPS unless it points to a loopback host.");
-  }
-  if (url2.username || url2.password || /[?#]/.test(baseUrl)) {
-    throw new Error("TYPESAFE_BASE_URL must not contain credentials, a query, or a fragment.");
-  }
-  return `${url2.origin}${url2.pathname.replace(/\/+$/, "")}/v1/systemone`;
-}
-function backoff(attempt) {
-  return 500 * 2 ** (attempt - 1) + Math.random() * 150;
-}
-function pause(ms, signal) {
-  return new Promise((done, reject) => {
-    signal.throwIfAborted();
-    const abort = () => {
-      clearTimeout(timer);
-      reject(signal.reason);
-    };
-    const timer = setTimeout(() => {
-      signal.removeEventListener("abort", abort);
-      done();
-    }, ms);
-    signal.addEventListener("abort", abort, { once: true });
-  });
-}
-var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_ATTEMPTS, RETRYABLE_STATUSES, modelSchema, requestTimeoutSchema, requestConcurrencySchema, Jev;
-var init_jev = __esm({
-  "src/jev.ts"() {
-    "use strict";
-    init_zod();
-    init_safety();
-    init_deadline();
-    answerSchema = external_exports.object({
-      type: external_exports.literal("choice"),
-      choice: external_exports.string(),
-      confidence: external_exports.number().min(0).max(1),
-      probabilities: external_exports.record(external_exports.string(), external_exports.number().min(0).max(1))
-    });
-    responseSchema = external_exports.object({
-      model: external_exports.string().min(1),
-      answers: external_exports.record(external_exports.string(), external_exports.discriminatedUnion("type", [
-        answerSchema,
-        external_exports.object({ type: external_exports.literal("noul"), noul: external_exports.number().min(0).max(1) }),
-        external_exports.object({
-          type: external_exports.literal("score"),
-          score: external_exports.number().nonnegative(),
-          confidence: external_exports.number().min(0).max(1),
-          probabilities: external_exports.record(external_exports.string(), external_exports.number().min(0).max(1)),
-          legend: external_exports.record(external_exports.string(), external_exports.string())
-        })
-      ])),
-      usage: external_exports.object({ input_tokens: external_exports.number().int().nonnegative(), output_tokens: external_exports.number().int().nonnegative() })
-    });
-    TYPESAFE_BASE_URL = "https://api.typesafe.ai";
-    OPENROUTER_BASE_URL = "https://openrouter.ai/api";
-    DEFAULT_MODEL = "jev-latest";
-    DEFAULT_TIMEOUT_MS = 45e3;
-    MAX_TIMEOUT_MS = 36e5;
-    DEFAULT_CONCURRENCY = 4;
-    MAX_CONCURRENCY = 16;
-    MAX_ATTEMPTS = 3;
-    RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
-    modelSchema = external_exports.string().trim().min(1);
-    requestTimeoutSchema = external_exports.number().int().positive().max(MAX_TIMEOUT_MS);
-    requestConcurrencySchema = external_exports.number().int().positive().max(MAX_CONCURRENCY);
-    Jev = class {
-      constructor(options) {
-        this.options = options;
-        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.");
-        this.model = options.model ?? DEFAULT_MODEL;
-        this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
-      }
-      options;
-      model;
-      endpoint;
-      /** Aborting the client's signal or the per-call `request` signal cancels the request, including its retries. */
-      async evaluate(state, questions, request) {
-        assertSafeOutbound(state);
-        const body = JSON.stringify({ model: this.model, state, questions });
-        if (Buffer.byteLength(body) > 18e4) throw new Error("Review request exceeds the local 180 KB request budget. Reduce the review scope.");
-        const timeoutMs2 = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-        const timeout = deadline(timeoutMs2, `Jev request timed out after ${timeoutMs2} ms. Set JEV_TIMEOUT_MS to allow more time.`);
-        const callers = [this.options.signal, request].filter((value) => value !== void 0);
-        const caller = callers.length > 1 ? AbortSignal.any(callers) : callers[0];
-        const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
-        try {
-          return await this.send(body, questions, signal);
-        } catch (error62) {
-          if (caller?.aborted) throw caller.reason;
-          if (timeout.aborted) throw timeout.reason;
-          throw error62;
-        }
-      }
-      async send(body, questions, signal) {
-        const request = this.options.fetch ?? fetch;
-        for (let attempt = 1; ; attempt++) {
-          signal.throwIfAborted();
-          let response;
-          try {
-            response = await request(this.endpoint, {
-              method: "POST",
-              headers: { Authorization: `Bearer ${this.options.apiKey}`, "Content-Type": "application/json" },
-              body,
-              signal
-            });
-          } catch (error62) {
-            if (signal.aborted || attempt === MAX_ATTEMPTS) {
-              throw new Error("Jev request failed (network error); no successful review was recorded.", { cause: error62 });
-            }
-            await pause(backoff(attempt), signal);
-            continue;
-          }
-          if (response.ok) {
-            const parsed = responseSchema.safeParse(await boundedJson(response));
-            if (!parsed.success) throw new Error("Jev returned an invalid response; review is incomplete.");
-            for (const [id, question] of Object.entries(questions)) {
-              const answer2 = parsed.data.answers[id];
-              if (!answer2 || answer2.type !== question.type) throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
-              if (answer2.type === "noul") continue;
-              const keys = Object.keys(question.criteria);
-              if (answer2.type === "choice" && !keys.includes(answer2.choice) || answer2.type === "score" && (answer2.score > keys.length - 1 || keys.some((key) => !answer2.legend[key])) || keys.some((key) => answer2.probabilities[key] === void 0) || Object.keys(answer2.probabilities).some((key) => !keys.includes(key)) || Math.abs(Object.values(answer2.probabilities).reduce((a, b) => a + b, 0) - 1) > 0.02) {
-                throw new Error(`Jev returned an incomplete or invalid decision for ${id}; review is incomplete.`);
-              }
-            }
-            return parsed.data;
-          }
-          if (response.status === 400) {
-            const body2 = await boundedJson(response).catch(() => null);
-            const direct = external_exports.object({ detail: external_exports.object({ error_type: external_exports.string() }) }).safeParse(body2);
-            const relayed = external_exports.object({ error: external_exports.object({ message: external_exports.string() }) }).safeParse(body2);
-            if (direct.success && direct.data.detail.error_type === "max_tokens_exceeded" || relayed.success && /"error_type"\s*:\s*"max_tokens_exceeded"/.test(relayed.data.error.message)) {
-              throw new Error("Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.");
-            }
-          } else await response.body?.cancel();
-          if (!RETRYABLE_STATUSES.includes(response.status) || attempt === MAX_ATTEMPTS) {
-            throw new Error(`Jev request failed (HTTP ${response.status}); no successful review was recorded.`);
-          }
-          const retryAfter = response.headers.get("retry-after");
-          const seconds = retryAfter === null ? NaN : Number(retryAfter);
-          const requestedDelay = Number.isFinite(seconds) ? seconds * 1e3 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
-          const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : backoff(attempt);
-          if (delay > 1e4) throw new Error("Jev requested a longer retry delay; try this review again later.");
-          await pause(delay, signal);
-        }
-      }
-    };
   }
 });
 
@@ -21116,8 +21126,9 @@ function questionsFor(candidate) {
 function unique(values) {
   return [...new Set(values)];
 }
-function packetLimitations(packet) {
-  return packet.candidateIds.length ? [...packet.limitations] : [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+function packetLimitations(packet, broadReviewed = false) {
+  if (packet.candidateIds.length) return [...packet.limitations];
+  return [...packet.limitations, broadReviewed ? `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.` : `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
 }
 function assertUnique(values, description) {
   if (new Set(values).size !== values.length) throw new Error(`Invalid review plan: duplicate ${description}.`);
@@ -21358,9 +21369,9 @@ async function orchestrate(plan, evaluator, broad, options) {
       usage.requests++;
       decided = decisionsFrom(response.answers, request.candidates);
       for (const key of request.broadKeys) {
-        const answer2 = response.answers[key];
-        if (!answer2) throw new Error(`Missing typed quality decision: ${key}`);
-        answers[key] = answer2;
+        const answer = response.answers[key];
+        if (!answer) throw new Error(`Missing typed quality decision: ${key}`);
+        answers[key] = answer;
       }
     } catch (error62) {
       firstFailure ??= { error: error62 };
@@ -21393,11 +21404,7 @@ async function orchestrate(plan, evaluator, broad, options) {
     ];
     return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(", ") || "no changed paths"}): ${[...missing.reasons].join(" ")} Not evaluated: ${work.join("; ")}.`];
   });
-  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((packet) => packet.limitations)]).map((value) => {
-    const match = /^No supported check candidates were found in packet (.+); no semantic review was performed\.$/.exec(value);
-    if (!match || !broadResults.has(match[1])) return value;
-    return `No source-anchored check candidates were found in packet ${match[1]}; only the broad quality review was performed.`;
-  });
+  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((evidence) => broadResults.has(evidence.packet.id) ? packetLimitations(evidence.packet, true) : evidence.limitations)]);
   const report = reportFor(plan, started, decisions, models, limitations, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
     const result = broadResults.get(packet.id);
@@ -21584,10 +21591,10 @@ ${item.content}`);
     } }, requestSignal);
     const answers = {};
     for (const id of [...Object.keys(questions), "missing_evidence"]) {
-      const answer2 = response.answers[id];
-      if (answer2?.type !== "choice") throw new Error("Incomplete verification response.");
-      if (id === "missing_evidence") missing = answer2;
-      else answers[id] = answer2;
+      const answer = response.answers[id];
+      if (answer?.type !== "choice") throw new Error("Incomplete verification response.");
+      if (id === "missing_evidence") missing = answer;
+      else answers[id] = answer;
     }
     return { ...response, answers };
   } }, { signal });
@@ -36444,11 +36451,30 @@ function symbolRanges(content, names) {
   }
   return ranges;
 }
-var isSource, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES, DEFINED_SYMBOL;
+var isSource, isTest, FileTally, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES, DEFINED_SYMBOL;
 var init_evidence = __esm({
   "src/evidence.ts"() {
     "use strict";
     isSource = (path) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path) && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path) && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
+    isTest = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
+    FileTally = class {
+      /** `namesEvery` selects the reasons whose limitation names every file rather than the first three. */
+      constructor(namesEvery = () => false) {
+        this.namesEvery = namesEvery;
+      }
+      namesEvery;
+      reasons = /* @__PURE__ */ new Map();
+      add(reason, path) {
+        const entry = this.reasons.get(reason) ?? { count: 0, samples: [] };
+        entry.count++;
+        if (entry.samples.length < 3 || this.namesEvery(reason)) entry.samples.push(path);
+        this.reasons.set(reason, entry);
+      }
+      /** One `${lead} N file(s): reason (samples).` limitation per reason, in reason order. */
+      limitations(lead) {
+        return [...this.reasons].sort(([left], [right]) => left.localeCompare(right)).map(([reason, { count, samples }]) => `${lead} ${count} file(s): ${reason} (${samples.join(", ")}).`);
+      }
+    };
     PYTHON_TARGETS = [".py", "/__init__.py"];
     SCRIPT_TARGETS = [
       ".ts",
@@ -36533,8 +36559,7 @@ function createPathAliasLoader(root, known, signal) {
       } catch (error62) {
         signal?.throwIfAborted();
         if (error62.code === "ENOENT") return "missing";
-        const reason = error62 instanceof Error && /Symlink|external path|oversized|changed during/i.test(error62.message) ? error62.message : "Unreadable file";
-        problem(`TypeScript config could not be read (${reason}); its path aliases are ignored`, path);
+        problem(`TypeScript config could not be read (${failureReason(error62, "Unreadable file")}); its path aliases are ignored`, path);
         return void 0;
       }
       try {
@@ -36643,23 +36668,18 @@ var init_path_aliases = __esm({
 
 // src/import-index.ts
 import { lstat as lstat2, realpath as realpath3 } from "node:fs/promises";
-import { isAbsolute as isAbsolute3, relative as relative2, resolve as resolve2 } from "node:path";
-import { posix as posix3 } from "node:path";
+import { posix as posix3, resolve as resolve2 } from "node:path";
 function fingerprintMatches(left, right) {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
-}
-function inside(root, physical) {
-  const path = relative2(root, physical);
-  return path !== ".." && !path.startsWith("../") && !path.startsWith("..\\") && !isAbsolute3(path);
 }
 async function metadata(root, path, signal) {
   signal?.throwIfAborted();
   const absolute = resolve2(root, path);
-  if (!inside(root, absolute)) throw new Error("External path");
+  if (!isInside(root, absolute)) throw new Error("External path");
   const logical = await lstat2(absolute);
   if (logical.isSymbolicLink()) throw new Error("Symlink or external path");
   const physical = await realpath3(absolute);
-  if (!inside(root, physical)) throw new Error("External path");
+  if (!isInside(root, physical)) throw new Error("External path");
   const current = await lstat2(physical);
   if (!current.isFile() || current.isSymbolicLink()) throw new Error("Nonregular file");
   return { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs };
@@ -36669,12 +36689,12 @@ function interleave(paths, changedPaths) {
   const changedDirectories = new Set(changedPaths.map((path) => posix3.dirname(path)));
   const changedFirst = paths.filter((path) => changed.has(path));
   const application = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && !testPath(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && !testPath(path))
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && !isTest(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && !isTest(path))
   ];
   const tests = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && testPath(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && testPath(path))
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && isTest(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && isTest(path))
   ];
   const result = [...changedFirst];
   for (let index = 0; index < Math.max(application.length, tests.length); index++) {
@@ -36689,10 +36709,6 @@ function boundedCache(root, cache) {
   caches.delete(root);
   caches.set(root, cache);
   while (caches.size > MAX_CACHE_ROOTS) caches.delete(caches.keys().next().value);
-}
-function errorDetail(error62) {
-  if (error62 instanceof Error && /Symlink|External path|Nonregular|oversized|credential|Binary|changed during/.test(error62.message)) return error62.message;
-  return "Unreadable file";
 }
 async function buildImportIndex(options) {
   options.signal?.throwIfAborted();
@@ -36714,13 +36730,7 @@ async function buildImportIndex(options) {
   };
   const aliasLoader = createPathAliasLoader(physicalRoot, options.known, signal);
   const limitations = [];
-  const omissions = /* @__PURE__ */ new Map();
-  const omit2 = (reason, path) => {
-    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
-    entry.count++;
-    if (entry.samples.length < 3) entry.samples.push(path);
-    omissions.set(reason, entry);
-  };
+  const omissions = new FileTally();
   const imports = /* @__PURE__ */ new Map();
   const ordered = interleave(paths, options.changedPaths);
   const maxFiles = options.limits.maxIndexFiles ?? Number.POSITIVE_INFINITY;
@@ -36736,7 +36746,7 @@ async function buildImportIndex(options) {
       return { kind: "metadata", fingerprint, aliases };
     } catch (error62) {
       options.signal?.throwIfAborted();
-      return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+      return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: failureReason(error62, "Unreadable file") };
     }
   };
   let indexedBytes = 0;
@@ -36764,7 +36774,7 @@ async function buildImportIndex(options) {
       return { kind: "indexed", fingerprint: identity, aliases: aliases.key, edges };
     } catch (error62) {
       options.signal?.throwIfAborted();
-      return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+      return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: failureReason(error62, "Unreadable file") };
     }
   };
   const slots = new Array(candidates.length);
@@ -36802,7 +36812,7 @@ async function buildImportIndex(options) {
     }
     if (slot.kind === "omitted") {
       cache.entries.delete(path);
-      omit2(slot.reason, path);
+      omissions.add(slot.reason, path);
     } else if (slot.kind === "cached") {
       imports.set(path, [...slot.edges]);
     } else {
@@ -36818,13 +36828,11 @@ async function buildImportIndex(options) {
     limitations.push(`Import index file limit reached: ${completed}/${ordered.length} eligible files scanned.`);
   }
   if (discovery.deadlineLimited) limitations.push(`Import index deadline reached: ${imports.size}/${ordered.length} eligible files indexed.`);
-  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Import index omitted ${count} file(s): ${reason} (${samples.join(", ")}).`);
-  }
+  limitations.push(...omissions.limitations("Import index omitted"));
   limitations.push(...aliasLoader.limitations());
   const incomplete = [
-    { category: "application", indexed: [...imports.keys()].filter((path) => !testPath(path)).length, eligible: paths.filter((path) => !testPath(path)).length },
-    { category: "test", indexed: [...imports.keys()].filter(testPath).length, eligible: paths.filter(testPath).length }
+    { category: "application", indexed: [...imports.keys()].filter((path) => !isTest(path)).length, eligible: paths.filter((path) => !isTest(path)).length },
+    { category: "test", indexed: [...imports.keys()].filter(isTest).length, eligible: paths.filter(isTest).length }
   ].filter((entry) => entry.indexed < entry.eligible);
   if (incomplete.length) limitations.push(`Import index coverage is partial: ${incomplete.map((entry) => `${entry.category} ${entry.indexed}/${entry.eligible} files indexed`).join("; ")}.`);
   const reverse = /* @__PURE__ */ new Map();
@@ -36839,7 +36847,7 @@ async function buildImportIndex(options) {
   boundedCache(physicalRoot, cache);
   return { imports, reverse, limitations: limitations.sort(), discovery };
 }
-var MAX_CACHE_ROOTS, MAX_CACHE_ENTRIES, caches, testPath, INDEX_IO_CONCURRENCY;
+var MAX_CACHE_ROOTS, MAX_CACHE_ENTRIES, caches, INDEX_IO_CONCURRENCY;
 var init_import_index = __esm({
   "src/import-index.ts"() {
     "use strict";
@@ -36849,7 +36857,6 @@ var init_import_index = __esm({
     MAX_CACHE_ROOTS = 8;
     MAX_CACHE_ENTRIES = 1e5;
     caches = /* @__PURE__ */ new Map();
-    testPath = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
     INDEX_IO_CONCURRENCY = 16;
   }
 });
@@ -36893,14 +36900,8 @@ async function collect(options) {
   const candidates = [];
   const candidateIds = /* @__PURE__ */ new Set();
   const changedSourcePaths = /* @__PURE__ */ new Set();
-  const omissions = /* @__PURE__ */ new Map();
+  const omissions = new FileTally((reason) => reason.includes("potential credential"));
   const sourceIssues = /* @__PURE__ */ new Map();
-  const recordOmission = (reason, path) => {
-    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
-    entry.count++;
-    if (entry.samples.length < 3 || reason.includes("potential credential")) entry.samples.push(path);
-    omissions.set(reason, entry);
-  };
   const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path, reason) => {
     const issues = sourceIssues.get(path) ?? [];
@@ -36908,6 +36909,16 @@ async function collect(options) {
     sourceIssues.set(path, issues);
   };
   const issueMessages = (path) => (sourceIssues.get(path) ?? []).map((reason) => `${reason}: ${path}`);
+  const omitUnsupported = (path, sample) => {
+    omissions.add("Unsupported or generated file", sample);
+    noteSource(path, "Unsupported or generated file omitted");
+  };
+  const omitUnreadable = (path, error62) => {
+    signal.throwIfAborted();
+    const reason = `${failureReason(error62, "Deleted or unreadable file")} omitted`;
+    omissions.add(reason, label(path));
+    noteSource(path, reason);
+  };
   const reads = /* @__PURE__ */ new Map();
   const screenedRead = (path) => {
     let read = reads.get(path);
@@ -36923,13 +36934,9 @@ async function collect(options) {
   };
   async function load(path, role, targets, change, baseline) {
     const existing = loaded.get(path);
-    if (existing) {
-      if (role === "changed" && existing.source.role !== "changed") existing.source.role = "changed";
-      return existing.source;
-    }
+    if (existing) return existing.source;
     if (!isSource(path)) {
-      recordOmission("Unsupported or generated file", path);
-      noteSource(path, "Unsupported or generated file omitted");
+      omitUnsupported(path, path);
       return void 0;
     }
     try {
@@ -36945,7 +36952,7 @@ async function collect(options) {
         if (change?.noHunks === "mode-only") noteSource(path, "File mode changed without a content change; no changed lines to review");
         if (change?.noHunks === "diff-suppressed") noteSource(path, "Git reported no textual diff (binary or -diff attribute); changed lines are unknown");
       }
-      let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
+      let excerptBudget = SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
       let old = before === void 0 ? void 0 : focusSource(before, beforeRanges, excerptBudget);
       const previousPath = role === "changed" ? renames.get(path) : void 0;
@@ -37010,10 +37017,7 @@ async function collect(options) {
       }
       return source;
     } catch (error62) {
-      signal.throwIfAborted();
-      const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
-      recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted`);
+      omitUnreadable(path, error62);
       return void 0;
     }
   }
@@ -37021,18 +37025,14 @@ async function collect(options) {
   const eligibleChanges = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
-      recordOmission("Unsupported or generated file", label(path));
-      noteSource(path, "Unsupported or generated file omitted");
+      omitUnsupported(path, label(path));
       continue;
     }
     try {
       await screenedRead(path);
       eligibleChanges.push(path);
     } catch (error62) {
-      signal.throwIfAborted();
-      const message = error62 instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error62.message) ? error62.message : "Deleted or unreadable file";
-      recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted`);
+      omitUnreadable(path, error62);
     }
   }
   const baselineRenames = /* @__PURE__ */ new Map();
@@ -37182,28 +37182,18 @@ async function collect(options) {
     const packetCandidates = candidates.filter((candidate) => primary.includes(candidate.path)).map((candidate) => candidate.id);
     packets.push({ id: hash2({ primary, paths, packetLimitations: packetLimitations2 }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations2 });
   }
-  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Collection omitted ${count} file(s): ${reason} (${samples.join(", ")}).`);
-  }
-  const sourceIssueCounts = /* @__PURE__ */ new Map();
+  const sourceIssueCounts = new FileTally();
   for (const path of sourceByPath.keys()) {
-    for (const reason of sourceIssues.get(path) ?? []) {
-      const entry = sourceIssueCounts.get(reason) ?? { count: 0, samples: [] };
-      entry.count++;
-      if (entry.samples.length < 3) entry.samples.push(path);
-      sourceIssueCounts.set(reason, entry);
-    }
+    for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
-  for (const [reason, { count, samples }] of [...sourceIssueCounts].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Collected source limitation for ${count} file(s): ${reason} (${samples.join(", ")}).`);
-  }
+  limitations.push(...omissions.limitations("Collection omitted"), ...sourceIssueCounts.limitations("Collected source limitation for"));
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
-var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, sourceChars, sourceBytes;
+var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
 var init_collector = __esm({
   "src/collector.ts"() {
     "use strict";
@@ -37224,7 +37214,6 @@ var init_collector = __esm({
     PRIMARY_TARGET_CHARS = 3e4;
     PRIMARY_TARGET_BYTES = 4e4;
     isImportable = (path) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
-    isTest = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
     sourceChars = (source) => source.content.length + (source.before?.length ?? 0);
     sourceBytes = (source) => Buffer.byteLength(JSON.stringify(source));
   }
@@ -46040,41 +46029,41 @@ var init_ajvProvider_CEoC_sr = __esm({
         schemelessOptions.skipEscape = true;
         return serialize(resolved, schemelessOptions);
       }
-      function resolveComponent(base, relative3, options, skipNormalization) {
+      function resolveComponent(base, relative2, options, skipNormalization) {
         const target = {};
         if (!skipNormalization) {
           base = parse4(serialize(base, options), options);
-          relative3 = parse4(serialize(relative3, options), options);
+          relative2 = parse4(serialize(relative2, options), options);
         }
         options = options || {};
-        if (!options.tolerant && relative3.scheme) {
-          target.scheme = relative3.scheme;
-          target.userinfo = relative3.userinfo;
-          target.host = relative3.host;
-          target.port = relative3.port;
-          target.path = removeDotSegments(relative3.path || "");
-          target.query = relative3.query;
+        if (!options.tolerant && relative2.scheme) {
+          target.scheme = relative2.scheme;
+          target.userinfo = relative2.userinfo;
+          target.host = relative2.host;
+          target.port = relative2.port;
+          target.path = removeDotSegments(relative2.path || "");
+          target.query = relative2.query;
         } else {
-          if (relative3.userinfo !== void 0 || relative3.host !== void 0 || relative3.port !== void 0) {
-            target.userinfo = relative3.userinfo;
-            target.host = relative3.host;
-            target.port = relative3.port;
-            target.path = removeDotSegments(relative3.path || "");
-            target.query = relative3.query;
+          if (relative2.userinfo !== void 0 || relative2.host !== void 0 || relative2.port !== void 0) {
+            target.userinfo = relative2.userinfo;
+            target.host = relative2.host;
+            target.port = relative2.port;
+            target.path = removeDotSegments(relative2.path || "");
+            target.query = relative2.query;
           } else {
-            if (!relative3.path) {
+            if (!relative2.path) {
               target.path = base.path;
-              if (relative3.query !== void 0) target.query = relative3.query;
+              if (relative2.query !== void 0) target.query = relative2.query;
               else target.query = base.query;
             } else {
-              if (relative3.path[0] === "/") target.path = removeDotSegments(relative3.path);
+              if (relative2.path[0] === "/") target.path = removeDotSegments(relative2.path);
               else {
-                if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative3.path;
-                else if (!base.path) target.path = relative3.path;
-                else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative3.path;
+                if ((base.userinfo !== void 0 || base.host !== void 0 || base.port !== void 0) && !base.path) target.path = "/" + relative2.path;
+                else if (!base.path) target.path = relative2.path;
+                else target.path = base.path.slice(0, base.path.lastIndexOf("/") + 1) + relative2.path;
                 target.path = removeDotSegments(target.path);
               }
-              target.query = relative3.query;
+              target.query = relative2.query;
             }
             target.userinfo = base.userinfo;
             target.host = base.host;
@@ -46082,7 +46071,7 @@ var init_ajvProvider_CEoC_sr = __esm({
           }
           target.scheme = base.scheme;
         }
-        target.fragment = relative3.fragment;
+        target.fragment = relative2.fragment;
         return target;
       }
       function equal(uriA, uriB, options) {
@@ -51445,6 +51434,9 @@ __export(mcp_exports, {
   serve: () => serve
 });
 import { realpath as realpath6 } from "node:fs/promises";
+function toolResult(output2) {
+  return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
+}
 function progressFor(ctx) {
   const progressToken = ctx.mcpReq._meta?.progressToken;
   if (progressToken === void 0) return void 0;
@@ -51481,7 +51473,7 @@ function createServer(repo, evaluatorFactory) {
     const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const selected = repo || args.repo ? await target(args.repo) : void 0;
     const output2 = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
-    return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
+    return toolResult(output2);
   });
   server.registerTool("tracecheck_assess", {
     description: `Review caller-supplied task, diff, files, and repository context across 19 independent quality dimensions with Jev. Language-agnostic; no filesystem reads. Optional previousEvaluation is compared locally. Returns scores, confidence, prioritized concerns, and changes. Times out after ${ASSESS_TIMEOUT_MS / 1e3} seconds.`,
@@ -51491,7 +51483,7 @@ function createServer(repo, evaluatorFactory) {
   }, async (args, ctx) => {
     const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const output2 = await assess(args, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
-    return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
+    return toolResult(output2);
   });
   server.registerTool("tracecheck_preview", {
     description: "Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.",
@@ -51516,7 +51508,7 @@ function createServer(repo, evaluatorFactory) {
       candidates: plan.candidates.length,
       limitations: plan.limitations
     };
-    return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
+    return toolResult(output2);
   });
   server.registerTool("tracecheck_review", {
     description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
@@ -51556,7 +51548,7 @@ function createServer(repo, evaluatorFactory) {
     applyPreviousEvaluation(compared, args.previousEvaluation);
     const output2 = { cached: cached2, report: compared };
     await progress?.sent();
-    return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
+    return toolResult(output2);
   });
   return server;
 }
@@ -51718,6 +51710,7 @@ function toSarif(report) {
 init_collection_options();
 init_project_config();
 init_progress();
+var EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 };
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -51732,6 +51725,11 @@ function collectionOptions(values) {
     indexTimeoutMs: positiveSafeInteger(values["index-timeout-ms"], "--index-timeout-ms"),
     collectionTimeoutMs: positiveSafeInteger(values["collection-timeout-ms"], "--collection-timeout-ms")
   });
+}
+async function writeJson(file2, value) {
+  const destination = resolve5(file2);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
 }
 async function readPrevious(file2) {
   let value;
@@ -51856,12 +51854,9 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     const signal = AbortSignal.any([controller2.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const input2 = JSON.parse(await readFile(values.input, "utf8"));
     const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, jevFromEnv(signal), signal);
-    if (values.out) {
-      await mkdir(dirname(resolve5(values.out)), { recursive: true });
-      await writeFile(values.out, JSON.stringify(output2, null, 2) + "\n", { mode: 384 });
-    }
+    if (values.out) await writeJson(values.out, output2);
     console.log(JSON.stringify(output2, null, 2));
-    process.exitCode = output2.report.status === "needs_attention" ? 1 : output2.report.status === "inconclusive" ? 3 : 0;
+    process.exitCode = EXIT_CODES[output2.report.status];
     return;
   }
   if (command === "assess") {
@@ -51872,10 +51867,7 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
     if (values.previous) input2.previousEvaluation = await readPrevious(values.previous);
     const evaluation = await assess(input2, jevFromEnv(signal), signal);
-    if (values.out) {
-      await mkdir(dirname(resolve5(values.out)), { recursive: true });
-      await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });
-    }
+    if (values.out) await writeJson(values.out, evaluation);
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
     if (values["fail-on-priorities"] && evaluation.priorities.length) process.exitCode = 1;
     return;
@@ -51922,18 +51914,10 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
   progress?.finished();
-  if (values.out) {
-    const destination = resolve5(values.out);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, JSON.stringify(report, null, 2) + "\n", { mode: 384 });
-  }
-  if (values.sarif) {
-    const destination = resolve5(values.sarif);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, JSON.stringify(toSarif(report), null, 2) + "\n", { mode: 384 });
-  }
+  if (values.out) await writeJson(values.out, report);
+  if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
-  process.exitCode = report.status === "needs_attention" ? 1 : report.status === "inconclusive" ? 3 : 0;
+  process.exitCode = EXIT_CODES[report.status];
 }
 main().catch((error62) => {
   console.error(`Tracecheck: ${error62 instanceof Error ? error62.message : "Unexpected failure"}`);

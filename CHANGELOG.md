@@ -35,6 +35,7 @@
 - A request that fails after retries now yields an inconclusive report that keeps the completed decisions and names what was not evaluated, instead of discarding the whole review.
 - Collection reads and screens each file once, and the import index no longer waits on fixed batches.
 - `tracecheck_review` sends progress notifications when the client supplies a progress token, and CLI `review` prints progress to stderr; `--quiet` silences it.
+- Remove dead code, share duplicated helpers, derive report types from the report schema, and stop quoting system error text (which can contain absolute paths) in coverage limitations.
 
 ## 0.3.0 — 2026-09-18
 

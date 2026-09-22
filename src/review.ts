@@ -44,9 +44,15 @@ function unique(values: string[]): string[] {
   return [...new Set(values)];
 }
 
-function packetLimitations(packet: ReviewPacket): string[] {
-  return packet.candidateIds.length ? [...packet.limitations]
-    : [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+/**
+ * A packet's own limitations. A packet without source-check candidates gets a semantic review only from its broad
+ * quality review; `broadReviewed` says that review completed, which is known only after the requests return.
+ */
+function packetLimitations(packet: ReviewPacket, broadReviewed = false): string[] {
+  if (packet.candidateIds.length) return [...packet.limitations];
+  return [...packet.limitations, broadReviewed
+    ? `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.`
+    : `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
 }
 
 function assertUnique<T>(values: T[], description: string): void {
@@ -362,11 +368,9 @@ async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: R
       ...(missing.broad ? ['the broad quality review'] : [])];
     return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(', ') || 'no changed paths'}): ${[...missing.reasons].join(' ')} Not evaluated: ${work.join('; ')}.`];
   });
-  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap(packet => packet.limitations)]).map(value => {
-    const match = /^No supported check candidates were found in packet (.+); no semantic review was performed\.$/.exec(value);
-    if (!match || !broadResults.has(match[1]!)) return value;
-    return `No source-anchored check candidates were found in packet ${match[1]}; only the broad quality review was performed.`;
-  });
+  // A packet with a broad result had source evidence, so rebuilding its limitations changes only the candidate note.
+  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap(evidence =>
+    broadResults.has(evidence.packet.id) ? packetLimitations(evidence.packet, true) : evidence.limitations)]);
   const report = reportFor(plan, started, decisions, models, limitations, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
     const result = broadResults.get(packet.id);

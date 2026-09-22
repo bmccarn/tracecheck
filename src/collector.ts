@@ -6,9 +6,9 @@ import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { gitEnvironment, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
-import { definedSymbols, focusSource, isSource, symbolRanges } from './evidence.js';
+import { definedSymbols, FileTally, focusSource, isSource, isTest, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
-import { hasSecret, readSource } from './safety.js';
+import { failureReason, hasSecret, readSource } from './safety.js';
 import type { ProjectConfig } from './project-config.js';
 
 const exec = promisify(execFile);
@@ -21,11 +21,10 @@ const hasParser = (path: string) => /\.(?:[cm]?[jt]sx?)$/.test(path);
 const PRIMARY_TARGET_CHARS = 30_000;
 const PRIMARY_TARGET_BYTES = 40_000;
 const isImportable = (path: string) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
-const isTest = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
 
 export type CollectOptions = {
   repo: string; base?: string; includeUntracked?: boolean; task?: string; repositoryContext?: string;
-  signal?: AbortSignal; focus?: boolean; collection?: CollectionOptions; discovery?: DiscoveryScope;
+  signal?: AbortSignal; collection?: CollectionOptions; discovery?: DiscoveryScope;
   /** Validated content of the repository configuration file, if any; a change to it changes the snapshot. */
   projectConfig?: ProjectConfig;
   /** Called as each collection phase starts, with a short description of the phase. */
@@ -74,16 +73,10 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const candidates: ReviewPlan['candidates'] = [];
   const candidateIds = new Set<string>();
   const changedSourcePaths = new Set<string>();
-  const omissions = new Map<string, { count: number; samples: string[] }>();
+  // Name every credential omission so each flagged file can be inspected.
+  const omissions = new FileTally(reason => reason.includes('potential credential'));
   // Reasons per path; each is reported as `${reason}: ${path}`, and counts group by reason.
   const sourceIssues = new Map<string, string[]>();
-  const recordOmission = (reason: string, path: string) => {
-    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
-    entry.count++;
-    // Name every credential omission so each flagged file can be inspected.
-    if (entry.samples.length < 3 || reason.includes('potential credential')) entry.samples.push(path);
-    omissions.set(reason, entry);
-  };
   const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path: string, reason: string) => {
     const issues = sourceIssues.get(path) ?? [];
@@ -91,6 +84,17 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     sourceIssues.set(path, issues);
   };
   const issueMessages = (path: string) => (sourceIssues.get(path) ?? []).map(reason => `${reason}: ${path}`);
+  // An omitted file is counted under its reason and noted on its path, so every packet that needs it names the gap.
+  const omitUnsupported = (path: string, sample: string) => {
+    omissions.add('Unsupported or generated file', sample);
+    noteSource(path, 'Unsupported or generated file omitted');
+  };
+  const omitUnreadable = (path: string, error: unknown) => {
+    signal.throwIfAborted();
+    const reason = `${failureReason(error, 'Deleted or unreadable file')} omitted`;
+    omissions.add(reason, label(path));
+    noteSource(path, reason);
+  };
   // Each file is read and screened at most once per collection. A failure is kept too, so every later use reports it.
   const reads = new Map<string, Promise<string>>();
   const screenedRead = (path: string): Promise<string> => {
@@ -107,14 +111,11 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   };
 
   async function load(path: string, role: Source['role'], targets?: Range[], change?: GitChange, baseline?: string): Promise<Source | undefined> {
+    // Each changed file loads once, before any related file, so a file loaded earlier never has to become a changed source.
     const existing = loaded.get(path);
-    if (existing) {
-      if (role === 'changed' && existing.source.role !== 'changed') existing.source.role = 'changed';
-      return existing.source;
-    }
+    if (existing) return existing.source;
     if (!isSource(path)) {
-      recordOmission('Unsupported or generated file', path);
-      noteSource(path, 'Unsupported or generated file omitted');
+      omitUnsupported(path, path);
       return undefined;
     }
     try {
@@ -130,7 +131,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
         if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
         if (change?.noHunks === 'diff-suppressed') noteSource(path, 'Git reported no textual diff (binary or -diff attribute); changed lines are unknown');
       }
-      let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
+      let excerptBudget = SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
       let old = before === undefined ? undefined : focusSource(before, beforeRanges, excerptBudget);
       const previousPath = role === 'changed' ? renames.get(path) : undefined;
@@ -173,10 +174,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       }
       return source;
     } catch (error) {
-      signal.throwIfAborted();
-      const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
-      recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted`);
+      omitUnreadable(path, error);
       return undefined;
     }
   }
@@ -186,18 +184,14 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const eligibleChanges: string[] = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
-      recordOmission('Unsupported or generated file', label(path));
-      noteSource(path, 'Unsupported or generated file omitted');
+      omitUnsupported(path, label(path));
       continue;
     }
     try {
       await screenedRead(path);
       eligibleChanges.push(path);
     } catch (error) {
-      signal.throwIfAborted();
-      const message = error instanceof Error && /Symlink|external path|oversized|credential|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
-      recordOmission(`${message} omitted`, label(path));
-      noteSource(path, `${message} omitted`);
+      omitUnreadable(path, error);
     }
   }
   // A rename from an unsupported or generated path keeps that content out of review, so the new path has no baseline.
@@ -335,21 +329,11 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     packets.push({ id: hash({ primary, paths, packetLimitations }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations });
   }
 
-  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Collection omitted ${count} file(s): ${reason} (${samples.join(', ')}).`);
-  }
-  const sourceIssueCounts = new Map<string, { count: number; samples: string[] }>();
+  const sourceIssueCounts = new FileTally();
   for (const path of sourceByPath.keys()) {
-    for (const reason of sourceIssues.get(path) ?? []) {
-      const entry = sourceIssueCounts.get(reason) ?? { count: 0, samples: [] };
-      entry.count++;
-      if (entry.samples.length < 3) entry.samples.push(path);
-      sourceIssueCounts.set(reason, entry);
-    }
+    for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
-  for (const [reason, { count, samples }] of [...sourceIssueCounts].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Collected source limitation for ${count} file(s): ${reason} (${samples.join(', ')}).`);
-  }
+  limitations.push(...omissions.limitations('Collection omitted'), ...sourceIssueCounts.limitations('Collected source limitation for'));
   if ((await git(root, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('Repository HEAD changed during collection; retry the preview.');
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };

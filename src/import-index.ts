@@ -1,11 +1,10 @@
 import { lstat, realpath } from 'node:fs/promises';
-import { isAbsolute, relative, resolve } from 'node:path';
-import { posix } from 'node:path';
+import { posix, resolve } from 'node:path';
 import type { CollectionSettings } from './collection-options.js';
 import type { DiscoveryScope } from './domain.js';
-import { importsFor } from './evidence.js';
+import { FileTally, importsFor, isTest } from './evidence.js';
 import { createPathAliasLoader, type PathAliases } from './path-aliases.js';
-import { hasSecret, readSourceFile, type FileIdentity } from './safety.js';
+import { failureReason, hasSecret, isInside, readSourceFile, type FileIdentity } from './safety.js';
 
 type Fingerprint = FileIdentity;
 
@@ -17,26 +16,20 @@ type RootCache = { identity: string; universe: string; known: string; entries: M
 const MAX_CACHE_ROOTS = 8;
 const MAX_CACHE_ENTRIES = 100_000;
 const caches = new Map<string, RootCache>();
-const testPath = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
 
 function fingerprintMatches(left: Fingerprint, right: Fingerprint): boolean {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino
     && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
-function inside(root: string, physical: string): boolean {
-  const path = relative(root, physical);
-  return path !== '..' && !path.startsWith('../') && !path.startsWith('..\\') && !isAbsolute(path);
-}
-
 async function metadata(root: string, path: string, signal?: AbortSignal): Promise<Fingerprint> {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
-  if (!inside(root, absolute)) throw new Error('External path');
+  if (!isInside(root, absolute)) throw new Error('External path');
   const logical = await lstat(absolute);
   if (logical.isSymbolicLink()) throw new Error('Symlink or external path');
   const physical = await realpath(absolute);
-  if (!inside(root, physical)) throw new Error('External path');
+  if (!isInside(root, physical)) throw new Error('External path');
   const current = await lstat(physical);
   if (!current.isFile() || current.isSymbolicLink()) throw new Error('Nonregular file');
   return { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs };
@@ -47,12 +40,12 @@ function interleave(paths: string[], changedPaths: string[]): string[] {
   const changedDirectories = new Set(changedPaths.map(path => posix.dirname(path)));
   const changedFirst = paths.filter(path => changed.has(path));
   const application = [
-    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && !testPath(path)),
-    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && !testPath(path)),
+    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && !isTest(path)),
+    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && !isTest(path)),
   ];
   const tests = [
-    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && testPath(path)),
-    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && testPath(path)),
+    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && isTest(path)),
+    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && isTest(path)),
   ];
   const result = [...changedFirst];
   for (let index = 0; index < Math.max(application.length, tests.length); index++) {
@@ -68,11 +61,6 @@ function boundedCache(root: string, cache: RootCache): void {
   caches.delete(root);
   caches.set(root, cache);
   while (caches.size > MAX_CACHE_ROOTS) caches.delete(caches.keys().next().value!);
-}
-
-function errorDetail(error: unknown): string {
-  if (error instanceof Error && /Symlink|External path|Nonregular|oversized|credential|Binary|changed during/.test(error.message)) return error.message;
-  return 'Unreadable file';
 }
 
 type MetadataResult =
@@ -121,13 +109,7 @@ export async function buildImportIndex(options: {
   };
   const aliasLoader = createPathAliasLoader(physicalRoot, options.known, signal);
   const limitations: string[] = [];
-  const omissions = new Map<string, { count: number; samples: string[] }>();
-  const omit = (reason: string, path: string) => {
-    const entry = omissions.get(reason) ?? { count: 0, samples: [] };
-    entry.count++;
-    if (entry.samples.length < 3) entry.samples.push(path);
-    omissions.set(reason, entry);
-  };
+  const omissions = new FileTally();
   const imports = new Map<string, string[]>();
   const ordered = interleave(paths, options.changedPaths);
   const maxFiles = options.limits.maxIndexFiles ?? Number.POSITIVE_INFINITY;
@@ -145,7 +127,7 @@ export async function buildImportIndex(options: {
       return { kind: 'metadata', fingerprint, aliases };
     } catch (error) {
       options.signal?.throwIfAborted();
-      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
+      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: failureReason(error, 'Unreadable file') };
     }
   };
   // Admission runs in path order, so the byte budget, the cache, and a deadline cut apply exactly as in a sequential scan.
@@ -174,7 +156,7 @@ export async function buildImportIndex(options: {
       return { kind: 'indexed', fingerprint: identity, aliases: aliases.key, edges };
     } catch (error) {
       options.signal?.throwIfAborted();
-      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
+      return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: failureReason(error, 'Unreadable file') };
     }
   };
   // Files stream through a fixed pool of workers, so a slow file holds up only its own worker. Each file waits for the
@@ -211,7 +193,7 @@ export async function buildImportIndex(options: {
     }
     if (slot.kind === 'omitted') {
       cache.entries.delete(path);
-      omit(slot.reason, path);
+      omissions.add(slot.reason, path);
     } else if (slot.kind === 'cached') {
       imports.set(path, [...slot.edges]);
     } else {
@@ -230,13 +212,11 @@ export async function buildImportIndex(options: {
     limitations.push(`Import index file limit reached: ${completed}/${ordered.length} eligible files scanned.`);
   }
   if (discovery.deadlineLimited) limitations.push(`Import index deadline reached: ${imports.size}/${ordered.length} eligible files indexed.`);
-  for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
-    limitations.push(`Import index omitted ${count} file(s): ${reason} (${samples.join(', ')}).`);
-  }
+  limitations.push(...omissions.limitations('Import index omitted'));
   limitations.push(...aliasLoader.limitations());
   const incomplete = [
-    { category: 'application', indexed: [...imports.keys()].filter(path => !testPath(path)).length, eligible: paths.filter(path => !testPath(path)).length },
-    { category: 'test', indexed: [...imports.keys()].filter(testPath).length, eligible: paths.filter(testPath).length },
+    { category: 'application', indexed: [...imports.keys()].filter(path => !isTest(path)).length, eligible: paths.filter(path => !isTest(path)).length },
+    { category: 'test', indexed: [...imports.keys()].filter(isTest).length, eligible: paths.filter(isTest).length },
   ].filter(entry => entry.indexed < entry.eligible);
   if (incomplete.length) limitations.push(`Import index coverage is partial: ${incomplete.map(entry => `${entry.category} ${entry.indexed}/${entry.eligible} files indexed`).join('; ')}.`);
 

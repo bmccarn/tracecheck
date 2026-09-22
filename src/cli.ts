@@ -14,6 +14,10 @@ import { toSarif } from './sarif.js';
 import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { ReviewProgress } from './progress.js';
+import type { Report } from './domain.js';
+
+/** Exit codes for review and verify statuses, as the help text documents them. */
+const EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 } as const satisfies Record<Report['status'], number>;
 
 function positiveSafeInteger(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -34,6 +38,13 @@ function collectionOptions(values: {
     indexTimeoutMs: positiveSafeInteger(values['index-timeout-ms'], '--index-timeout-ms'),
     collectionTimeoutMs: positiveSafeInteger(values['collection-timeout-ms'], '--collection-timeout-ms'),
   });
+}
+
+/** Saves `value` as JSON that only the owner can read, creating the parent directory. */
+async function writeJson(file: string, value: unknown): Promise<void> {
+  const destination = resolve(file);
+  await mkdir(dirname(destination), { recursive: true });
+  await writeFile(destination, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 }
 
 /** Reads the quality evaluation to compare with from a saved review report or an assess evaluation. */
@@ -150,12 +161,9 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     const signal = AbortSignal.any([controller.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const input = JSON.parse(await readFile(values.input, 'utf8'));
     const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, jevFromEnv(signal), signal);
-    if (values.out) {
-      await mkdir(dirname(resolve(values.out)), { recursive: true });
-      await writeFile(values.out, JSON.stringify(output, null, 2) + '\n', { mode: 0o600 });
-    }
+    if (values.out) await writeJson(values.out, output);
     console.log(JSON.stringify(output, null, 2));
-    process.exitCode = output.report.status === 'needs_attention' ? 1 : output.report.status === 'inconclusive' ? 3 : 0;
+    process.exitCode = EXIT_CODES[output.report.status];
     return;
   }
   if (command === 'assess') {
@@ -166,10 +174,7 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     const input = qualityInputSchema.parse(JSON.parse(await readFile(values.input, 'utf8')));
     if (values.previous) input.previousEvaluation = await readPrevious(values.previous);
     const evaluation = await assess(input, jevFromEnv(signal), signal);
-    if (values.out) {
-      await mkdir(dirname(resolve(values.out)), { recursive: true });
-      await writeFile(values.out, JSON.stringify(evaluation, null, 2) + '\n', { mode: 0o600 });
-    }
+    if (values.out) await writeJson(values.out, evaluation);
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
     if (values['fail-on-priorities'] && evaluation.priorities.length) process.exitCode = 1;
     return;
@@ -199,18 +204,10 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');
   progress?.finished();
-  if (values.out) {
-    const destination = resolve(values.out);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, JSON.stringify(report, null, 2) + '\n', { mode: 0o600 });
-  }
-  if (values.sarif) {
-    const destination = resolve(values.sarif);
-    await mkdir(dirname(destination), { recursive: true });
-    await writeFile(destination, JSON.stringify(toSarif(report), null, 2) + '\n', { mode: 0o600 });
-  }
+  if (values.out) await writeJson(values.out, report);
+  if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
-  process.exitCode = report.status === 'needs_attention' ? 1 : report.status === 'inconclusive' ? 3 : 0;
+  process.exitCode = EXIT_CODES[report.status];
 }
 
 main().catch(error => {
