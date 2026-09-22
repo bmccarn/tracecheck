@@ -10,7 +10,8 @@ import { reviewAll } from './review.js';
 import { assess, compareQuality, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
 import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.js';
-import { collectionOptionsSchema, reviewTimeoutSchema } from './collection-options.js';
+import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
+import { deadline } from './deadline.js';
 
 
 declare const __TRACECHECK_VERSION__: string | undefined;
@@ -53,7 +54,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     inputSchema: verificationInputSchema, outputSchema: verificationOutputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(90_000)]);
+    const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const selected = repo || args.repo ? await target(args.repo) : undefined;
     const output = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
@@ -91,7 +92,8 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     outputSchema: z.object({ cached: z.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(args.reviewTimeoutMs)]);
+    const signal = AbortSignal.any([ctx.mcpReq.signal,
+      deadline(args.reviewTimeoutMs, `Review timed out after ${args.reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)]);
     const root = await target(args.repo);
     const discovery = previewScope(args.snapshot);
     const collectionRequest = { repo: args.repo, base: args.base, includeUntracked: args.includeUntracked,

@@ -285,7 +285,7 @@ Configure your MCP client with:
 | --- | --- |
 | Command | `node` |
 | Arguments | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
-| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL` and `JEV_MODEL`. |
+| Environment | Forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, and `JEV_TIMEOUT_MS`. |
 
 Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
@@ -341,6 +341,7 @@ Stable releases generate the marketplace payload in `bmccarn/tracecheck-plugins`
 | `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. |
 | `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. |
 | `JEV_MODEL` | `jev-latest` | Model selection. Use an available concrete version for repeatable evaluations. |
+| `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. |
 
 Tracecheck does not load `.env` files automatically or persist your API key. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
