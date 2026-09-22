@@ -1,5 +1,6 @@
 import { posix } from 'node:path';
 import type { Range } from './domain.js';
+import type { PathAliases } from './path-aliases.js';
 
 /** Bounded line excerpts; locations always refer to the original file. */
 export function focusSource(content: string, targets: Range[], maxCharacters = 12_000) {
@@ -65,12 +66,32 @@ function pythonNames(list: string): string[] {
     .map(item => item.trim().split(/\s+/)[0]!).filter(name => /^[\w.*]+$/.test(name));
 }
 
-/** Resolves relative JS/TS and Python imports to known source files; unsupported targets such as images add no edge. */
-export function importsFor(path: string, content: string, known: Set<string>): string[] {
+/** Stems a non-relative specifier maps to, in TypeScript's order: the best `paths` match, else `baseUrl`. */
+function aliasStems(specifier: string, aliases: PathAliases): string[] {
+  let best: { prefix: string; captured: string; targets: string[] } | undefined;
+  for (const [pattern, targets] of Object.entries(aliases.paths ?? {})) {
+    if (pattern === specifier) return targets;
+    const star = pattern.indexOf('*');
+    if (star < 0) continue;
+    const prefix = pattern.slice(0, star);
+    const suffix = pattern.slice(star + 1);
+    if (specifier.length < prefix.length + suffix.length || !specifier.startsWith(prefix) || !specifier.endsWith(suffix)) continue;
+    if (!best || prefix.length > best.prefix.length) best = { prefix, captured: specifier.slice(prefix.length, specifier.length - suffix.length), targets };
+  }
+  if (best) return best.targets.map(target => target.replace('*', best.captured));
+  return aliases.baseUrl === undefined ? [] : [posix.join(aliases.baseUrl, specifier)];
+}
+
+/**
+ * Resolves relative JS/TS and Python imports, plus JS/TS `paths` and `baseUrl`
+ * aliases, to known source files; unsupported targets such as images add no edge.
+ */
+export function importsFor(path: string, content: string, known: Set<string>, aliases?: PathAliases): string[] {
   const result = new Set<string>();
   const resolveFirst = (candidates: string[]) => {
     const found = candidates.map(item => posix.normalize(item)).find(item => isSource(item) && known.has(item));
     if (found) result.add(found);
+    return found !== undefined;
   };
   if (path.endsWith('.py')) {
     const statements = content.replace(/\\\r?\n/g, ' ');
@@ -89,13 +110,17 @@ export function importsFor(path: string, content: string, known: Set<string>): s
       }
     }
   } else {
-    for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
-      if (!match[1]!.startsWith('.')) continue;
-      const stem = posix.join(posix.dirname(path), match[1]!);
-      resolveFirst([stem, ...SCRIPT_TARGETS.map(suffix => stem + suffix)]);
+    const resolveScript = (stem: string) => {
+      const direct = resolveFirst([stem, ...SCRIPT_TARGETS.map(suffix => stem + suffix)]);
       const extension = posix.extname(stem);
       const sources = SCRIPT_SOURCES[extension];
-      if (sources) resolveFirst(sources.map(suffix => stem.slice(0, -extension.length) + suffix));
+      return (sources ? resolveFirst(sources.map(suffix => stem.slice(0, -extension.length) + suffix)) : false) || direct;
+    };
+    for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
+      const specifier = match[1]!;
+      if (specifier.startsWith('.')) resolveScript(posix.join(posix.dirname(path), specifier));
+      // The first substitution that names a known file wins, as in TypeScript.
+      else if (aliases) aliasStems(specifier, aliases).some(resolveScript);
     }
   }
   return [...result];

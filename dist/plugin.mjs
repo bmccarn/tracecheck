@@ -16150,8 +16150,8 @@ function rewriteKeyNames(ctx) {
       bySchema.set(entry.schema, entry);
   }
   const rewrites = /* @__PURE__ */ new Map();
-  for (const record2 of pendingRecords.get(ctx) ?? []) {
-    const seen = ctx.seen.get(record2);
+  for (const record3 of pendingRecords.get(ctx) ?? []) {
+    const seen = ctx.seen.get(record3);
     const names = (seen?.def ?? seen?.schema)?.propertyNames;
     if (!names || names === true || rewrites.has(names))
       continue;
@@ -43218,15 +43218,15 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
     for (; ; ) {
       const end = treeBuffer.indexOf(0);
       if (end < 0) break;
-      const record2 = treeBuffer.subarray(0, end);
+      const record3 = treeBuffer.subarray(0, end);
       treeBuffer = treeBuffer.subarray(end + 1);
-      const tab = record2.indexOf(9);
+      const tab = record3.indexOf(9);
       if (tab < 0) continue;
-      const fields = record2.subarray(0, tab).toString("ascii").trim().split(/\s+/);
+      const fields = record3.subarray(0, tab).toString("ascii").trim().split(/\s+/);
       const type = fields[1];
       const blob = fields[2];
       const size = Number(fields[3]);
-      const targets = requestedByBase.get(record2.subarray(tab + 1).toString("utf8"));
+      const targets = requestedByBase.get(record3.subarray(tab + 1).toString("utf8"));
       if (type !== "blob" || !blob || !targets) continue;
       if (!Number.isSafeInteger(size) || size < 0) {
         for (const path of targets) context.get(path).error = "Base version unavailable";
@@ -43264,14 +43264,14 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
       for (; ; ) {
         const end = rawBuffer.indexOf(0);
         if (end < 0) break;
-        const record2 = rawBuffer.subarray(0, end);
+        const record3 = rawBuffer.subarray(0, end);
         rawBuffer = rawBuffer.subarray(end + 1);
         if (!rawRecord) {
-          if (record2[0] !== 58) throw new Error("Git context command failed");
-          rawRecord = { status: record2.toString("ascii").trim().split(/\s+/).at(-1) ?? "", paths: [] };
+          if (record3[0] !== 58) throw new Error("Git context command failed");
+          rawRecord = { status: record3.toString("ascii").trim().split(/\s+/).at(-1) ?? "", paths: [] };
           continue;
         }
-        rawRecord.paths.push(record2.toString("utf8"));
+        rawRecord.paths.push(record3.toString("utf8"));
         if (rawRecord.paths.length < (/^[RC]/.test(rawRecord.status) ? 2 : 1)) continue;
         attribute(rawRecord.status, rawRecord.paths);
         rawRecord = void 0;
@@ -43461,11 +43461,26 @@ ${selected.join("")}`);
 function pythonNames(list) {
   return list.replace(/#[^\n]*/g, "").replace(/[()]/g, "").split(",").map((item) => item.trim().split(/\s+/)[0]).filter((name) => /^[\w.*]+$/.test(name));
 }
-function importsFor(path, content, known) {
+function aliasStems(specifier, aliases) {
+  let best;
+  for (const [pattern, targets] of Object.entries(aliases.paths ?? {})) {
+    if (pattern === specifier) return targets;
+    const star = pattern.indexOf("*");
+    if (star < 0) continue;
+    const prefix2 = pattern.slice(0, star);
+    const suffix = pattern.slice(star + 1);
+    if (specifier.length < prefix2.length + suffix.length || !specifier.startsWith(prefix2) || !specifier.endsWith(suffix)) continue;
+    if (!best || prefix2.length > best.prefix.length) best = { prefix: prefix2, captured: specifier.slice(prefix2.length, specifier.length - suffix.length), targets };
+  }
+  if (best) return best.targets.map((target) => target.replace("*", best.captured));
+  return aliases.baseUrl === void 0 ? [] : [posix.join(aliases.baseUrl, specifier)];
+}
+function importsFor(path, content, known, aliases) {
   const result = /* @__PURE__ */ new Set();
   const resolveFirst = (candidates) => {
     const found = candidates.map((item) => posix.normalize(item)).find((item) => isSource(item) && known.has(item));
     if (found) result.add(found);
+    return found !== void 0;
   };
   if (path.endsWith(".py")) {
     const statements = content.replace(/\\\r?\n/g, " ");
@@ -43484,13 +43499,16 @@ function importsFor(path, content, known) {
       }
     }
   } else {
-    for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
-      if (!match[1].startsWith(".")) continue;
-      const stem = posix.join(posix.dirname(path), match[1]);
-      resolveFirst([stem, ...SCRIPT_TARGETS.map((suffix) => stem + suffix)]);
+    const resolveScript = (stem) => {
+      const direct = resolveFirst([stem, ...SCRIPT_TARGETS.map((suffix) => stem + suffix)]);
       const extension = posix.extname(stem);
       const sources = SCRIPT_SOURCES[extension];
-      if (sources) resolveFirst(sources.map((suffix) => stem.slice(0, -extension.length) + suffix));
+      return (sources ? resolveFirst(sources.map((suffix) => stem.slice(0, -extension.length) + suffix)) : false) || direct;
+    };
+    for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
+      const specifier = match[1];
+      if (specifier.startsWith(".")) resolveScript(posix.join(posix.dirname(path), specifier));
+      else if (aliases) aliasStems(specifier, aliases).some(resolveScript);
     }
   }
   return [...result];
@@ -43522,10 +43540,189 @@ var init_evidence = __esm({
   }
 });
 
+// src/path-aliases.ts
+import { posix as posix2 } from "node:path";
+function parseJsonc(text) {
+  let result = "";
+  let index = text.charCodeAt(0) === 65279 ? 1 : 0;
+  const closer = /(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*[}\]]/y;
+  while (index < text.length) {
+    const char = text[index];
+    if (char === '"') {
+      const start = index++;
+      while (index < text.length && text[index] !== '"') index += text[index] === "\\" ? 2 : 1;
+      result += text.slice(start, ++index);
+    } else if (char === "/" && text[index + 1] === "/") {
+      while (index < text.length && text[index] !== "\n") index++;
+    } else if (char === "/" && text[index + 1] === "*") {
+      const end = text.indexOf("*/", index + 2);
+      if (end < 0) throw new SyntaxError("Unterminated comment");
+      result += " ";
+      index = end + 2;
+    } else {
+      closer.lastIndex = index + 1;
+      if (char !== "," || !closer.test(text)) result += char;
+      index++;
+    }
+  }
+  return JSON.parse(result);
+}
+function parseConfig(path, text) {
+  const json2 = parseJsonc(text);
+  if (!record2(json2)) throw new SyntaxError("Config is not an object");
+  const directory = directoryOf(path);
+  const own2 = {};
+  const options = record2(json2.compilerOptions) ? json2.compilerOptions : {};
+  if (typeof options.baseUrl === "string") own2.baseUrl = { value: options.baseUrl, directory };
+  if (record2(options.paths)) {
+    const single = (value) => value.split("*").length <= 2;
+    own2.paths = {
+      directory,
+      value: Object.fromEntries(Object.entries(options.paths).flatMap(([pattern, targets]) => {
+        const valid = Array.isArray(targets) ? targets.filter((target) => typeof target === "string" && single(target)) : [];
+        return single(pattern) && valid.length ? [[pattern, valid]] : [];
+      }))
+    };
+  }
+  const extendsValue = typeof json2.extends === "string" ? [json2.extends] : Array.isArray(json2.extends) ? json2.extends : [];
+  return { extends: extendsValue.filter((item) => typeof item === "string"), own: own2 };
+}
+function createPathAliasLoader(root, known, signal) {
+  const problems = /* @__PURE__ */ new Map();
+  const problem = (reason, sample) => {
+    const samples = problems.get(reason) ?? /* @__PURE__ */ new Set();
+    samples.add(sample);
+    problems.set(reason, samples);
+  };
+  const files = /* @__PURE__ */ new Map();
+  const merged = /* @__PURE__ */ new Map();
+  const nearest = /* @__PURE__ */ new Map();
+  const read = (path) => {
+    let pending = files.get(path);
+    if (pending) return pending;
+    if (files.size >= MAX_CONFIG_FILES) {
+      problem(`TypeScript config limit of ${MAX_CONFIG_FILES} files reached; further configs were not read`, path);
+      return Promise.resolve(void 0);
+    }
+    pending = (async () => {
+      let text;
+      try {
+        text = await readSource(root, path, signal, MAX_CONFIG_BYTES);
+      } catch (error62) {
+        signal?.throwIfAborted();
+        if (error62.code === "ENOENT") return "missing";
+        const reason = error62 instanceof Error && /Symlink|external path|oversized|changed during/i.test(error62.message) ? error62.message : "Unreadable file";
+        problem(`TypeScript config could not be read (${reason}); its path aliases are ignored`, path);
+        return void 0;
+      }
+      try {
+        return parseConfig(path, text);
+      } catch {
+        problem("TypeScript config could not be parsed; its path aliases are ignored", path);
+        return void 0;
+      }
+    })();
+    files.set(path, pending);
+    return pending;
+  };
+  const resolveConfig = (path, chain2) => {
+    const cached2 = merged.get(path);
+    if (cached2) return cached2;
+    const pending = (async () => {
+      const parsed = await read(path);
+      if (!parsed || parsed === "missing") return {};
+      const result = {};
+      for (const specifier of parsed.extends) {
+        const sample = `${path} -> ${specifier}`;
+        const target = /^\.\.?(?:\/|$)/.test(specifier) ? posix2.join(directoryOf(path), specifier) : void 0;
+        if (target === void 0 || outside(target)) {
+          problem("TypeScript config extends targets outside the repository were not followed", sample);
+          continue;
+        }
+        let base;
+        for (const candidate of target.endsWith(".json") ? [target] : [target, `${target}.json`]) {
+          if (await read(candidate) !== "missing") {
+            base = candidate;
+            break;
+          }
+        }
+        if (base === void 0) {
+          problem("TypeScript config extends target was not found", sample);
+          continue;
+        }
+        if (chain2.includes(base) || chain2.length >= MAX_EXTENDS_DEPTH) {
+          problem(`TypeScript config extends chain is circular or deeper than ${MAX_EXTENDS_DEPTH} levels`, sample);
+          continue;
+        }
+        Object.assign(result, await resolveConfig(base, [...chain2, base]));
+      }
+      if (parsed.own.baseUrl) result.baseUrl = parsed.own.baseUrl;
+      if (parsed.own.paths) result.paths = parsed.own.paths;
+      return result;
+    })();
+    if (chain2.length === 1) merged.set(path, pending);
+    return pending;
+  };
+  const configFor = (path) => {
+    const directory = directoryOf(path);
+    if (nearest.has(directory)) return nearest.get(directory);
+    const own2 = CONFIG_NAMES.map((name) => directory ? `${directory}/${name}` : name).find((candidate) => known.has(candidate));
+    const found = own2 ?? (directory ? configFor(directory) : void 0);
+    nearest.set(directory, found);
+    return found;
+  };
+  return {
+    /** Aliases for a JS/TS file plus a key that changes whenever its resolution settings do. */
+    async forFile(path) {
+      const config2 = configFor(path);
+      if (!config2) return { key: "" };
+      const settings = await resolveConfig(config2, [config2]);
+      const leaf = directoryOf(config2);
+      const place = (directory, value) => {
+        const resolved = value.startsWith(CONFIG_DIR) ? posix2.join(leaf, `.${value.slice(CONFIG_DIR.length)}`) : posix2.join(directory, value);
+        return outside(resolved) ? void 0 : resolved;
+      };
+      const aliases = {};
+      const baseUrl = settings.baseUrl && place(settings.baseUrl.directory, settings.baseUrl.value);
+      if (baseUrl !== void 0) aliases.baseUrl = baseUrl;
+      if (settings.paths) {
+        const origin = baseUrl ?? settings.paths.directory;
+        aliases.paths = Object.fromEntries(Object.entries(settings.paths.value).map(([pattern, targets]) => [pattern, targets.flatMap((target) => place(origin, target) ?? [])]));
+      }
+      return aliases.baseUrl === void 0 && !aliases.paths ? { key: "" } : { key: JSON.stringify(aliases), aliases };
+    },
+    limitations() {
+      return [...problems].map(([reason, samples]) => {
+        const sorted = [...samples].sort();
+        const more = sorted.length > 3 ? `, and ${sorted.length - 3} more` : "";
+        return `${reason} (${sorted.slice(0, 3).join(", ")}${more}).`;
+      });
+    }
+  };
+}
+var CONFIG_NAMES, MAX_CONFIG_BYTES, MAX_CONFIG_FILES, MAX_EXTENDS_DEPTH, CONFIG_DIR, record2, directoryOf, outside;
+var init_path_aliases = __esm({
+  "src/path-aliases.ts"() {
+    "use strict";
+    init_safety();
+    CONFIG_NAMES = ["tsconfig.json", "jsconfig.json"];
+    MAX_CONFIG_BYTES = 64e3;
+    MAX_CONFIG_FILES = 256;
+    MAX_EXTENDS_DEPTH = 8;
+    CONFIG_DIR = "${configDir}";
+    record2 = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+    directoryOf = (path) => {
+      const directory = posix2.dirname(path);
+      return directory === "." ? "" : directory;
+    };
+    outside = (path) => path === ".." || path.startsWith("../") || posix2.isAbsolute(path);
+  }
+});
+
 // src/import-index.ts
 import { lstat as lstat2, realpath as realpath3 } from "node:fs/promises";
 import { isAbsolute as isAbsolute3, relative as relative2, resolve as resolve2 } from "node:path";
-import { posix as posix2 } from "node:path";
+import { posix as posix3 } from "node:path";
 function fingerprintMatches(left, right) {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
@@ -43547,15 +43744,15 @@ async function metadata(root, path, signal) {
 }
 function interleave(paths, changedPaths) {
   const changed = new Set(changedPaths);
-  const changedDirectories = new Set(changedPaths.map((path) => posix2.dirname(path)));
+  const changedDirectories = new Set(changedPaths.map((path) => posix3.dirname(path)));
   const changedFirst = paths.filter((path) => changed.has(path));
   const application = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix2.dirname(path)) && !testPath(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix2.dirname(path)) && !testPath(path))
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && !testPath(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && !testPath(path))
   ];
   const tests = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix2.dirname(path)) && testPath(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix2.dirname(path)) && testPath(path))
+    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && testPath(path)),
+    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && testPath(path))
   ];
   const result = [...changedFirst];
   for (let index = 0; index < Math.max(application.length, tests.length); index++) {
@@ -43606,6 +43803,7 @@ async function buildImportIndex(options) {
     options.signal?.throwIfAborted();
     return deadline2?.aborted ?? false;
   };
+  const aliasLoader = createPathAliasLoader(physicalRoot, options.known, signal);
   const limitations = [];
   const omissions = /* @__PURE__ */ new Map();
   const omit2 = (reason, path) => {
@@ -43629,8 +43827,9 @@ async function buildImportIndex(options) {
     const metadataResults = await bounded(batch, stopped, async (path) => {
       try {
         const fingerprint = await metadata(physicalRoot, path, signal);
+        const aliases = path.endsWith(".py") ? { key: "" } : await aliasLoader.forFile(path);
         if (stopped()) return { kind: "interrupted" };
-        return { kind: "metadata", fingerprint };
+        return { kind: "metadata", fingerprint, aliases };
       } catch (error62) {
         options.signal?.throwIfAborted();
         return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
@@ -43656,26 +43855,26 @@ async function buildImportIndex(options) {
       }
       indexedBytes += result.fingerprint.size;
       const cached2 = cache.entries.get(path);
-      if (cached2 && fingerprintMatches(cached2.fingerprint, result.fingerprint)) {
+      if (cached2 && fingerprintMatches(cached2.fingerprint, result.fingerprint) && cached2.aliases === result.aliases.key) {
         slots.set(path, { kind: "cached", edges: cached2.edges });
       } else {
-        slots.set(path, { kind: "read", fingerprint: result.fingerprint });
+        slots.set(path, { kind: "read", fingerprint: result.fingerprint, aliases: result.aliases });
       }
     }
     const reads = batch.slice(0, prefix2).flatMap((path) => {
       const slot = slots.get(path);
-      return slot?.kind === "read" ? [{ path, fingerprint: slot.fingerprint }] : [];
+      return slot?.kind === "read" ? [{ path, fingerprint: slot.fingerprint, aliases: slot.aliases }] : [];
     });
-    const readResults = await bounded(reads, stopped, async ({ path, fingerprint }) => {
+    const readResults = await bounded(reads, stopped, async ({ path, fingerprint, aliases }) => {
       try {
         const content = await readSource(physicalRoot, path, signal);
         if (content.includes("\0")) throw new Error("Binary file");
         if (hasSecret(content)) throw new Error("Potential secret-bearing file");
         const after = await metadata(physicalRoot, path, signal);
         if (!fingerprintMatches(fingerprint, after)) throw new Error("File changed during collection");
-        const edges = importsFor(path, content, options.known).sort();
+        const edges = importsFor(path, content, options.known, aliases.aliases).sort();
         if (stopped()) return { kind: "interrupted" };
-        return { kind: "indexed", fingerprint: after, edges };
+        return { kind: "indexed", fingerprint: after, aliases: aliases.key, edges };
       } catch (error62) {
         options.signal?.throwIfAborted();
         return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
@@ -43708,7 +43907,7 @@ async function buildImportIndex(options) {
         continue;
       }
       if (cache.entries.size < MAX_CACHE_ENTRIES || cache.entries.has(path)) {
-        cache.entries.set(path, { fingerprint: result.fingerprint, edges: result.edges });
+        cache.entries.set(path, { fingerprint: result.fingerprint, aliases: result.aliases, edges: result.edges });
       }
       imports.set(path, [...result.edges]);
       completed++;
@@ -43723,6 +43922,7 @@ async function buildImportIndex(options) {
   for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
     limitations.push(`Import index omitted ${count} file(s): ${reason} (${samples.join(", ")}).`);
   }
+  limitations.push(...aliasLoader.limitations());
   const incomplete = [
     { category: "application", indexed: [...imports.keys()].filter((path) => !testPath(path)).length, eligible: paths.filter((path) => !testPath(path)).length },
     { category: "test", indexed: [...imports.keys()].filter(testPath).length, eligible: paths.filter(testPath).length }
@@ -43745,6 +43945,7 @@ var init_import_index = __esm({
   "src/import-index.ts"() {
     "use strict";
     init_evidence();
+    init_path_aliases();
     init_safety();
     MAX_CACHE_ROOTS = 8;
     MAX_CACHE_ENTRIES = 1e5;
@@ -43757,7 +43958,7 @@ var init_import_index = __esm({
 // src/collector.ts
 import { execFile } from "node:child_process";
 import { realpath as realpath4 } from "node:fs/promises";
-import { posix as posix3, resolve as resolve3 } from "node:path";
+import { posix as posix4, resolve as resolve3 } from "node:path";
 import { promisify } from "node:util";
 async function collect(options) {
   const settings = collectionOptionsSchema.parse(options.collection ?? {});
@@ -43786,7 +43987,7 @@ async function collect(options) {
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
   const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
-  if (changePaths.length) limitations.push("Import/caller discovery is heuristic; unresolved imports, aliases, dynamic imports, and external contracts may be missing.");
+  if (changePaths.length) limitations.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
   if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
   const loaded = /* @__PURE__ */ new Map();
   const candidates = [];
@@ -43942,7 +44143,7 @@ async function collect(options) {
   const conventionalTests = /* @__PURE__ */ new Map();
   for (const path of tracked) {
     if (!isTest(path)) continue;
-    const match = posix3.basename(path).match(/^(?:test_)?(.+?)(?:\.(?:test|spec))?\.[^.]+$/);
+    const match = posix4.basename(path).match(/^(?:test_)?(.+?)(?:\.(?:test|spec))?\.[^.]+$/);
     if (!match) continue;
     const entries = conventionalTests.get(match[1]) ?? [];
     entries.push(path);
@@ -43954,7 +44155,7 @@ async function collect(options) {
   for (const path of [...changedSourcePaths].sort()) {
     const related = /* @__PURE__ */ new Map();
     for (const candidate of index.reverse.get(path) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, isTest(candidate) ? "test" : "caller");
-    const stem = posix3.basename(path).replace(/\.[^.]+$/, "");
+    const stem = posix4.basename(path).replace(/\.[^.]+$/, "");
     for (const candidate of conventionalTests.get(stem) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, "test");
     for (const candidate of index.imports.get(path) ?? []) if (!changedSourcePaths.has(candidate) && !related.has(candidate)) related.set(candidate, "dependency");
     const names = loaded.get(path)?.names ?? [];

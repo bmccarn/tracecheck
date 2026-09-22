@@ -7,7 +7,7 @@ Preview collects the working-tree change against a base commit without contactin
 - `preview-packets` groups every supported changed file into packets and prints a snapshot.
 - `preview-sources` collects changed files with baselines plus related dependencies, callers, and tests.
 - `preview-candidates` selects division (`/`, `%`, `/=`, `%=`), catch-handler, and `JSON.parse` candidates in changed JS/TS functions, or in the changed top-level statement for module-level code. It skips non-zero literal divisors, catch handlers with a top-level `throw`, and `JSON.parse` inside the protected block of a `try` with a handler.
-- `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, and heuristic-discovery limitations.
+- `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, heuristic-discovery limitations, and TypeScript configuration that could not be used for path aliases.
 - `preview-options` applies `--base`, `--include-untracked`, and the collection limits.
 - `preview-mcp` returns the same scope from `tracecheck_preview` and registers the snapshot for review.
 
@@ -33,6 +33,7 @@ Preconditions:
 - **Candidate filters.** Use the `noise` fixture. Expect exactly two candidates in `summarize`: `zero-divisor` on `total /= samples.length` and `swallowed-failure` on the handler with `if (!retry) throw error;`. The unchanged module-level `limits.total / limits.workers`, the literal divisors, the rethrowing handler, and both guarded `JSON.parse` calls are absent.
 - **Python imports.** Use the `python-import` fixture. Expect `pkg/report.py` as a `caller` (it uses a parenthesized multi-line import) and `tests/test_calc.py` as a `test`.
 - **JS/TS module paths.** Use the `module-paths` fixture. Expect `src/app.tsx` as `changed`, `src/main.ts` as `caller` (imports `./app.jsx`), and `src/lib.mts`, `src/legacy.cts`, `src/widgets/index.tsx`, and `src/app.css` as `dependency` sources. `src/logo.png` is not a source and appears in no limitation.
+- **Path aliases.** Use the `path-aliases` fixture. Expect `src/lib/stats.ts` as `changed`, `src/components/Report.tsx` as `caller` and `test/empty-input.test.ts` as `test` (both import `@/lib/stats` through `paths`), and `src/utils/round.ts` as `dependency` (imported as `utils/round` through `baseUrl`); both settings come from `config/tsconfig.base.json` through `extends`. `limitations` include `TypeScript config could not be parsed; its path aliases are ignored (packages/legacy/tsconfig.json).` and `TypeScript config extends targets outside the repository were not followed (tsconfig.json -> ../tracecheck-shared/tsconfig.json, tsconfig.json -> @tsconfig/strictest/tsconfig.json).`
 - **MCP entry.** Write `[{"tool":"tracecheck_preview","arguments":{}}]` to `$RUN/calls.json` and run `node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"`. The record `01-tracecheck_preview.json` has `isError: false` and `structuredContent.snapshot` equal to the CLI snapshot for the same fixture, settings, and task.
 
 ## Gotchas

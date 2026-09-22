@@ -4,6 +4,7 @@ import { posix } from 'node:path';
 import type { CollectionSettings } from './collection-options.js';
 import type { DiscoveryScope } from './domain.js';
 import { importsFor } from './evidence.js';
+import { createPathAliasLoader, type PathAliases } from './path-aliases.js';
 import { hasSecret, readSource } from './safety.js';
 
 type Fingerprint = {
@@ -15,7 +16,9 @@ type Fingerprint = {
   ctimeMs: number;
 };
 
-type Entry = { fingerprint: Fingerprint; edges: string[] };
+// `aliases` keys the path alias settings the edges were resolved with.
+type Entry = { fingerprint: Fingerprint; aliases: string; edges: string[] };
+type Aliases = { key: string; aliases?: PathAliases };
 type RootCache = { identity: string; universe: string; known: string; entries: Map<string, Entry> };
 
 const MAX_CACHE_ROOTS = 8;
@@ -80,11 +83,11 @@ function errorDetail(error: unknown): string {
 }
 
 type MetadataResult =
-  | { kind: 'metadata'; fingerprint: Fingerprint }
+  | { kind: 'metadata'; fingerprint: Fingerprint; aliases: Aliases }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
 type ReadResult =
-  | { kind: 'indexed'; fingerprint: Fingerprint; edges: string[] }
+  | { kind: 'indexed'; fingerprint: Fingerprint; aliases: string; edges: string[] }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
 
@@ -135,6 +138,7 @@ export async function buildImportIndex(options: {
     options.signal?.throwIfAborted();
     return deadline?.aborted ?? false;
   };
+  const aliasLoader = createPathAliasLoader(physicalRoot, options.known, signal);
   const limitations: string[] = [];
   const omissions = new Map<string, { count: number; samples: string[] }>();
   const omit = (reason: string, path: string) => {
@@ -160,15 +164,16 @@ export async function buildImportIndex(options: {
     const metadataResults = await bounded<string, MetadataResult>(batch, stopped, async path => {
       try {
         const fingerprint = await metadata(physicalRoot, path, signal);
+        const aliases = path.endsWith('.py') ? { key: '' } : await aliasLoader.forFile(path);
         if (stopped()) return { kind: 'interrupted' };
-        return { kind: 'metadata', fingerprint };
+        return { kind: 'metadata', fingerprint, aliases };
       } catch (error) {
         options.signal?.throwIfAborted();
         return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
       }
     });
 
-    const slots = new Map<string, { kind: 'cached'; edges: string[] } | { kind: 'omitted'; reason: string } | { kind: 'read'; fingerprint: Fingerprint }>();
+    const slots = new Map<string, { kind: 'cached'; edges: string[] } | { kind: 'omitted'; reason: string } | { kind: 'read'; fingerprint: Fingerprint; aliases: Aliases }>();
     let prefix = batch.length;
     for (let index = 0; index < batch.length; index++) {
       const path = batch[index]!;
@@ -188,27 +193,27 @@ export async function buildImportIndex(options: {
       }
       indexedBytes += result.fingerprint.size;
       const cached = cache.entries.get(path);
-      if (cached && fingerprintMatches(cached.fingerprint, result.fingerprint)) {
+      if (cached && fingerprintMatches(cached.fingerprint, result.fingerprint) && cached.aliases === result.aliases.key) {
         slots.set(path, { kind: 'cached', edges: cached.edges });
       } else {
-        slots.set(path, { kind: 'read', fingerprint: result.fingerprint });
+        slots.set(path, { kind: 'read', fingerprint: result.fingerprint, aliases: result.aliases });
       }
     }
 
     const reads = batch.slice(0, prefix).flatMap(path => {
       const slot = slots.get(path);
-      return slot?.kind === 'read' ? [{ path, fingerprint: slot.fingerprint }] : [];
+      return slot?.kind === 'read' ? [{ path, fingerprint: slot.fingerprint, aliases: slot.aliases }] : [];
     });
-    const readResults = await bounded<{ path: string; fingerprint: Fingerprint }, ReadResult>(reads, stopped, async ({ path, fingerprint }) => {
+    const readResults = await bounded<{ path: string; fingerprint: Fingerprint; aliases: Aliases }, ReadResult>(reads, stopped, async ({ path, fingerprint, aliases }) => {
       try {
         const content = await readSource(physicalRoot, path, signal);
         if (content.includes('\0')) throw new Error('Binary file');
         if (hasSecret(content)) throw new Error('Potential secret-bearing file');
         const after = await metadata(physicalRoot, path, signal);
         if (!fingerprintMatches(fingerprint, after)) throw new Error('File changed during collection');
-        const edges = importsFor(path, content, options.known).sort();
+        const edges = importsFor(path, content, options.known, aliases.aliases).sort();
         if (stopped()) return { kind: 'interrupted' };
-        return { kind: 'indexed', fingerprint: after, edges };
+        return { kind: 'indexed', fingerprint: after, aliases: aliases.key, edges };
       } catch (error) {
         options.signal?.throwIfAborted();
         return deadline?.aborted ? { kind: 'interrupted' } : { kind: 'omitted', reason: errorDetail(error) };
@@ -242,7 +247,7 @@ export async function buildImportIndex(options: {
         continue;
       }
       if (cache.entries.size < MAX_CACHE_ENTRIES || cache.entries.has(path)) {
-        cache.entries.set(path, { fingerprint: result.fingerprint, edges: result.edges });
+        cache.entries.set(path, { fingerprint: result.fingerprint, aliases: result.aliases, edges: result.edges });
       }
       imports.set(path, [...result.edges]);
       completed++;
@@ -260,6 +265,7 @@ export async function buildImportIndex(options: {
   for (const [reason, { count, samples }] of [...omissions].sort(([left], [right]) => left.localeCompare(right))) {
     limitations.push(`Import index omitted ${count} file(s): ${reason} (${samples.join(', ')}).`);
   }
+  limitations.push(...aliasLoader.limitations());
   const incomplete = [
     { category: 'application', indexed: [...imports.keys()].filter(path => !testPath(path)).length, eligible: paths.filter(path => !testPath(path)).length },
     { category: 'test', indexed: [...imports.keys()].filter(testPath).length, eligible: paths.filter(testPath).length },
