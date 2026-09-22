@@ -24,6 +24,9 @@
 - Read optional project settings from `.tracecheck.json` (base, untracked files, task and context, collection limits, timeouts, and model), below flags, MCP arguments, and environment variables. Unknown keys and credential fields are rejected by name.
 - Candidate selection no longer bundles `@babel/types` (the bundle is about 237 KB smaller), walks syntax trees with one ancestor stack, and now checks decorator arguments on TypeScript parameter properties.
 - Resolve imports through TypeScript `paths` and `baseUrl` settings from the nearest `tsconfig.json` or `jsconfig.json`, following `extends` only inside the repository, and report configs that cannot be read or parsed.
+- Add `review --sarif FILE`, which writes supported findings as SARIF 2.1.0 for code-scanning tools.
+- Add `assess --fail-on-priorities`, which exits 1 when the evaluation lists actionable quality priorities.
+- `--help` lists every flag and exit code, and `--previous` accepts either a saved review report or an assess evaluation for both `review` and `assess`.
 
 ## 0.3.0 — 2026-09-18
 

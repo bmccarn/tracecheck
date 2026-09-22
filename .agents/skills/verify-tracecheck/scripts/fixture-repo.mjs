@@ -111,6 +111,11 @@ const scenarios = {
     change: { 'blank.ts': '\n\n' },
     stage: ['blank.ts'],
   },
+  'multi-packet': {
+    description: 'Nine small modules change their exported constant. Expect two change packets (eight changed paths, then one) with no candidates.',
+    baseline: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index};\n`])),
+    change: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index + 1};\n`])),
+  },
   credentials: {
     description: 'A lexer with identifier-shaped token-kind literals and two config files that gain unquoted credentials (.env-style shell exports and YAML). Expect src/lexer.ts collected, and deploy/env.sh and config/app.yml omitted with their paths named.',
     baseline: {

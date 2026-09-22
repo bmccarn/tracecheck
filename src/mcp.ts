@@ -3,7 +3,6 @@ import { McpServer } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { realpath } from 'node:fs/promises';
-import { createRequire } from 'node:module';
 import { collect } from './collector.js';
 import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { applyPreviousEvaluation, reviewAll } from './review.js';
@@ -13,13 +12,8 @@ import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.
 import { reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { deadline } from './deadline.js';
+import { releaseVersion } from './version.js';
 
-
-declare const __TRACECHECK_VERSION__: string | undefined;
-
-const releaseVersion = typeof __TRACECHECK_VERSION__ === 'string'
-  ? __TRACECHECK_VERSION__
-  : createRequire(import.meta.url)('../package.json').version;
 const CACHE_LIMIT = 16;
 const CACHE_TTL_MS = 300_000;
 

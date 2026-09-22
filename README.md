@@ -185,6 +185,8 @@ Keep the baseline fixed across commits by passing the same commit SHA with `--ba
 
 A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a limitation that says why. Source-finding history still uses the combined decisions.
 
+`--previous` takes either a report saved by `review --out` or an evaluation saved by `assess --out`, for both `review` and `assess`. Tracecheck reads the quality evaluation from it: a report's `quality`, or the evaluation itself. A multi-packet report has no single quality evaluation, so it is rejected, as is any other file. The comparison still requires the same scope, model, and rubric version; a review and an assessment usually have different scopes, so they are reported as not comparable unless the assessment `scope` matches.
+
 Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
 
 ### Supply context directly
@@ -215,6 +217,23 @@ node dist/plugin.mjs assess --input revised-context.json \
 
 A `diff` string is also supported. At least one current context field is required. Use a stable `scope` to identify the same review subject across checkpoints. `assess` evaluates only what you provide and performs no repository reads or parser-based source checks.
 
+`assess` exits `0` whatever it finds. Add `--fail-on-priorities` to exit `1` when the evaluation lists quality priorities; a priority is a concern judged with confidence of at least 0.6 and probability of at least 0.8, so uncertain concerns do not fail the command.
+
+### Upload findings to code scanning
+
+`review --sarif FILE` writes the supported source-anchored findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log, in addition to the normal output and exit code:
+
+```sh
+node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
+```
+
+- Each check family that produced a decision (`zero-divisor`, `swallowed-failure`, `unhandled-json`) is a rule, with the check hypothesis as its description and the verification step as its help.
+- Each `supported` decision is one result. Its location is the repository-relative path and line range, with the quoted source as the snippet; its message is the hypothesis. The level follows the judged impact: `high` is `error`, `medium` and `unknown` are `warning`, and `low` is `note`. Result properties carry `impact`, `impactConfidence`, `confidence`, `probability`, and `verification`.
+- `uncertain`, `needs_context`, and `not_supported` decisions are not results. The run's `omittedDecisions` property counts them; the JSON report keeps them in full.
+- Quality priorities have no source location and are not SARIF results. The run's `status` property still reflects them, and the exit code is unchanged.
+
+Paths are relative to the `SRCROOT` base, which the log maps to the reviewed repository root. The file holds source excerpts and is written with owner-only permissions.
+
 ### CLI options and exit codes
 
 | Option | Purpose |
@@ -225,8 +244,12 @@ A `diff` string is also supported. At least one current context field is require
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
 | `--json` | Emit full JSON for preview, review, or assess. |
-| `--out FILE` | Save a review report or quality assessment as JSON. |
-| `--previous FILE` | Previous repository report for review; previous quality assessment for assess. |
+| `--out FILE` | Save a review report, verification result, or quality assessment as JSON. |
+| `--sarif FILE` | Also write review's supported findings as SARIF 2.1.0. |
+| `--previous FILE` | For review and assess, a report saved by `review --out` or an evaluation saved by `assess --out` to compare quality with. For compare, the earlier report. |
+| `--current FILE` | For compare, the later report. |
+| `--input FILE` | Evidence JSON for verify; context JSON for assess. |
+| `--fail-on-priorities` | Make assess exit `1` when the evaluation lists actionable quality priorities. |
 | `--index-max-files N` | Optional local import-index file budget; unset by default. |
 | `--index-max-bytes N` | Optional local import-index byte budget; unset by default. |
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
@@ -235,16 +258,16 @@ A `diff` string is also supported. At least one current context field is require
 
 `preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
 
-Repository `review` uses these exit codes:
+Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | No actionable concerns in the performed review. |
-| `1` | Concerns need investigation. |
+| `0` | Success. `review` and `verify` found no actionable concern in the checks performed. |
+| `1` | `review`: supported source findings or quality priorities. `verify`: the hypothesis is supported. `assess --fail-on-priorities`: actionable quality priorities. |
 | `2` | Execution or input error. |
-| `3` | Inconclusive because of uncertainty or coverage gaps. |
+| `3` | `review` or `verify` is inconclusive because of uncertainty or coverage gaps. |
 
-A zero exit does not prove correctness. `assess` returns quality signals without a score-based failure gate. Use `--help` for command syntax.
+A zero exit does not prove correctness. Without `--fail-on-priorities`, `assess` exits `0` on any result. `--help` lists every flag for each command.
 
 ## Install the plugin
 
