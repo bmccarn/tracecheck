@@ -11,6 +11,8 @@
 - Point both in-repo marketplace catalogs at the current stable release, update them during release preparation, and fail the release gates when a catalog ref does not match.
 - Build only the bundle in `npm run build`, type-check once with `npm run check`, and stop emitting unused JavaScript and declaration files into `dist/`.
 - CI now tests on Node 22.18.0 and the current LTS release, fails when the committed bundle differs from a fresh build, runs the offline demo, and cancels superseded pull request runs. `engines.node` now matches the bundled Babel range (`^22.18.0 || >=24.11.0`).
+- Parse JSX in `.js`, `.mjs`, and `.cjs` files and decorators in JavaScript and TypeScript, so these files get source checks instead of a parse-failure limitation.
+- Skip source-check candidates that cannot be defects (non-zero literal divisors, catch handlers that rethrow, and `JSON.parse` inside a `try` block), stop selecting unchanged module-level code, and flag `/=` and `%=`.
 
 ## 0.3.0 — 2026-09-18
 
