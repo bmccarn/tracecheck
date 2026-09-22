@@ -11,3 +11,5 @@ export const collectionOptionsSchema = z.object({
 export type CollectionOptions = z.input<typeof collectionOptionsSchema>;
 export type CollectionSettings = z.output<typeof collectionOptionsSchema>;
 export const reviewTimeoutSchema = z.number().int().positive().max(3_600_000).default(300_000);
+/** Overall deadline for one verification, shared by the CLI and MCP entry points. */
+export const VERIFY_TIMEOUT_MS = 90_000;

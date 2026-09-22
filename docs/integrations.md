@@ -23,7 +23,7 @@ For any stdio MCP client, including clients without a portable installer target,
 
 - Command: `node`
 - Arguments: `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp`
-- Environment: forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL` and `JEV_MODEL`.
+- Environment: forward `TYPESAFE_API_KEY`, `JEV_API_KEY`, or `OPENROUTER_API_KEY`; optionally `TYPESAFE_BASE_URL`, `JEV_MODEL`, and `JEV_TIMEOUT_MS`.
 
 Append `--repo`, `/absolute/path/to/reviewed/repository` to bind the process to one repository. Otherwise provide `repo` in collection-tool calls. GUI-launched clients may not inherit interactive shell variables; configure their environment explicitly without committing credentials.
 
