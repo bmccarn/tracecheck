@@ -221,7 +221,7 @@ A `diff` string is also supported. At least one current context field is require
 | --- | --- |
 | `--repo PATH` | Repository to collect; CLI preview/review default to the current directory. |
 | `--base REF` | Git baseline; defaults to `HEAD`. |
-| `--include-untracked` | Include supported, non-ignored untracked files. |
+| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` turns off a configured `includeUntracked: true`. |
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
 | `--json` | Emit full JSON for preview, review, or assess. |
@@ -232,6 +232,8 @@ A `diff` string is also supported. At least one current context field is require
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
 | `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
 | `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
+
+`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
 
 Repository `review` uses these exit codes:
 
@@ -349,6 +351,42 @@ Tracecheck does not load `.env` files automatically or persist your API key. Rev
 - The collector skips generated paths, symlinks, binary files, and some recognizable secret patterns. Known credential patterns are also checked at the provider boundary for manually supplied context. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
 - Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
+
+### Project configuration file
+
+To avoid repeating flags, commit a `.tracecheck.json` file at the repository root. CLI `preview` and `review`, and the MCP `tracecheck_preview` and `tracecheck_review` tools, read it from the repository they collect. An MCP server launched with `--repo` reads that repository's file. `verify` and `assess` do not read it. Every key is optional:
+
+```json
+{
+  "base": "origin/main",
+  "includeUntracked": true,
+  "task": "Keep the public API backward compatible.",
+  "repositoryContext": "Tests run with node:test; the CLI bundle is committed.",
+  "collection": { "maxIndexFiles": 5000, "indexTimeoutMs": 30000, "collectionTimeoutMs": 120000 },
+  "reviewTimeoutMs": 600000,
+  "model": "jev-latest",
+  "requestTimeoutMs": 60000
+}
+```
+
+| Key | Same as |
+| --- | --- |
+| `base`, `includeUntracked`, `task`, `repositoryContext` | `--base`, `--include-untracked`, `--task`, `--context`, and the MCP arguments of the same names |
+| `collection` | `--index-max-files`, `--index-max-bytes`, `--index-timeout-ms`, `--collection-timeout-ms` as `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, `collectionTimeoutMs`, and the MCP `collection` argument |
+| `reviewTimeoutMs` | `--review-timeout-ms` and the MCP `reviewTimeoutMs` argument |
+| `model` | `JEV_MODEL` |
+| `requestTimeoutMs` | `JEV_TIMEOUT_MS` |
+
+Each setting resolves in this order:
+
+1. A CLI flag or MCP argument. Collection limits resolve per key, so `--index-max-files` keeps the file's `indexTimeoutMs`.
+2. An environment variable. Only `model` and `requestTimeoutMs` have one: `JEV_MODEL` and `JEV_TIMEOUT_MS`.
+3. The configuration file.
+4. The built-in default.
+
+The file is validated with the same schemas as the flags and MCP arguments. An unknown key, an invalid value, a symlinked or oversized file, or invalid JSON stops the command with an error that names the key but never quotes its value. The file cannot hold credentials: a field whose name looks like a key, token, secret, or password is rejected, and so is a value that matches a known credential pattern. The provider endpoint is not configurable from the file either, so a repository cannot redirect your key. Set keys and `TYPESAFE_BASE_URL` in the environment.
+
+The preview snapshot covers the file's validated content. Editing the file between `tracecheck_preview` and `tracecheck_review` makes the review reject the snapshot, so run the preview again. Formatting-only edits keep the snapshot. The human-readable `preview` output prints `Settings: .tracecheck.json` when the file was applied.
 
 ### Using Jev through OpenRouter
 
