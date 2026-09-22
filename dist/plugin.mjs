@@ -36254,7 +36254,7 @@ function createPathAliasLoader(root, known, signal) {
     files.set(path, pending);
     return pending;
   };
-  const resolveConfig = (path, chain2) => {
+  const resolveConfig = (path, chain) => {
     const cached2 = merged.get(path);
     if (cached2) return cached2;
     const pending = (async () => {
@@ -36279,17 +36279,17 @@ function createPathAliasLoader(root, known, signal) {
           problem("TypeScript config extends target was not found", sample);
           continue;
         }
-        if (chain2.includes(base) || chain2.length >= MAX_EXTENDS_DEPTH) {
+        if (chain.includes(base) || chain.length >= MAX_EXTENDS_DEPTH) {
           problem(`TypeScript config extends chain is circular or deeper than ${MAX_EXTENDS_DEPTH} levels`, sample);
           continue;
         }
-        Object.assign(result, await resolveConfig(base, [...chain2, base]));
+        Object.assign(result, await resolveConfig(base, [...chain, base]));
       }
       if (parsed.own.baseUrl) result.baseUrl = parsed.own.baseUrl;
       if (parsed.own.paths) result.paths = parsed.own.paths;
       return result;
     })();
-    if (chain2.length === 1) merged.set(path, pending);
+    if (chain.length === 1) merged.set(path, pending);
     return pending;
   };
   const configFor = (path) => {
