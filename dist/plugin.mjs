@@ -44476,7 +44476,7 @@ function parseProjectConfig(text) {
   throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
 }
 async function loadProjectConfig(repo, signal) {
-  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal });
+  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal, env: gitEnvironment() });
   const root = await realpath5(stdout.trim());
   let text;
   try {
@@ -44511,6 +44511,7 @@ var init_project_config = __esm({
     "use strict";
     init_zod();
     init_collection_options();
+    init_git_context();
     init_jev();
     init_safety();
     exec2 = promisify2(execFile2);

@@ -4,6 +4,7 @@ import { chmod, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { join } from 'node:path';
 import { collect } from '../src/collector.js';
+import { resolveSettings } from '../src/project-config.js';
 import { findCandidates } from '../src/checks.js';
 import type { ReviewPacket, ReviewPlan } from '../src/domain.js';
 import { repository } from './helpers.js';
@@ -308,11 +309,14 @@ test('collects the requested repository when Git environment variables name anot
   const saved = Object.fromEntries(Object.keys(redirect).map(name => [name, process.env[name]]));
   Object.assign(process.env, redirect);
   let plan: ReviewPlan;
+  let settingsRoot: string;
   try {
+    settingsRoot = (await resolveSettings(repo.root, {})).root;
     plan = await collect({ repo: repo.root });
   } finally {
     for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value;
   }
+  assert.equal(settingsRoot, await realpath(repo.root));
   assert.equal(plan.root, await realpath(repo.root));
   assert.deepEqual(plan.sources.map(source => source.path), ['average.ts']);
 });
