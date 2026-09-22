@@ -34,11 +34,17 @@ Preconditions:
 - **Python imports.** Use the `python-import` fixture. Expect `pkg/report.py` as a `caller` (it uses a parenthesized multi-line import) and `tests/test_calc.py` as a `test`.
 - **JS/TS module paths.** Use the `module-paths` fixture. Expect `src/app.tsx` as `changed`, `src/main.ts` as `caller` (imports `./app.jsx`), and `src/lib.mts`, `src/legacy.cts`, `src/widgets/index.tsx`, and `src/app.css` as `dependency` sources. `src/logo.png` is not a source and appears in no limitation.
 - **Related-file focus.** Use the `symbol-focus` fixture. `src/checkout.ts` is a `caller` with `evidence.complete: false`; its `content` includes line `302:` (the `applyDiscount` call, an `export const` arrow function) and line `453:` (the `$round` call), and `evidence.currentRanges` covers both. Names come from `def`, `function`, and `class` declarations and from `const`, `let`, or `var` bound to an arrow function or function expression.
+- **Changes without hunks.** Use the `hunkless` fixture. `limitations` include `File mode changed without a content change; no changed lines to review (mode.ts)` and `Git reported no textual diff (binary or -diff attribute); changed lines are unknown (opaque.ts)`.
+- **Colons in paths.** Use the `colon-paths` fixture. `limitations` include `Collected source limitation for 2 file(s): Focused excerpts only; omitted lines are not reviewed (src/a:one.ts, src/b:two.ts).`
+- **Large listings.** Use the `large-listing` fixture: about 8.8 MB of `git ls-files -z` output. Preview exits `0` with the division result (`zero-divisor` in `mean`).
+- **Git environment.** Create a second fixture and run preview with `GIT_DIR`, `GIT_WORK_TREE`, and `GIT_INDEX_FILE` naming it, for example `env GIT_DIR="$OTHER/.git" GIT_WORK_TREE="$OTHER" GIT_INDEX_FILE="$OTHER/.git/index" node dist/plugin.mjs preview --repo "$ROOT" --json`. `root` and `sources` still come from `$ROOT`. For MCP, pass `--env GIT_DIR --env GIT_WORK_TREE --env GIT_INDEX_FILE` to `mcp-call.mjs`.
+- **Working tree changes mid-collection.** Put a `git` wrapper first on `PATH` that runs the real Git and then, for a command containing `--raw`, runs `git checkout -- src/stats.ts` in the `division` fixture. Preview exits `2` with `Working tree changed during collection; retry the preview.`
 - **MCP entry.** Write `[{"tool":"tracecheck_preview","arguments":{}}]` to `$RUN/calls.json` and run `node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"`. The record `01-tracecheck_preview.json` has `isError: false` and `structuredContent.snapshot` equal to the CLI snapshot for the same fixture, settings, and task.
 
 ## Gotchas
 
 - The snapshot hashes task and context. Passing `--task` to one run and not the other yields different snapshots by design.
+- Git subprocesses drop `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and the other repository-local variables from `git rev-parse --local-env-vars` except the configuration ones, so a caller's hook environment cannot redirect collection.
 - Untracked files are ignored unless `--include-untracked` or `includeUntracked: true` is passed.
 - `preview --json` prints full source content. Treat the stdout file as source-bearing evidence.
 - The MCP server bound with `--repo` rejects a different `repo` argument; an unbound server requires `repo` on every collection call.
