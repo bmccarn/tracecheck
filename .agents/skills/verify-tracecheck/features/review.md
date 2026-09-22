@@ -12,6 +12,7 @@ Review collects the same scope as preview, sends each nonempty packet to Jev wit
 - `review-sarif` writes supported findings as SARIF 2.1.0 with `--sarif FILE`: one rule per check family with a decision, one result per `supported` decision, and counts of the omitted decisions in run properties.
 - `review-mcp` runs `tracecheck_review` with a preview snapshot and caches the report for repeated calls. A cache hit collects once and makes no provider request.
 - `review-stale` rejects a snapshot when the repository changed after preview.
+- `review-progress` reports progress while a review runs: the CLI prints `Tracecheck progress: ...` lines to stderr unless `--quiet` is set, and `tracecheck_review` sends `notifications/progress` when the call carries a progress token. Progress rises by one per collection phase, the plan, each finished provider request, the repository check, and completion; every notification after the plan carries the same `total`, and the last equals it.
 - `compare-history` classifies findings across two saved reports with `compare`.
 
 ## How to get to it (user POV)
@@ -36,6 +37,7 @@ Preconditions:
 - **Stale snapshot.** In one calls file, run `tracecheck_preview`, then a step `{"run":["bash","-c","echo '// edit' >> $ROOT/decode.ts"]}`, then `tracecheck_review` with `"$snapshot"`. The review record has `isError: true` with `Repository context changed since preview`. No key is needed; the check runs before inference.
 - **Previous evaluation without a quality result.** Use `node $S/fixture-repo.mjs blank-packet`, then run `tracecheck_preview` and `tracecheck_review` with `"$snapshot"` and any saved `report.quality` as `previousEvaluation`. No provider request is made, `report.quality` is absent, and `report.limitations` includes `Previous evaluation was not compared because this review produced no quality result.`
 - **Compare.** Save two reports with `--out`, then run `$S/capture.sh "$RUN" compare -- node dist/plugin.mjs compare --previous "$RUN/report-1.json" --current "$RUN/report-2.json"`. Stdout lists each earlier supported finding with a state, then each finding supported only in the current report as `newly_supported`; no state claims a verified fix. Model order does not affect compatibility.
+- **Progress.** Start `$S/stand-in-provider.mjs --latency-ms 1000` with `hub` and create `node $S/fixture-repo.mjs multi-packet-large`. Run the CLI review twice with `TYPESAFE_API_KEY=placeholder` and `TYPESAFE_BASE_URL=http://127.0.0.1:<port>`, once plain and once with `--quiet`. The plain `.stderr` lists four collection phases, `Sending N provider requests`, `Completed provider request i of N` for i from 1 to N, `Checking that the repository did not change`, and `Review complete`; the quiet `.stderr` is empty, and the two `.stdout` files are identical. Over MCP, add `--progress` to `mcp-call.mjs`: the review record's `progress` array rises by one from 1 to its `total`, and the `Completed provider request` entries equal `report.usage.requests` plus any failed requests.
 
 ## Gotchas
 

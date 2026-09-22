@@ -1,5 +1,5 @@
 import { verify, verificationInputSchema, verificationOutputSchema } from './verify.js';
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, type ServerContext } from '@modelcontextprotocol/server';
 import { StdioServerTransport } from '@modelcontextprotocol/server/stdio';
 import { z } from 'zod';
 import { realpath } from 'node:fs/promises';
@@ -12,6 +12,7 @@ import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.
 import { reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { deadline } from './deadline.js';
+import { ReviewProgress } from './progress.js';
 import { releaseVersion } from './version.js';
 
 const CACHE_LIMIT = 16;
@@ -36,6 +37,20 @@ export class ExpiringCache<V> {
     if (!this.entries.delete(key) && this.entries.size >= this.limit) this.entries.delete(this.entries.keys().next().value!);
     this.entries.set(key, { expires: now + this.ttlMs, value });
   }
+}
+
+/**
+ * Review progress for a request that carries a progress token, or undefined without one. Notifications go out in
+ * order, and a failed notification never fails the review. `sent` settles once every notification so far was written.
+ */
+function progressFor(ctx: ServerContext) {
+  const progressToken = ctx.mcpReq._meta?.progressToken;
+  if (progressToken === undefined) return undefined;
+  let sent = Promise.resolve();
+  const progress = new ReviewProgress(update => {
+    sent = sent.then(() => ctx.mcpReq.notify({ method: 'notifications/progress', params: { progressToken, ...update } })).catch(() => {});
+  });
+  return { review: progress, sent: () => sent };
 }
 
 export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSignal) => TypedEvaluator) {
@@ -98,13 +113,14 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     outputSchema: z.object({ cached: z.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
+    const progress = progressFor(ctx);
     const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
     const { reviewTimeoutMs, request: collectionRequest } = effective;
     const signal = AbortSignal.any([ctx.mcpReq.signal,
       deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)]);
     const discovery = previewScopes.get(args.snapshot);
     if (!discovery) throw new Error('Preview snapshot is unknown or expired. Run tracecheck_preview again.');
-    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal });
+    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal, onPhase: progress?.review.phase });
     if (plan.snapshot !== args.snapshot) throw new Error('Repository context changed since preview. Run tracecheck_preview again.');
     const settings = jevSettings(process.env, effective.provider);
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
@@ -112,16 +128,20 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     let report = cache.get(key);
     const cached = report !== undefined;
     if (!report) {
-      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal, concurrency: settings.concurrency });
+      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }),
+        { signal, concurrency: settings.concurrency, onProgress: progress?.review.requests });
       signal.throwIfAborted();
+      progress?.review.checking();
       const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
       if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Preview and review again.');
       // A retry must reach the provider again rather than replay a review that a failed request left incomplete.
       if (!isIncomplete(report)) cache.set(key, report);
+      progress?.review.finished();
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
     const output = { cached, report: compared };
+    await progress?.sent();
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
   });
   return server;

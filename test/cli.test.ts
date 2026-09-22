@@ -105,6 +105,31 @@ test('review writes one SARIF result per supported finding', async t => {
   assert.deepEqual(run.properties.omittedDecisions, { uncertain: 1, needsContext: 0, notSupported: 0 });
 });
 
+test('review prints progress to stderr, leaves stdout unchanged, and --quiet silences it', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await mkdir(join(repo.root, 'changes'));
+  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  repo.git('add', '.');
+  const jev = await jevServer(t);
+  const loud = await cli(['review', '--repo', repo.root], jev.env);
+  assert.notEqual(loud.code, 2, loud.stderr);
+  const requests = jev.requests();
+  assert.equal(requests, 2);
+  assert.deepEqual(loud.stderr.trimEnd().split('\n'), ['Listing changed files', 'Reading changed files', 'Indexing imports',
+    'Assembling change packets', 'Sending 2 provider requests', 'Completed provider request 1 of 2', 'Completed provider request 2 of 2',
+    'Checking that the repository did not change', 'Review complete'].map(message => `Tracecheck progress: ${message}`));
+
+  const quiet = await cli(['review', '--repo', repo.root, '--quiet'], jev.env);
+  assert.equal(quiet.code, loud.code, quiet.stderr);
+  assert.equal(jev.requests(), 2 * requests);
+  assert.equal(quiet.stderr, '');
+  assert.equal(loud.stdout, quiet.stdout);
+  const json = await cli(['review', '--repo', repo.root, '--json'], jev.env);
+  assert.equal(reportSchema.parse(JSON.parse(json.stdout)).usage.requests, requests);
+  assert.match(json.stderr, /^Tracecheck progress: Review complete$/m);
+});
+
 test('--previous accepts a review report or an assess evaluation, even for a multi-packet review', async t => {
   const repo = await repository();
   t.after(repo.cleanup);
