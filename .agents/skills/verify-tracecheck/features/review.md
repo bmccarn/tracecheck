@@ -7,8 +7,8 @@ Review collects the same scope as preview, sends each nonempty packet to Jev, an
 - `review-cli` runs `review` and sets the exit code from the report status.
 - `review-decisions` returns a decision per candidate with `status` (`supported`, `not_supported`, `uncertain`, `needs_context`) and `impact`.
 - `review-quality` returns `quality` for one packet or `packetQualities` for several.
-- `review-previous` compares with a previous single-packet report via `--previous` or `previousEvaluation`.
-- `review-mcp` runs `tracecheck_review` with a preview snapshot and caches the report for repeated calls.
+- `review-previous` compares with a previous single-packet report via `--previous` or `previousEvaluation`. A previous evaluation that cannot be compared adds a `Previous evaluation was not compared because ...` limitation.
+- `review-mcp` runs `tracecheck_review` with a preview snapshot and caches the report for repeated calls. A cache hit collects once and makes no provider request.
 - `review-stale` rejects a snapshot when the repository changed after preview.
 - `compare-history` classifies findings across two saved reports with `compare`.
 
@@ -27,9 +27,10 @@ Preconditions:
 
 - **CLI review.** Run `$S/capture.sh "$RUN" review -- node dist/plugin.mjs review --repo "$ROOT" --json --out "$RUN/report.json"`. The exit code matches `status`: `1` for `needs_attention`, `3` for `inconclusive`, `0` for `no_findings`. `jq '{status, models, usage, decisions: [.decisions[] | {check, status, impact}], metrics: (.quality.metrics | length)}' "$RUN/report.json"` shows one `unhandled-json` decision and 19 metrics.
 - **Human output.** Run `$S/capture.sh "$RUN" review-md -- node dist/plugin.mjs review --repo "$ROOT"`. Stdout is a Markdown report with a quality table and a section per decision.
-- **MCP review and cache.** Write `[{"tool":"tracecheck_preview","arguments":{}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}}]` and run it with `mcp-call.mjs --repo "$ROOT"`. The first review has `structuredContent.cached: false`; the second has `cached: true` and the same `report.id`.
+- **MCP review and cache.** Write `[{"tool":"tracecheck_preview","arguments":{}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}}]` and run it with `mcp-call.mjs --repo "$ROOT"`. The first review has `structuredContent.cached: false`; the second has `cached: true` and the same `report.id`. To count collections, put a `git` wrapper that appends a line to a log first on `PATH` and add `run` steps that append a marker line to the log between calls. Count lines between markers: a miss collects twice (before and after inference), a hit once.
 - **Stale snapshot.** In one calls file, run `tracecheck_preview`, then a step `{"run":["bash","-c","echo '// edit' >> $ROOT/decode.ts"]}`, then `tracecheck_review` with `"$snapshot"`. The review record has `isError: true` with `Repository context changed since preview`. No key is needed; the check runs before inference.
-- **Compare.** Save two reports with `--out`, then run `$S/capture.sh "$RUN" compare -- node dist/plugin.mjs compare --previous "$RUN/report-1.json" --current "$RUN/report-2.json"`. Stdout lists each earlier finding with a state; no state claims a verified fix.
+- **Previous evaluation without a quality result.** Use `node $S/fixture-repo.mjs blank-packet`, then run `tracecheck_preview` and `tracecheck_review` with `"$snapshot"` and any saved `report.quality` as `previousEvaluation`. No provider request is made, `report.quality` is absent, and `report.limitations` includes `Previous evaluation was not compared because this review produced no quality result.`
+- **Compare.** Save two reports with `--out`, then run `$S/capture.sh "$RUN" compare -- node dist/plugin.mjs compare --previous "$RUN/report-1.json" --current "$RUN/report-2.json"`. Stdout lists each earlier supported finding with a state, then each finding supported only in the current report as `newly_supported`; no state claims a verified fix. Model order does not affect compatibility.
 
 ## Gotchas
 

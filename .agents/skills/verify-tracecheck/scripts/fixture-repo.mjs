@@ -51,6 +51,12 @@ const scenarios = {
     },
     change: { 'src/app.tsx': "import { scale } from './lib.mjs';\nimport { offset } from './legacy.cjs';\nimport { label } from './widgets';\nimport logo from './logo.png';\nimport './app.css';\n\nexport function size(value: number) {\n  return `${label}=${value / scale + offset} ${logo}`;\n}\n" },
   },
+  'blank-packet': {
+    description: 'A new whitespace-only file is staged. Expect one packet with no source evidence, no provider request, and no quality result.',
+    baseline: { 'index.ts': 'export const answer = 42;\n' },
+    change: { 'blank.ts': '\n\n' },
+    stage: ['blank.ts'],
+  },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },
@@ -86,6 +92,7 @@ try {
   git('commit', '-q', '-m', 'Fixture baseline');
   if (scenario.move) git('mv', ...scenario.move);
   write(scenario.change);
+  if (scenario.stage) git('add', '--', ...scenario.stage);
   const changed = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', env: gitEnv }).trim().split('\n').filter(Boolean);
   console.log(JSON.stringify({ scenario: scenarioName, root, description: scenario.description, changed }, null, 2));
 } catch (error) {

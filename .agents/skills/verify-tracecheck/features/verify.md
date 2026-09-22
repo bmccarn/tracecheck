@@ -7,7 +7,7 @@ Verify judges one defect hypothesis the caller selected, against a contract and 
 - `verify-supplied` judges caller-supplied evidence with `provenance: caller_supplied`.
 - `verify-local` checks excerpts against a repository and reports `provenance: local_files_checked`.
 - `verify-anchor` rejects a target quote or line range that does not match the evidence before any provider call.
-- `verify-guards` rejects duplicate IDs, oversized evidence, absolute or `..` paths, and credential-shaped content before inference.
+- `verify-guards` rejects duplicate IDs, evidence over the UTF-8 byte budget, absolute or `..` paths, and credential-shaped content before inference.
 - `verify-mcp` returns the same output from `tracecheck_verify`.
 
 ## How to get to it (user POV)
@@ -36,5 +36,5 @@ Preconditions:
 ## Gotchas
 
 - `startLine` is the original line number of the excerpt's first line, and `target.start`/`end` are original line numbers, not offsets into the excerpt.
-- The evidence budget is 60,000 characters across all excerpts and at most 12 excerpts.
+- The evidence budget is 60,000 UTF-8 bytes across all excerpts and at most 12 excerpts. Multibyte text counts every byte: 25,000 CJK characters are 75,000 bytes and fail locally with `Trim each excerpt`, before any provider request.
 - With a server bound by `--repo`, a different `repo` argument is rejected.

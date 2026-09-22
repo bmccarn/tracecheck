@@ -6,6 +6,8 @@ import { reportSchema } from './schema.js';
 import { review } from './review.js';
 import { assertSafeOutbound, readSource } from './safety.js';
 
+/** UTF-8 bytes of evidence content one verification may send; request preflights are also byte based. */
+const MAX_EVIDENCE_BYTES = 60_000;
 const evidenceSchema = z.object({
   id: z.string().min(1).max(80), path: z.string().min(1).max(1000),
   startLine: z.number().int().positive(), content: z.string().min(1).max(60_000),
@@ -31,7 +33,10 @@ export type VerificationInput = z.input<typeof verificationInputSchema>;
 export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, signal?: AbortSignal) {
   const input = verificationInputSchema.parse(raw);
   assertSafeOutbound(input);
-  if (input.evidence.reduce((n, item) => n + item.content.length, 0) > 60_000) throw new Error('Evidence exceeds the 60,000 character budget.');
+  const evidenceBytes = input.evidence.reduce((n, item) => n + Buffer.byteLength(item.content), 0);
+  if (evidenceBytes > MAX_EVIDENCE_BYTES) {
+    throw new Error(`Evidence is ${evidenceBytes} bytes of UTF-8 and exceeds the ${MAX_EVIDENCE_BYTES}-byte budget. Trim each excerpt to the lines that decide the hypothesis, then verify again.`);
+  }
   if (new Set(input.evidence.map(item => item.id)).size !== input.evidence.length) throw new Error('Evidence IDs must be unique.');
   const target = input.evidence.find(item => item.id === input.target.evidenceId);
   if (!target) throw new Error('Target evidence is missing.');

@@ -3,10 +3,24 @@ import assert from 'node:assert/strict';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
 import { resolve, join } from 'node:path';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { z } from 'zod';
-import { createServer } from '../src/mcp.js';
+import { createServer, ExpiringCache } from '../src/mcp.js';
+import { qualityEvaluationSchema } from '../src/quality.js';
+import type { TypedEvaluator } from '../src/domain.js';
 import { repository, typedFixture } from './helpers.js';
+
+async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'tracecheck-test', version: '1' });
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  return client;
+}
+
+const fixtureEvaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
 
 test('MCP v2 stdio handshake, schemas, preview and stale-snapshot rejection', async t => {
   const repo = await repository(); t.after(repo.cleanup);
@@ -82,4 +96,109 @@ test('MCP validates bounded collection settings, pins preview discovery, and rev
   const repeated = z.object({ cached: z.boolean(), report: z.object({ limitations: z.array(z.string()) }) }).parse(compared.structuredContent);
   assert.equal(repeated.cached, true); assert.equal(calls, 2);
   assert.match(repeated.report.limitations.join('\n'), /single-packet quality result/);
+});
+
+test('expiring cache expires entries, purges them before insert, and evicts a live entry only for a new key', () => {
+  let now = 0;
+  const cache = new ExpiringCache<string>(2, 100, () => now);
+  cache.set('a', 'first'); now = 50; cache.set('b', 'second');
+  now = 60; cache.set('a', 'replaced');
+  assert.equal(cache.get('b'), 'second', 'replacing an existing key must not evict another live entry');
+  assert.equal(cache.get('a'), 'replaced');
+  cache.set('c', 'third');
+  assert.equal(cache.get('b'), undefined, 'a new key at the limit evicts the oldest live entry');
+  assert.deepEqual([cache.get('a'), cache.get('c')], ['replaced', 'third']);
+  now = 170;
+  assert.equal(cache.get('a'), undefined, 'entries expire after their lifetime');
+  cache.set('d', 'fourth'); now = 175; cache.set('e', 'fifth'); now = 180; cache.set('d', 'refreshed');
+  assert.deepEqual([cache.get('d'), cache.get('e')], ['refreshed', 'fifth']);
+  now = 277;
+  cache.set('f', 'sixth');
+  assert.equal(cache.get('d'), 'refreshed', 'an expired entry is purged instead of evicting a live one');
+  assert.deepEqual([cache.get('e'), cache.get('f')], [undefined, 'sixth']);
+});
+
+test('a cached MCP review collects once and still compares the supplied previous evaluation', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  const shim = await mkdtemp(join(tmpdir(), 'tracecheck-git-shim-'));
+  t.after(() => rm(shim, { recursive: true, force: true }));
+  const log = join(shim, 'calls.log');
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  await writeFile(join(shim, 'git'), `#!/bin/sh\necho >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${shim}:${path}`;
+  t.after(() => { process.env.PATH = path; });
+  const gitCalls = async () => (await readFile(log, 'utf8').catch(() => '')).length;
+  let calls = 0;
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(_state, questions) { calls++; return typedFixture(questions); } })));
+  const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
+  const snapshot = z.object({ snapshot: z.string() }).parse(preview.structuredContent).snapshot;
+  const beforeReview = await gitCalls();
+  const first = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
+  assert.ok(!first.isError, JSON.stringify(first));
+  const missCalls = await gitCalls() - beforeReview;
+  const previous = qualityEvaluationSchema.parse(z.object({ report: z.object({ quality: z.unknown() }) }).parse(first.structuredContent).report.quality);
+  previous.metrics.readability!.score = 4;
+  const second = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot, previousEvaluation: previous } });
+  assert.ok(!second.isError, JSON.stringify(second));
+  const hitCalls = await gitCalls() - beforeReview - missCalls;
+  const output = z.object({ cached: z.boolean(), report: z.object({ quality: qualityEvaluationSchema }) }).parse(second.structuredContent);
+  assert.equal(output.cached, true); assert.equal(calls, 1);
+  assert.ok(hitCalls > 0);
+  assert.equal(missCalls, 2 * hitCalls, 'a miss collects before and after inference; a hit collects once');
+  assert.equal(output.report.quality.comparison.find(row => row.metric === 'readability')!.delta, 4);
+});
+
+test('MCP assess uses the injected evaluator, keeps the JSON text block, and cancels with the client request', { timeout: 10_000 }, async t => {
+  let hang = false;
+  let evaluating!: () => void;
+  const started = new Promise<void>(done => { evaluating = done; });
+  let cancelled!: (reason: unknown) => void;
+  const aborted = new Promise<unknown>(done => { cancelled = done; });
+  const client = await connect(t, createServer(undefined, signal => ({ async evaluate(state, questions) {
+    if (!hang) return fixtureEvaluator.evaluate(state, questions);
+    evaluating();
+    return new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => { cancelled(signal.reason); reject(signal.reason); }, { once: true }));
+  } })));
+  const input = { task: 'Return the arithmetic mean.', files: [{ path: 'mean.py', content: 'def mean(xs):\n    return sum(xs) / len(xs)\n' }] };
+  const done = await client.callTool({ name: 'tracecheck_assess', arguments: input });
+  assert.ok(!done.isError, JSON.stringify(done));
+  const evaluation = qualityEvaluationSchema.parse(done.structuredContent);
+  assert.equal(evaluation.model, 'fixture-v1');
+  const text = z.array(z.object({ type: z.literal('text'), text: z.string() })).parse(done.content)[0]!.text;
+  assert.deepEqual(JSON.parse(text), done.structuredContent);
+
+  hang = true;
+  const controller = new AbortController();
+  const pending = client.callTool({ name: 'tracecheck_assess', arguments: input }, { signal: controller.signal });
+  await started;
+  controller.abort();
+  await assert.rejects(pending);
+  assert.ok(await aborted, 'the evaluator observes the cancellation');
+});
+
+test('MCP verify rejects multibyte evidence over the byte budget before inference', async t => {
+  let calls = 0;
+  const client = await connect(t, createServer(undefined, () => ({ async evaluate(state, questions) { calls++; return fixtureEvaluator.evaluate(state, questions); } })));
+  // 25,000 characters is within the per-excerpt character limit but is 75,000 UTF-8 bytes.
+  const content = `const ratio = total / count;\n// ${'界'.repeat(25_000)}`;
+  const response = await client.callTool({ name: 'tracecheck_verify', arguments: {
+    hypothesis: 'Division by zero when count is zero.', contract: 'ratio must be finite.',
+    evidence: [{ id: 'body', path: 'ratio.ts', startLine: 1, role: 'implementation', content }],
+    target: { evidenceId: 'body', start: 1, end: 1, quote: 'const ratio = total / count;' },
+  } });
+  assert.equal(response.isError, true);
+  assert.match(JSON.stringify(response.content), /75\d{3} bytes of UTF-8 and exceeds the 60000-byte budget\. Trim each excerpt/);
+  assert.equal(calls, 0);
+});
+
+test('previousEvaluation inputs advertise only the fields the comparison reads', async t => {
+  const client = await connect(t, createServer(undefined, () => fixtureEvaluator));
+  const { tools } = await client.listTools();
+  for (const name of ['tracecheck_assess', 'tracecheck_review']) {
+    const schema = z.object({ properties: z.object({ previousEvaluation: z.object({ properties: z.record(z.string(), z.unknown()) }) }) })
+      .parse(tools.find(tool => tool.name === name)!.inputSchema);
+    assert.deepEqual(Object.keys(schema.properties.previousEvaluation.properties).sort(), ['metrics', 'model', 'rubricVersion', 'scope'], name);
+  }
 });

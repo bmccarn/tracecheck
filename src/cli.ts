@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
 import { jevFromEnv } from './jev.js';
 import { reviewAll, render } from './review.js';
-import { assess, qualityInputSchema, qualityEvaluationSchema, renderQuality } from './quality.js';
+import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, renderQuality } from './quality.js';
 import { compare } from './history.js';
 import { reportSchema } from './schema.js';
 import { collectionOptionsSchema, reviewTimeoutSchema, type CollectionOptions } from './collection-options.js';
@@ -97,9 +97,12 @@ Use --task and --context to supply requirements and repository facts.`);
   }
   if (command === 'assess') {
     if (!values.input) throw new Error('assess requires --input context.json');
+    const controller = new AbortController();
+    process.once('SIGINT', () => controller.abort());
+    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(ASSESS_TIMEOUT_MS)]);
     const input = qualityInputSchema.parse(JSON.parse(await readFile(values.input, 'utf8')));
-    if (values.previous) input.previousEvaluation = qualityEvaluationSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
-    const evaluation = await assess(input, jevFromEnv());
+    if (values.previous) input.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
+    const evaluation = await assess(input, jevFromEnv(signal), signal);
     if (values.out) {
       await mkdir(dirname(resolve(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + '\n', { mode: 0o600 });

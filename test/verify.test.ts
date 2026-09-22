@@ -32,7 +32,7 @@ test('bad anchors, duplicates, oversized evidence and secrets fail before infere
   const duplicate = input(); duplicate.evidence.push(duplicate.evidence[0]!);
   await assert.rejects(verify(duplicate, never), /unique/);
   const big = input(); big.evidence.push({ id: 'big', path: 'b.py', startLine: 1, role: 'caller', content: 'x'.repeat(60000) });
-  await assert.rejects(verify(big, never), /character budget/);
+  await assert.rejects(verify(big, never), /byte budget\. Trim each excerpt/);
   const secret = input(); secret.contract = 'apiKey = "abcdefghijklmnopqrstuvwxyz123456"';
   await assert.rejects(verify(secret, never), /credential/);
 });

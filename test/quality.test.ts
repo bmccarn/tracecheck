@@ -207,3 +207,28 @@ test('publishes independent packet qualities without inventing an aggregate qual
   assert.deepEqual(states.map(state => state.sources.map(source => source.path)), [['example.ts'], ['later.ts']]);
   assert.equal(report.usage.requests, 2); assert.equal(report.usage.inputTokens, 200);
 });
+
+test('a supplied previous evaluation is compared or leaves a limitation saying why not', async () => {
+  const evaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+  const previous = (await reviewAll(planFor(), evaluator)).quality!;
+  const notCompared = (report: { limitations: string[] }) => report.limitations.filter(value => value.startsWith('Previous evaluation was not compared'));
+
+  const comparable = await reviewAll(planFor(), evaluator, { previousEvaluation: previous });
+  assert.equal(comparable.quality!.comparison.length, 19);
+  assert.deepEqual(notCompared(comparable), []);
+
+  const otherModel = await reviewAll(planFor(), evaluator, { previousEvaluation: { ...previous, model: 'other-model' } });
+  assert.equal(otherModel.quality!.comparison.length, 0);
+  assert.match(notCompared(otherModel).join('\n'), /scope, model, or rubric version differs/);
+
+  const empty = await reviewAll(planFor(' '), evaluator, { previousEvaluation: previous });
+  assert.equal(empty.quality, undefined);
+  assert.match(notCompared(empty).join('\n'), /produced no quality result/);
+
+  const plan = planFor();
+  plan.sources.push({ path: 'later.ts', content: 'export const later = 1;', role: 'changed' });
+  plan.packets.push({ id: 'later', changedPaths: ['later.ts'], sourcePaths: ['later.ts'], candidateIds: [], limitations: [] });
+  const multiple = await reviewAll(plan, evaluator, { previousEvaluation: previous });
+  assert.equal(multiple.packetQualities?.length, 2);
+  assert.match(notCompared(multiple).join('\n'), /multiple packet scopes/);
+});
