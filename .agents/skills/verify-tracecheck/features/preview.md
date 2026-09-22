@@ -8,7 +8,7 @@ Preview collects the working-tree change against a base commit without contactin
 - `preview-sources` collects changed files with baselines plus related dependencies, callers, and tests.
 - `preview-candidates` selects division (`/`, `%`, `/=`, `%=`), catch-handler, and `JSON.parse` candidates in changed JS/TS functions, or in the changed top-level statement for module-level code. It skips non-zero literal divisors, catch handlers with a top-level `throw`, and `JSON.parse` inside the protected block of a `try` with a handler.
 - `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, heuristic-discovery limitations, and TypeScript configuration that could not be used for path aliases. Every file omitted for a potential credential is named by path, and the value never appears in the output.
-- `preview-options` applies `--base`, `--include-untracked`, and the collection limits.
+- `preview-options` applies `--base`, `--include-untracked`, and the collection limits, over defaults from `.tracecheck.json` (see [project configuration](./project-configuration.md)).
 - `preview-mcp` returns the same scope from `tracecheck_preview` and registers the snapshot for review.
 
 ## How to get to it (user POV)
