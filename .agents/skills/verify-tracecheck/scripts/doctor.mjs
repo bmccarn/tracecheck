@@ -49,6 +49,7 @@ console.log(JSON.stringify({
   baseUrl,
   model: process.env.JEV_MODEL?.trim() || 'jev-latest (default)',
   requestTimeoutMs: process.env.JEV_TIMEOUT_MS?.trim() || '45000 (default)',
+  requestConcurrency: process.env.JEV_CONCURRENCY?.trim() || '4 (default)',
   checks,
 }, null, 2));
 process.exitCode = ready ? 0 : 1;

@@ -151,6 +151,32 @@ test('a cached MCP review collects once and still compares the supplied previous
   assert.equal(output.report.quality.comparison.find(row => row.metric === 'readability')!.delta, 4);
 });
 
+test('an MCP review left incomplete by a failed request is not cached, so the next call asks the provider again', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  // Nine changed files exceed the eight-file packet limit, so the review has two packets.
+  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, `ratio${index}.ts`), `export const ratio${index} = (a: number, b: number) => a / b;\n`);
+  let fail = true;
+  const packets: string[] = [];
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(state, questions) {
+    const packetId = (state as { packetId: string }).packetId;
+    packets.push(packetId);
+    if (fail && packetId === packets[0]) throw new Error('Jev request failed (HTTP 500); no successful review was recorded.');
+    return typedFixture(questions);
+  } })));
+  const preview = await client.callTool({ name: 'tracecheck_preview', arguments: { includeUntracked: true } });
+  const snapshot = z.object({ snapshot: z.string(), packets: z.array(z.unknown()).length(2) }).parse(preview.structuredContent).snapshot;
+  const output = z.object({ cached: z.boolean(), report: z.object({ status: z.string(), limitations: z.array(z.string()), usage: z.object({ requests: z.number() }) }) });
+  const incomplete = output.parse((await client.callTool({ name: 'tracecheck_review', arguments: { snapshot, includeUntracked: true } })).structuredContent);
+  assert.equal(incomplete.cached, false); assert.equal(incomplete.report.status, 'inconclusive'); assert.equal(incomplete.report.usage.requests, 1);
+  assert.equal(incomplete.report.limitations.filter(value => value.startsWith('Review incomplete for packet')).length, 1);
+  fail = false;
+  const retried = output.parse((await client.callTool({ name: 'tracecheck_review', arguments: { snapshot, includeUntracked: true } })).structuredContent);
+  assert.equal(retried.cached, false); assert.equal(retried.report.usage.requests, 2);
+  assert.ok(!retried.report.limitations.some(value => value.startsWith('Review incomplete')));
+  const repeated = output.parse((await client.callTool({ name: 'tracecheck_review', arguments: { snapshot, includeUntracked: true } })).structuredContent);
+  assert.equal(repeated.cached, true); assert.equal(packets.length, 4);
+});
+
 test('MCP assess uses the injected evaluator, keeps the JSON text block, and cancels with the client request', { timeout: 10_000 }, async t => {
   let hang = false;
   let evaluating!: () => void;

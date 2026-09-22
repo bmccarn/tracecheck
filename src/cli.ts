@@ -114,15 +114,17 @@ Preview and compare are local. Review, verify, and assess send bounded evidence 
 require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
 TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
 (default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
+Optional JEV_CONCURRENCY sets how many review requests run at once (default: 4, at most 16).
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
 Use --task and --context to supply requirements and repository facts.
 
 Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: base,
-includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model, and
-requestTimeoutMs. Flags override the file, and JEV_MODEL and JEV_TIMEOUT_MS override its
-model and requestTimeoutMs. The file cannot hold credentials or the endpoint.`);
+includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model,
+requestTimeoutMs, and requestConcurrency. Flags override the file, and JEV_MODEL,
+JEV_TIMEOUT_MS, and JEV_CONCURRENCY override its model, requestTimeoutMs, and
+requestConcurrency. The file cannot hold credentials or the endpoint.`);
     return;
   }
   if (command === 'mcp') {
@@ -184,7 +186,8 @@ model and requestTimeoutMs. The file cannot hold credentials or the endpoint.`);
   const reviewSignal = AbortSignal.any([controller.signal,
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)]);
   const previous = values.previous ? await readPrevious(values.previous) : undefined;
-  const report = await reviewAll(plan, new Jev({ ...jevSettings(process.env, settings.provider), signal: reviewSignal }), { signal: reviewSignal, previousEvaluation: previous });
+  const provider = jevSettings(process.env, settings.provider);
+  const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }), { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');

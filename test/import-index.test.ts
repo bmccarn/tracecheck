@@ -1,8 +1,10 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { promises as fsPromises } from 'node:fs';
+import { mkdir, mkdtemp, realpath, rm, stat, symlink, unlink, utimes, writeFile } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { buildImportIndex } from '../src/import-index.js';
 import { importsFor } from '../src/evidence.js';
 
@@ -275,4 +277,31 @@ test('stops a circular extends chain with a limitation', async t => {
   const result = await index(repo.root, paths);
   assert.deepEqual(result.imports.get('src/main.ts'), ['src/util.ts']);
   assert.match(result.limitations.join('\n'), /TypeScript config extends chain is circular or deeper than 8 levels \(base\.json -> \.\/tsconfig\.json\)/);
+});
+
+test('a slow file delays only its own read while the rest of the index streams past it', async t => {
+  const repo = await fixture(); t.after(repo.cleanup);
+  const paths = Array.from({ length: 48 }, (_value, index) => `file-${String(index).padStart(2, '0')}.ts`);
+  await Promise.all(paths.map(path => writeFile(join(repo.root, path), 'export const value = 1;')));
+  const root = await realpath(repo.root);
+  const open = fsPromises.open;
+  let others = 0;
+  let passedWhileSlow = -1;
+  let wake!: () => void;
+  const woken = new Promise<void>(resolve => { wake = resolve; });
+  // The slow read waits until every other file has been opened, or gives up after five seconds.
+  const fallback = setTimeout(wake, 5_000);
+  mock.method(fsPromises, 'open', async (path: string, ...rest: [number, number?]) => {
+    if (relative(root, path) === paths[0]) {
+      await woken;
+      passedWhileSlow = others;
+    } else if (++others === paths.length - 1) wake();
+    return open(path, ...rest);
+  });
+  syncBuiltinESMExports();
+  try {
+    const result = await index(repo.root, paths);
+    assert.equal(result.imports.size, paths.length);
+  } finally { clearTimeout(fallback); mock.restoreAll(); syncBuiltinESMExports(); }
+  assert.equal(passedWhileSlow, paths.length - 1);
 });

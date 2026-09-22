@@ -38,22 +38,26 @@ export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
 export const DEFAULT_MODEL = 'jev-latest';
 export const DEFAULT_TIMEOUT_MS = 45_000;
 const MAX_TIMEOUT_MS = 3_600_000;
+/** Review requests in flight at once unless JEV_CONCURRENCY or the configuration file sets another limit. */
+export const DEFAULT_CONCURRENCY = 4;
+const MAX_CONCURRENCY = 16;
 const MAX_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
-/** Environment variables that select the provider, credential, model, and request timeout. */
-export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS'] as const;
+/** Environment variables that select the provider, credential, model, request timeout, and request concurrency. */
+export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS', 'JEV_CONCURRENCY'] as const;
 
-export type JevSettings = { apiKey: string; baseUrl: string; model: string; timeoutMs: number };
-/** Model and request timeout from the project configuration file; the environment overrides both. */
-export type ConfiguredJevSettings = { model?: string; timeoutMs?: number };
+export type JevSettings = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; concurrency: number };
+/** Model, request timeout, and request concurrency from the project configuration file; the environment overrides each. */
+export type ConfiguredJevSettings = { model?: string; timeoutMs?: number; concurrency?: number };
 export const modelSchema = z.string().trim().min(1);
 export const requestTimeoutSchema = z.number().int().positive().max(MAX_TIMEOUT_MS);
+export const requestConcurrencySchema = z.number().int().positive().max(MAX_CONCURRENCY);
 
 /**
  * Resolves provider settings from the environment. A TypeSafe key takes precedence over an
  * OpenRouter key. OpenRouter serves TypeSafe's System One API, so only the base URL differs.
  * An explicit TYPESAFE_BASE_URL always wins. The credential and endpoint come only from the environment;
- * the configured model and request timeout apply when the environment does not set them.
+ * the configured model, request timeout, and request concurrency apply when the environment does not set them.
  */
 export function jevSettings(env: NodeJS.ProcessEnv = process.env, configured: ConfiguredJevSettings = {}): JevSettings {
   const typesafeKey = env.JEV_API_KEY?.trim() || env.TYPESAFE_API_KEY?.trim();
@@ -62,16 +66,17 @@ export function jevSettings(env: NodeJS.ProcessEnv = process.env, configured: Co
     apiKey: typesafeKey || openRouterKey || '',
     baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
     model: env.JEV_MODEL?.trim() || configured.model || DEFAULT_MODEL,
-    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS) ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    timeoutMs: wholeNumber(env.JEV_TIMEOUT_MS, MAX_TIMEOUT_MS, `JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`)
+      ?? configured.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+    concurrency: wholeNumber(env.JEV_CONCURRENCY, MAX_CONCURRENCY, `JEV_CONCURRENCY must be a whole number from 1 to ${MAX_CONCURRENCY}.`)
+      ?? configured.concurrency ?? DEFAULT_CONCURRENCY,
   };
 }
 
-function requestTimeout(value: string | undefined): number | undefined {
+function wholeNumber(value: string | undefined, max: number, message: string): number | undefined {
   const text = value?.trim();
   if (!text) return undefined;
-  if (!/^[1-9]\d*$/.test(text) || Number(text) > MAX_TIMEOUT_MS) {
-    throw new Error(`JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`);
-  }
+  if (!/^[1-9]\d*$/.test(text) || Number(text) > max) throw new Error(message);
   return Number(text);
 }
 
@@ -107,15 +112,17 @@ export class Jev implements Evaluator, TypedEvaluator {
     this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
   }
 
-  async evaluate(state: unknown, questions: Record<string, Choice>): Promise<Response>;
-  async evaluate(state: unknown, questions: Record<string, Question>): Promise<TypedResponse>;
-  async evaluate(state: unknown, questions: Record<string, Question>): Promise<TypedResponse> {
+  async evaluate(state: unknown, questions: Record<string, Choice>, signal?: AbortSignal): Promise<Response>;
+  async evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<TypedResponse>;
+  /** Aborting the client's signal or the per-call `request` signal cancels the request, including its retries. */
+  async evaluate(state: unknown, questions: Record<string, Question>, request?: AbortSignal): Promise<TypedResponse> {
     assertSafeOutbound(state);
     const body = JSON.stringify({ model: this.model, state, questions });
     if (Buffer.byteLength(body) > 180_000) throw new Error('Review request exceeds the local 180 KB request budget. Reduce the review scope.');
     const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
     const timeout = deadline(timeoutMs, `Jev request timed out after ${timeoutMs} ms. Set JEV_TIMEOUT_MS to allow more time.`);
-    const caller = this.options.signal;
+    const callers = [this.options.signal, request].filter(value => value !== undefined);
+    const caller = callers.length > 1 ? AbortSignal.any(callers) : callers[0];
     const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
     try {
       return await this.send(body, questions, signal);

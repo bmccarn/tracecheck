@@ -1,9 +1,12 @@
 import { CHECK_VERSION, POLICY_VERSION, hash } from './domain.js';
-import type { Answer, Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedEvaluator, TypedResponse } from './domain.js';
+import type { Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedAnswer, TypedEvaluator, TypedResponse } from './domain.js';
+import { DEFAULT_CONCURRENCY } from './jev.js';
 import { comparableQuality, compareQuality, qualityQuestions, transformQuality, renderQuality } from './quality.js';
 import type { PreviousEvaluation } from './quality.js';
 
 const MAX_PROVIDER_REQUEST_BYTES = 160_000;
+const MAX_CANDIDATES_PER_REQUEST = 10;
+const INCOMPLETE = 'Review incomplete for packet';
 const nonWhitespace = /\S/u;
 
 type PacketEvidence = {
@@ -99,15 +102,23 @@ function resolvePacketEvidence(plan: ReviewPlan): PacketEvidence[] {
   return evidence;
 }
 
-function requestBytes(state: unknown, questions: unknown): number {
-  return Buffer.byteLength(JSON.stringify({ state, questions }));
-}
+const jsonBytes = (value: unknown) => Buffer.byteLength(JSON.stringify(value));
 
-function assertRequestFits(state: unknown, questions: unknown): void {
-  const bytes = requestBytes(state, questions);
-  if (bytes > MAX_PROVIDER_REQUEST_BYTES) {
-    throw new Error(`Review request is ${bytes} bytes and exceeds the ${MAX_PROVIDER_REQUEST_BYTES}-byte safe provider limit; the supplied packet context cannot be evaluated without dropping evidence.`);
-  }
+/** Serialized byte sizes of list items or object members, excluding the commas between them. */
+type Members = { bytes: number; count: number };
+const NONE: Members = { bytes: 0, count: 0 };
+const plus = (left: Members, right: Members): Members => ({ bytes: left.bytes + right.bytes, count: left.count + right.count });
+const member = (key: string, question: Question): Members => ({ bytes: jsonBytes(key) + 1 + jsonBytes(question), count: 1 });
+
+/**
+ * Exact serialized size of `{ state, questions }` built from its parts. `base` is the size with no candidates in the
+ * state and an empty question object; a list of n items adds n - 1 commas. Each part is serialized once per packet.
+ */
+const requestBytes = (base: number, candidates: Members, questions: Members) =>
+  base + candidates.bytes + Math.max(candidates.count - 1, 0) + questions.bytes + Math.max(questions.count - 1, 0);
+
+function tooLarge(bytes: number): Error {
+  return new Error(`Review request is ${bytes} bytes and exceeds the ${MAX_PROVIDER_REQUEST_BYTES}-byte safe provider limit; the supplied packet context cannot be evaluated without dropping evidence.`);
 }
 
 type ReviewState = {
@@ -119,14 +130,14 @@ type ReviewState = {
   repositoryContext?: string;
 };
 
-type CandidateRequest<Q extends Question = Question> = {
+/** One provider request. `broadKeys` names the broad quality questions it carries. */
+type PlannedRequest = {
   evidence: PacketEvidence;
   state: ReviewState;
   candidates: Candidate[];
-  questions: Record<string, Q>;
+  questions: Record<string, Question>;
+  broadKeys: string[];
 };
-
-type TypedRequest = CandidateRequest & { broadKeys: string[] };
 
 function hasSourceEvidence(evidence: PacketEvidence): boolean {
   return evidence.sources.some(source => nonWhitespace.test(source.content) || nonWhitespace.test(source.before ?? ''));
@@ -143,59 +154,56 @@ function requestState(plan: ReviewPlan, evidence: PacketEvidence, candidates: Ca
     task: plan.task, repositoryContext: plan.repositoryContext };
 }
 
-function candidateQuestions(candidates: Candidate[]): Record<string, Choice> {
-  return Object.assign({}, ...candidates.map(questionsFor)) as Record<string, Choice>;
-}
-
-function planCandidateRequests(plan: ReviewPlan, evidence: PacketEvidence): CandidateRequest<Choice>[];
-function planCandidateRequests(plan: ReviewPlan, evidence: PacketEvidence, firstQuestions: Record<string, Question>): CandidateRequest[];
-function planCandidateRequests(plan: ReviewPlan, evidence: PacketEvidence, firstQuestions: Record<string, Question> = {}): CandidateRequest[] {
-  const requests: CandidateRequest[] = [];
+/**
+ * Splits one packet into requests within the provider limit, each with at most ten candidates. Broad quality questions
+ * share the first source-check request when they fit beside one candidate; otherwise they follow in as few requests as fit.
+ */
+function planPacket(plan: ReviewPlan, evidence: PacketEvidence, broad?: Record<string, Question>): PlannedRequest[] {
+  const base = jsonBytes({ state: requestState(plan, evidence, []), questions: {} });
+  const asked = evidence.candidates.map(questionsFor);
+  const sizes = evidence.candidates.map((candidate, index) => ({ candidate: { bytes: jsonBytes(candidate), count: 1 },
+    questions: Object.entries(asked[index]!).reduce((total, [key, question]) => plus(total, member(key, question)), NONE) }));
+  const broadEntries = Object.entries(broad ?? {}).map(([key, question]) => ({ key, question, size: member(key, question) }));
+  const broadSize = broadEntries.reduce((total, entry) => plus(total, entry.size), NONE);
+  const shared = broad !== undefined && sizes[0] !== undefined
+    && requestBytes(base, sizes[0].candidate, plus(broadSize, sizes[0].questions)) <= MAX_PROVIDER_REQUEST_BYTES;
+  const requests: PlannedRequest[] = [];
   for (let offset = 0; offset < evidence.candidates.length;) {
-    let end = Math.min(offset + 10, evidence.candidates.length);
-    let admitted = false;
-    while (end > offset) {
-      const candidates = evidence.candidates.slice(offset, end);
-      const questions = { ...(offset === 0 ? firstQuestions : {}), ...candidateQuestions(candidates) };
-      const state = requestState(plan, evidence, candidates);
-      if (requestBytes(state, questions) <= MAX_PROVIDER_REQUEST_BYTES) {
-        requests.push({ evidence, state, candidates, questions });
-        offset = end;
-        admitted = true;
+    const first = shared && offset === 0 ? broad : undefined;
+    let candidates = NONE;
+    let questions = first ? broadSize : NONE;
+    let end = offset;
+    for (const limit = Math.min(offset + MAX_CANDIDATES_PER_REQUEST, sizes.length); end < limit; end++) {
+      const bytes = requestBytes(base, plus(candidates, sizes[end]!.candidate), plus(questions, sizes[end]!.questions));
+      if (bytes > MAX_PROVIDER_REQUEST_BYTES) {
+        if (end === offset) throw tooLarge(bytes);
         break;
       }
-      end--;
+      candidates = plus(candidates, sizes[end]!.candidate);
+      questions = plus(questions, sizes[end]!.questions);
     }
-    if (!admitted) {
-      const candidate = evidence.candidates[offset]!;
-      const questions = { ...(offset === 0 ? firstQuestions : {}), ...candidateQuestions([candidate]) };
-      assertRequestFits(requestState(plan, evidence, [candidate]), questions);
-    }
+    const selected = evidence.candidates.slice(offset, end);
+    requests.push({ evidence, state: requestState(plan, evidence, selected), candidates: selected,
+      questions: Object.assign({}, first, ...asked.slice(offset, end)), broadKeys: first ? Object.keys(first) : [] });
+    offset = end;
   }
-  return requests;
-}
-
-function planBroadRequests(plan: ReviewPlan, evidence: PacketEvidence, questions: Record<string, Question>): TypedRequest[] {
-  const entries = Object.entries(questions);
-  const requests: TypedRequest[] = [];
-  for (let offset = 0; offset < entries.length;) {
-    let end = entries.length;
-    let admitted = false;
-    while (end > offset) {
-      const selected = Object.fromEntries(entries.slice(offset, end));
-      const state = requestState(plan, evidence, []);
-      if (requestBytes(state, selected) <= MAX_PROVIDER_REQUEST_BYTES) {
-        requests.push({ evidence, state, candidates: [], questions: selected, broadKeys: Object.keys(selected) });
-        offset = end;
-        admitted = true;
+  if (!broad || shared) return requests;
+  const state = requestState(plan, evidence, []);
+  for (let offset = 0; offset < broadEntries.length;) {
+    let questions = NONE;
+    let end = offset;
+    for (; end < broadEntries.length; end++) {
+      const bytes = requestBytes(base, NONE, plus(questions, broadEntries[end]!.size));
+      if (bytes > MAX_PROVIDER_REQUEST_BYTES) {
+        if (end === offset) throw tooLarge(bytes);
         break;
       }
-      end--;
+      questions = plus(questions, broadEntries[end]!.size);
     }
-    if (!admitted) {
-      const selected = Object.fromEntries(entries.slice(offset, offset + 1));
-      assertRequestFits(requestState(plan, evidence, []), selected);
-    }
+    const selected = broadEntries.slice(offset, end);
+    requests.push({ evidence, state, candidates: [], questions: Object.fromEntries(selected.map(entry => [entry.key, entry.question])),
+      broadKeys: selected.map(entry => entry.key) });
+    offset = end;
   }
   return requests;
 }
@@ -205,11 +213,11 @@ function reportStatus(decisions: Decision[], limitations: string[]): Report['sta
     : limitations.length || decisions.some(item => item.status !== 'not_supported') ? 'inconclusive' : 'no_findings';
 }
 
-function decisionsFrom(response: { answers: Record<string, Answer> }, candidates: Candidate[]): Decision[] {
+function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candidate[]): Decision[] {
   return candidates.map(candidate => {
-    const assessment = response.answers[`${candidate.id}_assessment`];
-    const impact = response.answers[`${candidate.id}_impact`];
-    if (!assessment || !impact) throw new Error('Missing Jev decision; review is incomplete.');
+    const assessment = answers[`${candidate.id}_assessment`];
+    const impact = answers[`${candidate.id}_impact`];
+    if (assessment?.type !== 'choice' || impact?.type !== 'choice') throw new Error(`Missing source-check decision for candidate ${candidate.id}; review is incomplete.`);
     const probability = assessment.probabilities[assessment.choice] ?? 0;
     const certain = assessment.confidence >= 0.6 && probability >= 0.8;
     const status = assessment.choice === 'needs_context' ? 'needs_context'
@@ -220,7 +228,6 @@ function decisionsFrom(response: { answers: Record<string, Answer> }, candidates
   });
 }
 
-
 function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], models: Set<string>, limitations: string[],
   usage: Report['usage']): Report {
   usage.elapsedMs = Date.now() - started;
@@ -229,117 +236,163 @@ function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], mod
     checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations), decisions, limitations, usage };
 }
 
-export async function review(plan: ReviewPlan, evaluator: Evaluator, signal?: AbortSignal): Promise<Report> {
-  const started = Date.now();
-  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
-  const requests = packets.filter(hasSourceEvidence).flatMap(evidence => planCandidateRequests(plan, evidence));
-  for (const request of requests) assertRequestFits(request.state, request.questions);
-  const decisions: Decision[] = [];
-  const models = new Set<string>();
-  const usage = { inputTokens: 0, outputTokens: 0, requests: 0, elapsedMs: 0 };
-  for (const request of requests) {
-    signal?.throwIfAborted();
-    const response = await evaluator.evaluate(request.state, request.questions);
-    models.add(response.model);
-    usage.inputTokens += response.usage.input_tokens;
-    usage.outputTokens += response.usage.output_tokens;
-    usage.requests++;
-    decisions.push(...decisionsFrom(response, request.candidates));
-  }
-  return reportFor(plan, started, decisions, models, unique([...plan.limitations, ...packets.flatMap(packet => packet.limitations)]), usage);
+type Outcome = { response: TypedResponse } | { error: unknown };
+
+/**
+ * Sends requests with at most `limit` in flight and returns their outcomes in plan order. Every call receives `signal`;
+ * an abort rejects with the signal's reason and starts no further request.
+ */
+async function evaluateAll(evaluator: TypedEvaluator, requests: PlannedRequest[], limit: number, signal?: AbortSignal): Promise<Outcome[]> {
+  const outcomes: Outcome[] = new Array(requests.length);
+  let next = 0;
+  const worker = async () => {
+    for (let index = next++; index < requests.length; index = next++) {
+      signal?.throwIfAborted();
+      const request = requests[index]!;
+      try {
+        outcomes[index] = { response: await evaluator.evaluate(request.state, request.questions, signal) };
+      } catch (error) {
+        signal?.throwIfAborted();
+        outcomes[index] = { error };
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, requests.length) }, worker));
+  return outcomes;
 }
 
-/** Broad quality review and source checks share a request only when all evidence and questions fit. */
-export async function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: { signal?: AbortSignal; previousEvaluation?: PreviousEvaluation } = {}): Promise<Report> {
+type Unevaluated = { reasons: Set<string>; candidates: Candidate[]; broad: boolean };
+type BroadResult = { model: string; answers: Record<string, TypedAnswer>; inputTokens: number; outputTokens: number; requests: number };
+
+/** True when a provider request failed, so the report's limitations name work that was not evaluated. */
+export function isIncomplete(report: Report): boolean {
+  return report.limitations.some(item => item.startsWith(`${INCOMPLETE} `));
+}
+
+export type ReviewOptions = {
+  signal?: AbortSignal;
+  /** Most provider requests in flight at once; defaults to DEFAULT_CONCURRENCY. */
+  concurrency?: number;
+};
+
+/**
+ * The review loop shared by verification and repository review. Requests run concurrently up to the limit, and their
+ * results are applied in plan order, so a report matches a sequential run apart from timings. A failed request leaves an
+ * inconclusive report that names the unevaluated work; when every request fails, the first failure is thrown. Aborting
+ * `signal` rejects the review and every in-flight request.
+ */
+async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: Record<string, Question> | undefined,
+  options: ReviewOptions & { previousEvaluation?: PreviousEvaluation }): Promise<Report> {
   const started = Date.now();
+  const { signal, concurrency = DEFAULT_CONCURRENCY } = options;
+  if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('Review concurrency must be a positive whole number.');
   const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
-  const broadQuestions = qualityQuestions();
-  const broadKeys = Object.keys(broadQuestions);
-  const requests: TypedRequest[] = [];
-  for (const evidence of packets) {
-    if (!hasSourceEvidence(evidence)) continue;
-    const first = evidence.candidates[0];
-    const sharedState = first && requestState(plan, evidence, [first]);
-    if (sharedState && requestBytes(sharedState, { ...broadQuestions, ...candidateQuestions([first]) }) <= MAX_PROVIDER_REQUEST_BYTES) {
-      requests.push(...planCandidateRequests(plan, evidence, broadQuestions).map((request, index) =>
-        ({ ...request, broadKeys: index === 0 ? broadKeys : [] })));
-    } else {
-      requests.push(...planCandidateRequests(plan, evidence).map(request => ({ ...request, broadKeys: [] })));
-      requests.push(...planBroadRequests(plan, evidence, broadQuestions));
-    }
-  }
-  for (const request of requests) assertRequestFits(request.state, request.questions);
-  for (const evidence of packets.filter(hasSourceEvidence)) {
-    const planned = requests.filter(request => request.evidence.packet.id === evidence.packet.id).flatMap(request => request.broadKeys);
-    assertUnique(planned, `broad quality question in packet ${evidence.packet.id}`);
-    if (planned.length !== broadKeys.length || planned.some(key => !broadQuestions[key])) {
-      throw new Error(`Internal review planning omitted a broad quality question for packet ${evidence.packet.id}.`);
-    }
-  }
+  const requests = packets.filter(hasSourceEvidence).flatMap(evidence => planPacket(plan, evidence, broad));
+  const outcomes = await evaluateAll(evaluator, requests, concurrency, signal);
+  signal?.throwIfAborted();
+
   const decisions: Decision[] = [];
   const models = new Set<string>();
   const usage = { inputTokens: 0, outputTokens: 0, requests: 0, elapsedMs: 0 };
-  const broadResponses = new Map<string, { model: string; answers: TypedResponse['answers']; inputTokens: number; outputTokens: number; requests: number }>();
-  for (const request of requests) {
-    options.signal?.throwIfAborted();
-    const response = await evaluator.evaluate(request.state, request.questions);
-    models.add(response.model);
-    usage.inputTokens += response.usage.input_tokens;
-    usage.outputTokens += response.usage.output_tokens;
-    usage.requests++;
-    if (request.candidates.length) {
-      const answers: Record<string, Answer> = {};
-      for (const key of Object.keys(candidateQuestions(request.candidates))) {
-        const answer = response.answers[key];
-        if (answer?.type !== 'choice') throw new Error(`Missing source-check decision: ${key}`);
-        answers[key] = answer;
-      }
-      decisions.push(...decisionsFrom({ answers }, request.candidates));
+  const broadResults = new Map<string, BroadResult>();
+  const unevaluated = new Map<string, Unevaluated>();
+  const leaveUnevaluated = (packetId: string, error: unknown, candidates: Candidate[], broadReview: boolean) => {
+    const missing = unevaluated.get(packetId) ?? { reasons: new Set<string>(), candidates: [], broad: false };
+    missing.reasons.add(error instanceof Error ? error.message : 'The evaluator failed without an error message.');
+    missing.candidates.push(...candidates);
+    if (broadReview) {
+      missing.broad = true;
+      broadResults.delete(packetId);
     }
-    if (request.broadKeys.length) {
-      const previous = broadResponses.get(request.evidence.packet.id);
-      if (previous && previous.model !== response.model) {
-        throw new Error(`Broad quality requests for packet ${request.evidence.packet.id} used different models; quality results cannot be merged.`);
-      }
-      const answers = previous?.answers ?? {};
+    unevaluated.set(packetId, missing);
+  };
+  let firstFailure: { error: unknown } | undefined;
+  let failures = 0;
+  for (const [index, request] of requests.entries()) {
+    const outcome = outcomes[index]!;
+    const packetId = request.evidence.packet.id;
+    let response: TypedResponse;
+    let decided: Decision[];
+    const answers: Record<string, TypedAnswer> = {};
+    try {
+      if ('error' in outcome) throw outcome.error;
+      response = outcome.response;
+      models.add(response.model);
+      usage.inputTokens += response.usage.input_tokens;
+      usage.outputTokens += response.usage.output_tokens;
+      usage.requests++;
+      decided = decisionsFrom(response.answers, request.candidates);
       for (const key of request.broadKeys) {
         const answer = response.answers[key];
         if (!answer) throw new Error(`Missing typed quality decision: ${key}`);
         answers[key] = answer;
       }
-      broadResponses.set(request.evidence.packet.id, { model: response.model, answers,
-        inputTokens: (previous?.inputTokens ?? 0) + response.usage.input_tokens,
-        outputTokens: (previous?.outputTokens ?? 0) + response.usage.output_tokens,
-        requests: (previous?.requests ?? 0) + 1 });
+    } catch (error) {
+      firstFailure ??= { error };
+      failures++;
+      leaveUnevaluated(packetId, error, request.candidates, request.broadKeys.length > 0);
+      continue;
     }
+    decisions.push(...decided);
+    if (!request.broadKeys.length || unevaluated.get(packetId)?.broad) continue;
+    const previous = broadResults.get(packetId);
+    if (previous && previous.model !== response.model) {
+      leaveUnevaluated(packetId, new Error(`Broad quality requests for packet ${packetId} used different models; quality results cannot be merged.`), [], true);
+      continue;
+    }
+    broadResults.set(packetId, { model: response.model, answers: { ...previous?.answers, ...answers },
+      inputTokens: (previous?.inputTokens ?? 0) + response.usage.input_tokens,
+      outputTokens: (previous?.outputTokens ?? 0) + response.usage.output_tokens,
+      requests: (previous?.requests ?? 0) + 1 });
   }
-  const limitations = unique([...plan.limitations, ...packets.flatMap(packet => packet.limitations)]).map(value => {
+  // With no completed request there is nothing to keep, and the provider's error is the useful result.
+  if (firstFailure && failures === requests.length) throw firstFailure.error;
+
+  const incomplete = packets.flatMap(({ packet }) => {
+    const missing = unevaluated.get(packet.id);
+    if (!missing) return [];
+    const work = [...missing.candidates.map(candidate => `source check ${candidate.id} (${candidate.check} at ${candidate.path}:${candidate.range.start}-${candidate.range.end})`),
+      ...(missing.broad ? ['the broad quality review'] : [])];
+    return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(', ') || 'no changed paths'}): ${[...missing.reasons].join(' ')} Not evaluated: ${work.join('; ')}.`];
+  });
+  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap(packet => packet.limitations)]).map(value => {
     const match = /^No supported check candidates were found in packet (.+); no semantic review was performed\.$/.exec(value);
-    if (!match || !broadResponses.has(match[1]!)) return value;
+    if (!match || !broadResults.has(match[1]!)) return value;
     return `No source-anchored check candidates were found in packet ${match[1]}; only the broad quality review was performed.`;
   });
   const report = reportFor(plan, started, decisions, models, limitations, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
-    const broad = broadResponses.get(packet.id);
-    if (!broad) return [];
-    const evaluation = transformQuality({ model: broad.model, answers: broad.answers,
-      usage: { input_tokens: broad.inputTokens, output_tokens: broad.outputTokens } },
+    const result = broadResults.get(packet.id);
+    if (!result) return [];
+    const evaluation = transformQuality({ model: result.model, answers: result.answers,
+      usage: { input_tokens: result.inputTokens, output_tokens: result.outputTokens } },
     packets.length === 1 ? hash([plan.root, plan.base]) : hash([plan.root, plan.base, packet.changedPaths]),
     plan.snapshot);
-    evaluation.usage.requests = broad.requests;
+    evaluation.usage.requests = result.requests;
     evaluation.usage.elapsedMs = Date.now() - started;
     return [{ packetId: packet.id, changedPaths: [...packet.changedPaths], evaluation }];
   });
   if (packets.length === 1 && packetQualities.length) report.quality = packetQualities[0]!.evaluation;
   else if (packetQualities.length) report.packetQualities = packetQualities;
-  report.status = reportStatus(report.decisions, report.limitations);
   if (packetQualities.some(({ evaluation }) => evaluation.priorities.length)) report.status = 'needs_attention';
   else if (report.status === 'no_findings' && packetQualities.some(({ evaluation }) =>
     Object.values(evaluation.metrics).some(metric => ['uncertain', 'insufficient_context'].includes(metric.status)))) report.status = 'inconclusive';
+  // Unevaluated work is never reported as a finished review, even when completed requests found issues.
+  if (incomplete.length) report.status = 'inconclusive';
   applyPreviousEvaluation(report, options.previousEvaluation);
   report.usage.elapsedMs = Date.now() - started;
   report.id = hash([report.id, report.quality ?? report.packetQualities]).slice(0, 24);
   return report;
+}
+
+/** Source checks only, as used by verification and the accuracy benchmark. */
+export function review(plan: ReviewPlan, evaluator: Evaluator, options: ReviewOptions = {}): Promise<Report> {
+  return orchestrate(plan, evaluator, undefined, options);
+}
+
+/** Source checks plus a broad quality review per packet. */
+export function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: ReviewOptions & { previousEvaluation?: PreviousEvaluation } = {}): Promise<Report> {
+  return orchestrate(plan, evaluator, qualityQuestions(), options);
 }
 
 /**

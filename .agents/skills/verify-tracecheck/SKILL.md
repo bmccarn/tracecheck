@@ -75,5 +75,6 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 | `doctor.mjs` | `node $S/doctor.mjs` | Readiness JSON; exit 1 when not ready |
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
 | `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |
+| `stand-in-provider.mjs` | `node $S/stand-in-provider.mjs [--port N] [--latency-ms N] [--fail-path REGEX] [--fail-times N]`, started with `hub` | A loopback System One stand-in with fixed latency; one JSON log line per request with its packet and in-flight count |
 | `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored |
 | `scripts/build.mjs --check` | `node scripts/build.mjs --check` (repository script) | Exit 1 when `dist/plugin.mjs` differs from a fresh build; `dist/` is untouched |

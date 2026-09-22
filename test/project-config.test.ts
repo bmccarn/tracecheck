@@ -25,7 +25,7 @@ test('configuration file errors name the offending key without quoting values', 
 test('flags override the configuration file per key, and the environment overrides its provider settings', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, '.tracecheck.json'), JSON.stringify({ base: 'main', includeUntracked: true, task: 'File task',
-    collection: { maxIndexFiles: 7, indexTimeoutMs: 5_000 }, reviewTimeoutMs: 60_000, model: 'jev-file', requestTimeoutMs: 9_000 }));
+    collection: { maxIndexFiles: 7, indexTimeoutMs: 5_000 }, reviewTimeoutMs: 60_000, model: 'jev-file', requestTimeoutMs: 9_000, requestConcurrency: 2 }));
   const fromFile = await resolveSettings(repo.root, {});
   assert.deepEqual({ ...fromFile.request, projectConfig: undefined }, { base: 'main', includeUntracked: true, task: 'File task',
     repositoryContext: undefined, collection: { maxIndexFiles: 7, indexTimeoutMs: 5_000 }, projectConfig: undefined });
@@ -35,9 +35,10 @@ test('flags override the configuration file per key, and the environment overrid
   assert.equal(flagged.request.base, 'HEAD'); assert.equal(flagged.request.includeUntracked, false); assert.equal(flagged.request.task, 'Flag task');
   assert.deepEqual(flagged.request.collection, { maxIndexFiles: 2, indexTimeoutMs: 5_000 });
   assert.equal(flagged.reviewTimeoutMs, 1_000);
-  assert.deepEqual([jevSettings({}, fromFile.provider).model, jevSettings({}, fromFile.provider).timeoutMs], ['jev-file', 9_000]);
-  const environment = jevSettings({ JEV_MODEL: 'jev-env', JEV_TIMEOUT_MS: '3000' }, fromFile.provider);
-  assert.deepEqual([environment.model, environment.timeoutMs], ['jev-env', 3_000]);
+  const file = jevSettings({}, fromFile.provider);
+  assert.deepEqual([file.model, file.timeoutMs, file.concurrency], ['jev-file', 9_000, 2]);
+  const environment = jevSettings({ JEV_MODEL: 'jev-env', JEV_TIMEOUT_MS: '3000', JEV_CONCURRENCY: '6' }, fromFile.provider);
+  assert.deepEqual([environment.model, environment.timeoutMs, environment.concurrency], ['jev-env', 3_000, 6]);
 });
 
 test('MCP preview applies the bound repository configuration and review rejects a snapshot after the file changes', async t => {

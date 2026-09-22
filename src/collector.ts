@@ -59,6 +59,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   }
   const untracked = (await readGitRecords(root, ['ls-files', '--others', '--exclude-standard', '-z'], signal, 'Git untracked-file listing failed')).filter(Boolean);
   const tracked = (await readGitRecords(root, ['ls-files', '-z'], signal, 'Git tracked-file listing failed')).filter(Boolean);
+  const untrackedPaths = new Set(untracked);
 
   const known = new Set([...tracked, ...(options.includeUntracked ? untracked : [])]);
   const changePaths = [...new Set([...changed, ...(options.includeUntracked ? untracked : [])])].sort();
@@ -87,6 +88,20 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     sourceIssues.set(path, issues);
   };
   const issueMessages = (path: string) => (sourceIssues.get(path) ?? []).map(reason => `${reason}: ${path}`);
+  // Each file is read and screened at most once per collection. A failure is kept too, so every later use reports it.
+  const reads = new Map<string, Promise<string>>();
+  const screenedRead = (path: string): Promise<string> => {
+    let read = reads.get(path);
+    if (!read) {
+      read = readSource(root, path, signal).then(raw => {
+        if (raw.includes('\0')) throw new Error('Binary file');
+        if (hasSecret(raw)) throw new Error('File with a potential credential');
+        return raw;
+      });
+      reads.set(path, read);
+    }
+    return read;
+  };
 
   async function load(path: string, role: Source['role'], targets?: Range[], change?: GitChange, baseline?: string): Promise<Source | undefined> {
     const existing = loaded.get(path);
@@ -100,16 +115,14 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       return undefined;
     }
     try {
-      const raw = await readSource(root, path, signal);
-      if (raw.includes('\0')) throw new Error('Binary file');
-      if (hasSecret(raw)) throw new Error('File with a potential credential');
+      const raw = await screenedRead(path);
       let before = baseline;
       let ranges = targets ?? [{ start: 1, end: 80 }];
       let beforeRanges = ranges;
       if (role === 'changed') {
         if (change?.error) throw new Error(change.error);
         if (before && hasSecret(before)) throw new Error('Base version with a potential credential');
-        ranges = untracked.includes(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
+        ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
         if (change?.noHunks === 'diff-suppressed') noteSource(path, 'Git reported no textual diff (binary or -diff attribute); changed lines are unknown');
@@ -135,6 +148,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       }
       const names = role === 'changed' ? definedSymbols(raw) : undefined;
       loaded.set(path, { source, names });
+      // A loaded changed file is never read again, so its full text need not stay in memory.
+      if (role === 'changed') reads.delete(path);
       if (!source.evidence!.complete) noteSource(path, 'Focused excerpts only; omitted lines are not reviewed');
       if (role === 'changed' && !ranges.every(range => current.ranges.some(captured => captured.start <= range.start && captured.end >= range.end))) {
         noteSource(path, 'Changed ranges outside captured evidence omitted');
@@ -172,9 +187,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       continue;
     }
     try {
-      const raw = await readSource(root, path, signal);
-      if (raw.includes('\0')) throw new Error('Binary file');
-      if (hasSecret(raw)) throw new Error('File with a potential credential');
+      await screenedRead(path);
       eligibleChanges.push(path);
     } catch (error) {
       signal.throwIfAborted();
@@ -210,6 +223,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   for (const paths of conventionalTests.values()) paths.sort();
   const relatedByChange = new Map<string, Map<string, Exclude<Source['role'], 'changed'>>>();
   const supportNames = new Map<string, Set<string>>();
+  const supportTargets = new Map<string, Range[] | undefined>();
   for (const path of [...changedSourcePaths].sort()) {
     const related = new Map<string, Exclude<Source['role'], 'changed'>>();
     for (const candidate of index.reverse.get(path) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, isTest(candidate) ? 'test' : 'caller');
@@ -289,14 +303,15 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
         break;
       }
       attempted++;
-      let targets: Range[] | undefined;
-      try {
-        const relatedRaw = await readSource(root, relatedPath, signal);
-        if (!relatedRaw.includes('\0') && !hasSecret(relatedRaw)) {
-          const ranges = symbolRanges(relatedRaw, [...(supportNames.get(relatedPath) ?? [])]);
+      // Support targets depend only on the file and the changed symbols, so each file is parsed once for every packet.
+      let targets = supportTargets.get(relatedPath);
+      if (!supportTargets.has(relatedPath)) {
+        try {
+          const ranges = symbolRanges(await screenedRead(relatedPath), [...(supportNames.get(relatedPath) ?? [])]);
           targets = ranges.length ? ranges : undefined;
-        }
-      } catch { signal.throwIfAborted(); }
+        } catch { signal.throwIfAborted(); }
+        supportTargets.set(relatedPath, targets);
+      }
       const wasLoaded = loaded.has(relatedPath);
       const source = await load(relatedPath, role, targets);
       if (source) sourceByPath.set(relatedPath, source);

@@ -1,8 +1,10 @@
-import { test } from 'node:test';
+import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { promises as fsPromises } from 'node:fs';
 import { chmod, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { syncBuiltinESMExports } from 'node:module';
+import { join, relative } from 'node:path';
 import { collect } from '../src/collector.js';
 import { resolveSettings } from '../src/project-config.js';
 import { findCandidates } from '../src/checks.js';
@@ -281,6 +283,36 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   assert.match(limitations, /Unsupported or generated file \(notes\.ts -> notes\.txt\)/);
   assert.match(limitations, /File with a potential credential omitted \(keys\.ts -> credentials\.ts\)/);
   assert.ok(!JSON.stringify(plan).includes(credential));
+});
+
+test('reads and screens each changed and supporting file once per collection', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const modules = Array.from({ length: 9 }, (_value, index) => `lib/m${index}.ts`);
+  const guarded = (index: number, guard: string) => `export function m${index}(a: number, b: number) {\n${guard}  return a / b;\n}\n`;
+  await mkdir(join(repo.root, 'lib'));
+  await writeFile(join(repo.root, 'app.ts'), modules.map((_path, index) => `import { m${index} } from './lib/m${index}.js';\n`).join('')
+    + `export const all = [${modules.map((_path, index) => `m${index}(4, 2)`).join(', ')}];\n`);
+  for (const [index, path] of modules.entries()) await writeFile(join(repo.root, path), guarded(index, '  if (!b) return 0;\n'));
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Guarded modules');
+  for (const [index, path] of modules.entries()) await writeFile(join(repo.root, path), guarded(index, ''));
+  // The first collection fills the import index cache, whose own reads are not part of the collector's.
+  await collect({ repo: repo.root });
+  const root = await realpath(repo.root);
+  const opened = new Map<string, number>();
+  const open = fsPromises.open;
+  mock.method(fsPromises, 'open', (path: string, ...rest: [number, number?]) => {
+    const key = relative(root, path);
+    opened.set(key, (opened.get(key) ?? 0) + 1);
+    return open(path, ...rest);
+  });
+  syncBuiltinESMExports();
+  let plan: ReviewPlan;
+  try { plan = await collect({ repo: repo.root }); } finally { mock.restoreAll(); syncBuiltinESMExports(); }
+  // Nine changed files make two packets, and both use app.ts as caller context.
+  assert.equal(plan.packets.length, 2);
+  assert.ok(plan.packets.every(packet => packet.sourcePaths.includes('app.ts')));
+  assert.deepEqual([...opened.keys()].sort(), ['app.ts', ...modules].sort());
+  assert.deepEqual(Object.fromEntries(opened), Object.fromEntries([...opened.keys()].map(path => [path, 1])));
 });
 
 test('streams a tracked-file listing larger than the old 8 MiB output buffer', async t => {

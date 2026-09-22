@@ -1,9 +1,10 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { review, render } from '../src/review.js';
+import { isIncomplete, review, reviewAll, render } from '../src/review.js';
 import { compare } from '../src/history.js';
 import { reportSchema } from '../src/schema.js';
-import { fixtureEvaluator, planFor } from './helpers.js';
+import type { Report, ReviewPlan, TypedEvaluator } from '../src/domain.js';
+import { fixtureEvaluator, planFor, typedFixture } from './helpers.js';
 import { cases, casePlan } from '../examples/cases.js';
 
 test('each live benchmark fixture exercises exactly one supported check candidate', () => {
@@ -43,7 +44,7 @@ test('batches every candidate and respects cancellation between packet batches',
   let calls = 0;
   await assert.rejects(review(plan, { async evaluate(state, questions) {
     calls++; controller.abort(); return evaluator.evaluate(state, questions);
-  } }, controller.signal));
+  } }, { signal: controller.signal }));
   assert.equal(calls, 1);
 });
 
@@ -157,4 +158,123 @@ test('history ignores model order and reports newly supported findings', async (
   before.models = ['model-a', 'model-b']; after.models = ['model-b', 'model-a'];
   assert.deepEqual(compare(before, after).map(item => item.status), ['newly_supported']);
   assert.deepEqual(compare(after, after).map(item => item.status), ['still_present']);
+});
+
+/** One changed file and one candidate per packet, so each packet is one provider request. */
+function packetPlan(count: number): ReviewPlan {
+  const plan = planFor();
+  const template = plan.candidates[0]!;
+  plan.sources = []; plan.candidates = []; plan.packets = [];
+  for (let index = 0; index < count; index++) {
+    const path = `ratio-${index}.ts`;
+    plan.sources.push({ path, content: `export const ratio${index} = (a: number, b: number) => a / b;`, role: 'changed' });
+    plan.candidates.push({ ...template, id: `candidate-${index}`, path });
+    plan.packets.push({ id: `packet-${index}`, changedPaths: [path], sourcePaths: [path], candidateIds: [`candidate-${index}`], limitations: [] });
+  }
+  return plan;
+}
+
+const packetOf = (state: unknown) => Number((state as { packetId: string }).packetId.replace('packet-', ''));
+
+test('keeps provider requests in flight within the configured limit', async () => {
+  const plan = packetPlan(9);
+  for (const [concurrency, expected] of [[1, 1], [3, 3], [undefined, 4]] as const) {
+    let active = 0; let peak = 0;
+    const report = await reviewAll(plan, { async evaluate(_state, questions) {
+      active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setImmediate(resolve));
+      active--;
+      return typedFixture(questions);
+    } }, { concurrency });
+    assert.equal(peak, expected, `limit ${concurrency ?? 'default'}`);
+    assert.equal(report.usage.requests, 9);
+  }
+  await assert.rejects(reviewAll(plan, fixtureEvaluator(), { concurrency: 0 }), /positive whole number/);
+});
+
+test('a concurrent review matches the sequential review apart from timings', async () => {
+  const plan = packetPlan(6);
+  // Later packets answer first, with distinct usage and verdicts, so completion order differs from plan order.
+  const evaluator: TypedEvaluator = { async evaluate(state, questions) {
+    const packet = packetOf(state);
+    await new Promise(resolve => setTimeout(resolve, (6 - packet) * 3));
+    const response = await typedFixture(questions);
+    response.usage = { input_tokens: 100 + packet, output_tokens: 10 * packet };
+    const assessment = response.answers[`candidate-${packet}_assessment`];
+    if (packet % 2 && assessment?.type === 'choice') assessment.choice = 'not_supported';
+    return response;
+  } };
+  const normalized = (report: Report) => ({ ...report, id: '', createdAt: '', usage: { ...report.usage, elapsedMs: 0 },
+    packetQualities: report.packetQualities?.map(packet => ({ ...packet, evaluation: { ...packet.evaluation, usage: { ...packet.evaluation.usage, elapsedMs: 0 } } })) });
+  const sequential = await reviewAll(plan, evaluator, { concurrency: 1 });
+  const concurrent = await reviewAll(plan, evaluator, { concurrency: 4 });
+  assert.deepEqual(normalized(concurrent), normalized(sequential));
+  assert.deepEqual(concurrent.decisions.map(decision => decision.id), plan.candidates.map(candidate => candidate.id));
+  assert.equal(concurrent.usage.inputTokens, 615);
+});
+
+test('a failed request leaves an inconclusive report that keeps other decisions and names the unevaluated work', async () => {
+  const plan = packetPlan(3);
+  const failing: TypedEvaluator = { async evaluate(state, questions) {
+    if (packetOf(state) === 1) throw new Error('Jev request failed (HTTP 500); no successful review was recorded.');
+    return typedFixture(questions);
+  } };
+  const report = await reviewAll(plan, failing);
+  reportSchema.parse(report);
+  assert.equal(report.status, 'inconclusive');
+  assert.ok(isIncomplete(report));
+  assert.deepEqual(report.decisions.map(decision => [decision.id, decision.status]), [['candidate-0', 'supported'], ['candidate-2', 'supported']]);
+  assert.deepEqual(report.packetQualities?.map(packet => packet.packetId), ['packet-0', 'packet-2']);
+  assert.equal(report.usage.requests, 2);
+  const [limitation] = report.limitations.filter(value => value.startsWith('Review incomplete'));
+  assert.match(limitation!, /packet packet-1 \(ratio-1\.ts\): Jev request failed \(HTTP 500\)/);
+  assert.match(limitation!, /Not evaluated: source check candidate-1 \(.+ at ratio-1\.ts:\d+-\d+\); the broad quality review\.$/);
+  assert.match(render(report), /Review incomplete for packet packet-1/);
+
+  // Source-check-only reviews share the loop and the same guarantee.
+  const sourceOnly = await review(plan, { async evaluate(state, questions) {
+    if (packetOf(state) === 1) throw new Error('Jev request failed (network error); no successful review was recorded.');
+    return fixtureEvaluator('not_supported').evaluate(state, questions);
+  } });
+  assert.equal(sourceOnly.status, 'inconclusive');
+  assert.equal(sourceOnly.decisions.length, 2);
+
+  // With nothing completed there is no partial report: the provider's error is the result.
+  await assert.rejects(reviewAll(plan, { async evaluate() { throw new Error('Jev request failed (HTTP 401); no successful review was recorded.'); } }), /HTTP 401/);
+});
+
+test('cancellation aborts every in-flight request and starts no further request', async () => {
+  const controller = new AbortController();
+  const signals: AbortSignal[] = [];
+  const pending = reviewAll(packetPlan(9), { evaluate(_state, _questions, signal) {
+    signals.push(signal!);
+    return new Promise((_resolve, reject) => signal!.addEventListener('abort', () => reject(signal!.reason), { once: true }));
+  } }, { signal: controller.signal, concurrency: 3 });
+  assert.equal(signals.length, 3);
+  controller.abort(new Error('Review timed out after 5 ms.'));
+  await assert.rejects(pending, { message: 'Review timed out after 5 ms.' });
+  assert.equal(signals.length, 3);
+  assert.ok(signals.every(signal => signal.aborted));
+});
+
+test('planning serializes each part of a near-limit packet once rather than per shrink step', async () => {
+  const plan = planFor();
+  plan.sources[0]!.content = `export const evidence = '${'x'.repeat(78_000)}';`;
+  plan.candidates = Array.from({ length: 34 }, (_, index) => ({ ...plan.candidates[0]!, id: `candidate-${index}`, hypothesis: 'detail '.repeat(600) }));
+  plan.packets[0]!.candidateIds = plan.candidates.map(candidate => candidate.id);
+  const requests: Array<{ state: unknown; questions: unknown }> = [];
+  const stringify = JSON.stringify;
+  let serialized = 0;
+  JSON.stringify = ((...args: Parameters<typeof stringify>) => {
+    const text = stringify(...args);
+    serialized += text?.length ?? 0;
+    return text;
+  }) as typeof stringify;
+  try {
+    await reviewAll(plan, { async evaluate(state, questions) { requests.push({ state, questions }); return typedFixture(questions); } });
+  } finally { JSON.stringify = stringify; }
+  const sent = requests.reduce((total, request) => total + JSON.stringify(request).length, 0);
+  assert.ok(requests.length > 3);
+  // Re-serializing the packet for every candidate batch size costs several times the bytes actually sent.
+  assert.ok(serialized < sent, `${serialized} bytes serialized for ${sent} bytes sent`);
 });

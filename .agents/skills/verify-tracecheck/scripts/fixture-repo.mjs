@@ -9,6 +9,17 @@ import { dirname, join } from 'node:path';
 
 // Credential-shaped values are assembled at runtime so this file never contains a literal secret.
 const fakeCredential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+const ratioModule = (index, guard) => `export function ratio${index}(a: number, b: number): number {\n${guard ? '  if (b === 0) return 0;\n' : ''}  return a / b;\n}\n`;
+// `count` modules each lose a zero-divisor guard, and one caller imports all of them.
+const multiPacket = count => {
+  const paths = Array.from({ length: count }, (_value, index) => `src/ratio${String(index).padStart(2, '0')}.ts`);
+  const caller = paths.map((path, index) => `import { ratio${index} } from './${path.slice(4, -3)}.js';\n`).join('')
+    + `\nexport const ratios = [${paths.map((_path, index) => `ratio${index}(4, 2)`).join(', ')}];\n`;
+  return {
+    baseline: { 'src/app.ts': caller, ...Object.fromEntries(paths.map((path, index) => [path, ratioModule(index, true)])) },
+    change: Object.fromEntries(paths.map((path, index) => [path, ratioModule(index, false)])),
+  };
+};
 const lexer = extra => `export type TokenKind = 'StringLiteralExpressionToken' | 'NoSubstitutionTemplateLiteral' | 'IdentifierNameToken';\n\nexport function classify(text: string): TokenKind {\n  let token: TokenKind = 'IdentifierNameToken';\n  if (/^["']/.test(text)) token = 'StringLiteralExpressionToken';\n${extra}  return token;\n}\n`;
 
 const scenarios = {
@@ -147,6 +158,14 @@ const scenarios = {
       'deploy/env.sh': `export APP_ENV=production\nexport API_TOKEN=${fakeCredential}\n`,
       'config/app.yml': `database:\n  host: db.internal\n  password: ${fakeCredential}\n`,
     },
+  },
+  'multi-packet': {
+    description: 'Nine TS modules each lose a zero-divisor guard, and src/app.ts calls all nine. Expect two packets (eight changed files and one), nine zero-divisor candidates, and src/app.ts as caller context in both packets.',
+    ...multiPacket(9),
+  },
+  'multi-packet-large': {
+    description: 'Forty TS modules each lose a zero-divisor guard, and src/app.ts calls all forty. Expect five packets of eight changed files and forty zero-divisor candidates. Use it with the stand-in provider to time concurrent requests.',
+    ...multiPacket(40),
   },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',

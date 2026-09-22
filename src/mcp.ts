@@ -5,7 +5,7 @@ import { z } from 'zod';
 import { realpath } from 'node:fs/promises';
 import { collect } from './collector.js';
 import { Jev, jevFromEnv, jevSettings } from './jev.js';
-import { applyPreviousEvaluation, reviewAll } from './review.js';
+import { applyPreviousEvaluation, isIncomplete, reviewAll } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
 import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.js';
@@ -112,11 +112,12 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     let report = cache.get(key);
     const cached = report !== undefined;
     if (!report) {
-      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal });
+      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal, concurrency: settings.concurrency });
       signal.throwIfAborted();
       const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
       if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Preview and review again.');
-      cache.set(key, report);
+      // A retry must reach the provider again rather than replay a review that a failed request left incomplete.
+      if (!isIncomplete(report)) cache.set(key, report);
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
