@@ -19,6 +19,7 @@
 - MCP review cache hits no longer re-collect the repository, cache eviction keeps live entries, and a previous evaluation that cannot be compared always adds a limitation.
 - `compare` matches models regardless of order and reports newly supported findings.
 - `tracecheck_assess` has a bounded timeout and honors client cancellation, CLI `assess` stops on Ctrl-C, `tracecheck_verify` limits evidence by UTF-8 bytes, and the `previousEvaluation` input schema is smaller.
+- Focus related-file excerpts on call sites of `const` and `let` arrow functions and function expressions, and match symbol names that contain `$`.
 
 ## 0.3.0 — 2026-09-18
 
