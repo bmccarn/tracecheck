@@ -20,6 +20,7 @@
 - `compare` matches models regardless of order and reports newly supported findings.
 - `tracecheck_assess` has a bounded timeout and honors client cancellation, CLI `assess` stops on Ctrl-C, `tracecheck_verify` limits evidence by UTF-8 bytes, and the `previousEvaluation` input schema is smaller.
 - Focus related-file excerpts on call sites of `const` and `let` arrow functions and function expressions, and match symbol names that contain `$`.
+- Detect more credential shapes (unquoted YAML, TOML, and `.env` values, padded base64, PGP, DSA, and encrypted private keys, common provider tokens, and passwords in URLs), stop flagging identifier-like literals, and name the file or field that triggered screening without its value.
 
 ## 0.3.0 — 2026-09-18
 
