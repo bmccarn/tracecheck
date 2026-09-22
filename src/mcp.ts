@@ -73,7 +73,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     outputSchema: z.object({
       snapshot: z.string(),
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
-      files: z.array(z.object({ path: z.string(), role: z.string(), characters: z.number() })),
+      files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
       candidates: z.number(), limitations: z.array(z.string()),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
@@ -82,7 +82,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     if (!plan.discovery) throw new Error('Collection did not produce a discovery scope. Run tracecheck_preview again.');
     rememberPreview(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
-      files: plan.sources.map(source => ({ path: source.path, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
+      files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length, limitations: plan.limitations };
     return { content: [{ type: 'text', text: JSON.stringify(output) }], structuredContent: output };
   });
