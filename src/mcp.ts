@@ -10,7 +10,8 @@ import { applyPreviousEvaluation, reviewAll } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
 import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.js';
-import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
+import { reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
+import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { deadline } from './deadline.js';
 
 
@@ -48,9 +49,11 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   const cache = new ExpiringCache<Report>(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache<DiscoveryScope>(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = { repo: z.string().min(1).optional().describe('Repository path; required unless the server was launched with --repo.'),
-    base: z.string().min(1).default('HEAD').describe('Git baseline; the working tree is compared against this commit.'),
-    includeUntracked: z.boolean().default(false), task: z.string().min(1).optional(), repositoryContext: z.string().min(1).optional(),
-    collection: collectionOptionsSchema.optional().describe('Bounded local collection settings. Matching settings are required when reviewing a preview snapshot.') };
+    base: reviewScopeFields.base.optional().describe(`Git baseline; the working tree is compared against this commit. Defaults to base in the repository's ${CONFIG_FILE}, then HEAD.`),
+    includeUntracked: reviewScopeFields.includeUntracked.optional().describe(`Include untracked files. Defaults to ${CONFIG_FILE}, then false.`),
+    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to ${CONFIG_FILE}.`),
+    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to ${CONFIG_FILE}.`),
+    collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`) };
   const target = async (requested?: string) => {
     if (repo && requested && await realpath(repo) !== await realpath(requested)) throw new Error('This server is bound to a different repository.');
     if (!repo && !requested) throw new Error('Supply repo or launch the server with --repo.');
@@ -86,7 +89,8 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args, ctx) => {
-    const plan = await collect({ ...args, repo: await target(args.repo), signal: ctx.mcpReq.signal });
+    const settings = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const plan = await collect({ repo: settings.root, ...settings.request, signal: ctx.mcpReq.signal });
     if (!plan.discovery) throw new Error('Collection did not produce a discovery scope. Run tracecheck_preview again.');
     previewScopes.set(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
@@ -96,20 +100,19 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   });
   server.registerTool('tracecheck_review', {
     description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
-    inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.describe('Maximum review duration in milliseconds.'), previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
+    inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
     outputSchema: z.object({ cached: z.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
+    const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const { reviewTimeoutMs, request: collectionRequest } = effective;
     const signal = AbortSignal.any([ctx.mcpReq.signal,
-      deadline(args.reviewTimeoutMs, `Review timed out after ${args.reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)]);
-    const root = await target(args.repo);
+      deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)]);
     const discovery = previewScopes.get(args.snapshot);
     if (!discovery) throw new Error('Preview snapshot is unknown or expired. Run tracecheck_preview again.');
-    const collectionRequest = { repo: args.repo, base: args.base, includeUntracked: args.includeUntracked,
-      task: args.task, repositoryContext: args.repositoryContext, collection: args.collection };
-    const plan = await collect({ ...collectionRequest, repo: root, discovery, signal });
+    const plan = await collect({ ...collectionRequest, repo: effective.root, discovery, signal });
     if (plan.snapshot !== args.snapshot) throw new Error('Repository context changed since preview. Run tracecheck_preview again.');
-    const settings = jevSettings();
+    const settings = jevSettings(process.env, effective.provider);
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     // A hit needs no second collection: the collection above already matched the preview snapshot.
     let report = cache.get(key);
