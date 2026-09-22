@@ -82,6 +82,35 @@ test('retains non-JS source for quality review and binds task context to the sna
   assert.notEqual(changed.snapshot, plan.snapshot);
 });
 
+test('collects Python callers and tests that use wrapped or comma-separated imports', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await mkdir(join(repo.root, 'pkg')); await mkdir(join(repo.root, 'tests'));
+  await writeFile(join(repo.root, 'pkg/__init__.py'), '');
+  await writeFile(join(repo.root, 'pkg/calc.py'), 'def mean(values):\n    if not values:\n        return 0\n    return sum(values) / len(values)\n');
+  await writeFile(join(repo.root, 'pkg/report.py'), 'from pkg.calc import (\n    mean,\n)\n\n\ndef summary(values):\n    return mean(values)\n');
+  await writeFile(join(repo.root, 'tests/test_summary.py'), 'import pkg.report, pkg.calc as calc\n\n\ndef test_empty():\n    assert calc.mean([]) == 0\n');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add package');
+  await writeFile(join(repo.root, 'pkg/calc.py'), 'def mean(values):\n    return sum(values) / len(values)\n');
+  const plan = await collect({ repo: repo.root });
+  assert.deepEqual(plan.sources.map(source => [source.path, source.role]),
+    [['pkg/calc.py', 'changed'], ['pkg/report.py', 'caller'], ['tests/test_summary.py', 'test']]);
+});
+
+test('links NodeNext module specifiers without collecting imported assets', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'lib.mts'), 'export const scale = 2;');
+  await writeFile(join(repo.root, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  await writeFile(join(repo.root, 'app.css'), 'body { margin: 0; }');
+  await writeFile(join(repo.root, 'app.tsx'), 'import { scale } from "./lib.mjs";\nimport logo from "./logo.png";\nimport "./app.css";\nexport const size = (value: number) => value * scale + logo.length;');
+  await writeFile(join(repo.root, 'main.ts'), 'import { size } from "./app.jsx"; export const width = size(1);');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add app');
+  await writeFile(join(repo.root, 'app.tsx'), 'import { scale } from "./lib.mjs";\nimport logo from "./logo.png";\nimport "./app.css";\nexport const size = (value: number) => value / scale + logo.length;');
+  const plan = await collect({ repo: repo.root });
+  assert.deepEqual(plan.sources.map(source => [source.path, source.role]).sort(),
+    [['app.tsx', 'changed'], ['lib.mts', 'dependency'], ['main.ts', 'caller']]);
+  assert.doesNotMatch([...plan.limitations, ...plan.packets.flatMap(packet => packet.limitations)].join('\n'), /logo\.png|app\.css/);
+});
+
 test('packs every eligible changed path exactly once across bounded packets', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeSeries(repo.root, 'changes', 'change-', '.ts', 17, 'export const baseline = 1;');

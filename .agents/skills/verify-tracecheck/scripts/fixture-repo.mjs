@@ -38,6 +38,19 @@ const scenarios = {
     },
     change: { 'pkg/calc.py': 'def mean(values):\n    return sum(values) / len(values)\n' },
   },
+  'module-paths': {
+    description: 'TSX module changes; it imports .mjs, .cjs, and directory specifiers backed by .mts, .cts, and index.tsx sources, plus an image and a stylesheet. A caller imports it as ./app.jsx.',
+    baseline: {
+      'src/lib.mts': 'export const scale = 2;\n',
+      'src/legacy.cts': 'export const offset = 1;\n',
+      'src/widgets/index.tsx': "export const label = 'size';\n",
+      'src/logo.png': '\x89PNG\r\n',
+      'src/app.css': 'body { margin: 0; }\n',
+      'src/app.tsx': "import { scale } from './lib.mjs';\nimport { offset } from './legacy.cjs';\nimport { label } from './widgets';\nimport logo from './logo.png';\nimport './app.css';\n\nexport function size(value: number) {\n  return `${label}=${value * scale + offset} ${logo}`;\n}\n",
+      'src/main.ts': "import { size } from './app.jsx';\n\nexport const width = size(1);\n",
+    },
+    change: { 'src/app.tsx': "import { scale } from './lib.mjs';\nimport { offset } from './legacy.cjs';\nimport { label } from './widgets';\nimport logo from './logo.png';\nimport './app.css';\n\nexport function size(value: number) {\n  return `${label}=${value / scale + offset} ${logo}`;\n}\n" },
+  },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },

@@ -4,6 +4,7 @@ import { mkdir, mkdtemp, rm, stat, symlink, unlink, utimes, writeFile } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { buildImportIndex } from '../src/import-index.js';
+import { importsFor } from '../src/evidence.js';
 
 const limits = { indexTimeoutMs: 20_000, collectionTimeoutMs: 120_000 };
 
@@ -151,4 +152,33 @@ test('keeps file and byte caps deterministic with concurrent index I/O', async t
   assert.deepEqual([...byteLimited.imports.keys()], ['a.ts', 'b.ts']);
   assert.deepEqual(byteLimited.discovery, { scannedFiles: 3, deadlineLimited: false });
   assert.match(byteLimited.limitations.join('\n'), /Import index omitted 1 file\(s\): byte limit \(c\.ts\)/);
+});
+
+test('links wrapped, comma-separated, and aliased Python imports', () => {
+  const known = new Set(['pkg/__init__.py', 'pkg/calc.py', 'pkg/fmt.py', 'pkg/sub/__init__.py', 'pkg/sub/deep.py', 'other/mod.py', 'src/lib/core.py']);
+  const edges = (path: string, content: string) => importsFor(path, content, known).sort();
+  assert.deepEqual(edges('app.py', 'from pkg import (\n    calc,  # stats\n    fmt as f,\n    missing,\n)\n'), ['pkg/__init__.py', 'pkg/calc.py', 'pkg/fmt.py']);
+  assert.deepEqual(edges('app.py', 'from pkg.calc import (\n    mean,\n)\n'), ['pkg/calc.py']);
+  assert.deepEqual(edges('app.py', 'import pkg.calc, other.mod\n'), ['other/mod.py', 'pkg/calc.py']);
+  assert.deepEqual(edges('app.py', 'import pkg.calc as c, other.mod\n'), ['other/mod.py', 'pkg/calc.py']);
+  assert.deepEqual(edges('app.py', 'from pkg import calc, \\\n    fmt\n'), ['pkg/__init__.py', 'pkg/calc.py', 'pkg/fmt.py']);
+  assert.deepEqual(edges('app.py', 'from lib.core import run\n'), ['src/lib/core.py']);
+  assert.deepEqual(edges('pkg/sub/deep.py', 'from . import calc\nfrom .. import fmt\nfrom ..calc import (\n    mean,\n)\n'),
+    ['pkg/__init__.py', 'pkg/calc.py', 'pkg/fmt.py', 'pkg/sub/__init__.py']);
+});
+
+test('resolves NodeNext module specifiers to TypeScript sources and ignores assets', () => {
+  const known = new Set(['y.mts', 'y.cts', 'z.tsx', 'a.ts', 'b.tsx', 'c.js', 'd.jsx', 'e.ts', 'e.js', 'plain.mjs', 'common.cjs',
+    'dir/index.tsx', 'jsx/index.jsx', 'mod/index.mts', 'ts/index.ts', 'js/index.js', 'logo.png', 'styles.css', 'data.json']);
+  const cases: Array<[string, string[]]> = [
+    ['./y.mjs', ['y.mts']], ['./y.cjs', ['y.cts']], ['./z.jsx', ['z.tsx']], ['./dir', ['dir/index.tsx']],
+    ['./jsx', ['jsx/index.jsx']], ['./mod', ['mod/index.mts']], ['./ts', ['ts/index.ts']], ['./js/', ['js/index.js']],
+    ['./a', ['a.ts']], ['./a.js', ['a.ts']], ['./b.js', ['b.tsx']], ['./c', ['c.js']], ['./c.js', ['c.js']], ['./d', ['d.jsx']],
+    ['./e.js', ['e.js', 'e.ts']], ['./y.mts', ['y.mts']], ['./plain.mjs', ['plain.mjs']], ['./common.cjs', ['common.cjs']],
+    ['./logo.png', []], ['./styles.css', []], ['./data.json', []],
+  ];
+  for (const [specifier, expected] of cases) {
+    assert.deepEqual(importsFor('main.mts', `import value from '${specifier}';`, known).sort(), expected, specifier);
+  }
+  assert.deepEqual(importsFor('lib/main.cts', "const y = require('../y.cjs'); import '../styles.css';", known), ['y.cts']);
 });
