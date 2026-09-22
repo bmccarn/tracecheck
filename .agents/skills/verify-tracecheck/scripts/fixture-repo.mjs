@@ -130,6 +130,11 @@ const scenarios = {
     indexOnly: Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`),
     change: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
   },
+  'multi-packet': {
+    description: 'Nine small modules change their exported constant. Expect two change packets (eight changed paths, then one) with no candidates.',
+    baseline: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index};\n`])),
+    change: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index + 1};\n`])),
+  },
   credentials: {
     description: 'A lexer with identifier-shaped token-kind literals and two config files that gain unquoted credentials (.env-style shell exports and YAML). Expect src/lexer.ts collected, and deploy/env.sh and config/app.yml omitted with their paths named.',
     baseline: {
@@ -147,6 +152,20 @@ const scenarios = {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },
     change: {},
+  },
+  'path-aliases': {
+    description: 'mean() in src/lib/stats.ts loses its empty-input guard. A component and a test import it through the @/ paths alias, and it imports a helper through baseUrl. tsconfig.json extends an in-repository base (which declares both), a package, and a path outside the repository; packages/legacy has a malformed tsconfig.json. Expect the aliased caller, test, and dependency, plus limitations for the external extends and the malformed config.',
+    baseline: {
+      'config/tsconfig.base.json': '{\n  // Shared resolution settings, relative to this file.\n  "compilerOptions": {\n    "baseUrl": "../src",\n    "paths": { "@/*": ["./*"] },\n  },\n}\n',
+      'tsconfig.json': '{\n  "extends": ["@tsconfig/strictest/tsconfig.json", "../tracecheck-shared/tsconfig.json", "./config/tsconfig.base.json"],\n  "compilerOptions": { "strict": true }\n}\n',
+      'src/utils/round.ts': 'export function round(value: number): number {\n  return Math.round(value * 100) / 100;\n}\n',
+      'src/lib/stats.ts': "import { round } from 'utils/round';\n\nexport function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return round(values.reduce((a, b) => a + b, 0) / values.length);\n}\n",
+      'src/components/Report.tsx': "import { mean } from '@/lib/stats';\n\nexport function Report({ values }: { values: number[] }) {\n  return <p>mean={mean(values)}</p>;\n}\n",
+      'test/empty-input.test.ts': "import { mean } from '@/lib/stats.js';\n\nif (mean([]) !== 0) throw new Error('empty mean must be 0');\n",
+      'packages/legacy/tsconfig.json': '{ "compilerOptions": { "baseUrl": "." \n',
+      'packages/legacy/index.ts': "export const legacy = true;\n",
+    },
+    change: { 'src/lib/stats.ts': "import { round } from 'utils/round';\n\nexport function mean(values: number[]): number {\n  return round(values.reduce((a, b) => a + b, 0) / values.length);\n}\n" },
   },
   'project-config': {
     description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets base HEAD~1, a task, and maxIndexFiles 1. With the file, preview reports src/stats.ts changed; --base HEAD reports no change.',

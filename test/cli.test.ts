@@ -1,0 +1,176 @@
+import { test, type TestContext } from 'node:test';
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { once } from 'node:events';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+import type { Question, TypedResponse } from '../src/domain.js';
+import { reportSchema } from '../src/schema.js';
+import { qualityEvaluationSchema } from '../src/quality.js';
+import { repository, typedFixture } from './helpers.js';
+
+const checkout = fileURLToPath(new URL('..', import.meta.url));
+
+/** Runs the CLI from source in a child process with only the given provider environment. */
+async function cli(args: string[], env: Record<string, string> = {}) {
+  try {
+    const { stdout, stderr } = await promisify(execFile)(process.execPath, ['--import', 'tsx', join(checkout, 'src/cli.ts'), ...args],
+      { cwd: checkout, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env } });
+    return { code: 0, stdout, stderr };
+  } catch (error) {
+    const { code, stdout, stderr } = error as { code: unknown; stdout: string; stderr: string };
+    if (typeof code !== 'number') throw error;
+    return { code, stdout, stderr };
+  }
+}
+
+/** A loopback Jev endpoint that answers every question with the typed fixture, after an optional adjustment. */
+async function jevServer(t: TestContext, adjust: (response: TypedResponse, questions: Record<string, Question>) => void = () => { }) {
+  let requests = 0;
+  const server = createServer(async (request, response) => {
+    let body = '';
+    for await (const chunk of request) body += chunk;
+    const { questions } = JSON.parse(body) as { questions: Record<string, Question> };
+    const answer = await typedFixture(questions);
+    adjust(answer, questions);
+    requests++;
+    response.setHeader('content-type', 'application/json');
+    response.end(JSON.stringify(answer));
+  });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); server.close(); await once(server, 'close'); });
+  const { port } = server.address() as AddressInfo;
+  return { env: { JEV_API_KEY: 'fixture-key', TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` }, requests: () => requests };
+}
+
+test('an unknown command exits 2 with its name', async () => {
+  const result = await cli(['frobnicate']);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Unknown command: frobnicate/);
+});
+
+test('invalid integer flags exit 2 before collection', async () => {
+  for (const [flag, value] of [['--index-max-files', '0'], ['--review-timeout-ms', '1.5'], ['--collection-timeout-ms', '-3']]) {
+    const result = await cli(['review', '--repo', '/nonexistent-tracecheck-repo', `${flag}=${value}`]);
+    assert.equal(result.code, 2, `${flag}=${value}`);
+    assert.match(result.stderr, new RegExp(`${flag} must be a positive safe integer`));
+  }
+});
+
+test('review writes one SARIF result per supported finding', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), [
+    'export function average(xs: number[]) {',
+    '  return xs.reduce((a, b) => a + b, 0) / xs.length;',
+    '}',
+    'export function ratio(a: number, b: number) {',
+    '  return a / b;',
+    '}',
+    '',
+  ].join('\n'));
+  // The ratio candidate is judged with low confidence, so it is uncertain rather than supported.
+  const jev = await jevServer(t, (response, questions) => {
+    for (const [id, question] of Object.entries(questions)) {
+      const answer = response.answers[id];
+      if (id.endsWith('_assessment') && question.instructions.includes('average.ts:5-5') && answer?.type === 'choice') answer.confidence = 0.3;
+    }
+  });
+  const sarifPath = join(repo.root, '.out', 'findings.sarif');
+  const result = await cli(['review', '--repo', repo.root, '--json', '--sarif', sarifPath], jev.env);
+  assert.equal(result.code, 1, result.stderr);
+  const report = reportSchema.parse(JSON.parse(result.stdout));
+  assert.deepEqual(report.decisions.map(decision => [decision.range.start, decision.status]).sort(), [[2, 'supported'], [5, 'uncertain']]);
+
+  const sarif = JSON.parse(await readFile(sarifPath, 'utf8'));
+  assert.equal(sarif.version, '2.1.0');
+  const [run] = sarif.runs;
+  assert.deepEqual(run.tool.driver.rules.map((rule: { id: string }) => rule.id), ['zero-divisor']);
+  assert.equal(run.results.length, 1);
+  const [finding] = run.results;
+  const supported = report.decisions.find(decision => decision.status === 'supported')!;
+  assert.equal(finding.ruleId, 'zero-divisor');
+  assert.equal(finding.ruleIndex, 0);
+  assert.equal(finding.level, 'warning');
+  assert.equal(finding.message.text, supported.hypothesis);
+  assert.deepEqual(finding.locations[0].physicalLocation.artifactLocation, { uri: 'average.ts', uriBaseId: 'SRCROOT' });
+  assert.deepEqual(finding.locations[0].physicalLocation.region, { startLine: 2, endLine: 2, snippet: { text: supported.quote } });
+  assert.equal(finding.properties.impact, 'medium');
+  assert.equal(finding.properties.confidence, supported.confidence);
+  assert.deepEqual(run.properties.omittedDecisions, { uncertain: 1, needsContext: 0, notSupported: 0 });
+});
+
+test('--previous accepts a review report or an assess evaluation, even for a multi-packet review', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  const jev = await jevServer(t);
+  const files = join(repo.root, '.out');
+  await mkdir(files);
+  const context = join(files, 'context.json');
+  await writeFile(context, JSON.stringify({ task: 'Return the mean.', files: [{ path: 'mean.py', content: 'def mean(xs):\n    return sum(xs) / len(xs)\n' }] }));
+  const evaluationPath = join(files, 'evaluation.json');
+  assert.equal((await cli(['assess', '--input', context, '--out', evaluationPath], jev.env)).code, 0);
+
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a, b) => a + b, 0) / xs.length; }\n');
+  const reportPath = join(files, 'report.json');
+  const first = await cli(['review', '--repo', repo.root, '--out', reportPath], jev.env);
+  assert.equal(first.code, 1, first.stderr);
+
+  const reviewWithReport = reportSchema.parse(JSON.parse((await cli(['review', '--repo', repo.root, '--json', '--previous', reportPath], jev.env)).stdout));
+  assert.equal(reviewWithReport.quality?.comparison.length, 19);
+  const reviewWithEvaluation = reportSchema.parse(JSON.parse((await cli(['review', '--repo', repo.root, '--json', '--previous', evaluationPath], jev.env)).stdout));
+  assert.match(reviewWithEvaluation.limitations.join('\n'), /Previous evaluation was not compared because its scope/);
+  const assessWithReport = await cli(['assess', '--input', context, '--json', '--previous', reportPath], jev.env);
+  assert.equal(assessWithReport.code, 0, assessWithReport.stderr);
+  assert.match(qualityEvaluationSchema.parse(JSON.parse(assessWithReport.stdout)).warnings.join('\n'), /Comparison skipped/);
+
+  const invalid = join(files, 'invalid.json');
+  await writeFile(invalid, JSON.stringify({ hello: 'world' }));
+  const rejected = await cli(['assess', '--input', context, '--previous', invalid], jev.env);
+  assert.equal(rejected.code, 2);
+  assert.match(rejected.stderr, /neither a report saved by review --out nor an evaluation saved by assess --out/);
+
+  await mkdir(join(repo.root, 'changes'));
+  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  repo.git('add', '.');
+  const before = jev.requests();
+  const multi = await cli(['review', '--repo', repo.root, '--json', '--previous', reportPath], jev.env);
+  assert.notEqual(multi.code, 2, multi.stderr);
+  const multiReport = reportSchema.parse(JSON.parse(multi.stdout));
+  assert.equal(multiReport.packetQualities?.length, 2);
+  assert.ok(jev.requests() > before);
+  assert.match(multiReport.limitations.join('\n'), /Previous evaluation was not compared because this review has multiple packet scopes/);
+
+  const multiReportPath = join(files, 'multi.json');
+  await writeFile(multiReportPath, multi.stdout);
+  const fromMulti = await cli(['assess', '--input', context, '--previous', multiReportPath], jev.env);
+  assert.equal(fromMulti.code, 2);
+  assert.match(fromMulti.stderr, /multi-packet review report/);
+});
+
+test('assess --fail-on-priorities exits 1 only when actionable priorities exist', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  const context = join(repo.root, 'context.json');
+  await writeFile(context, JSON.stringify({ task: 'Return the mean.', files: [{ path: 'mean.py', content: 'def mean(xs):\n    return sum(xs) / len(xs)\n' }] }));
+  const clean = await jevServer(t);
+  assert.equal((await cli(['assess', '--input', context, '--fail-on-priorities'], clean.env)).code, 0);
+
+  const concerned = await jevServer(t, (response, questions) => {
+    const question = questions.quality_correctness_weakness;
+    const answer = response.answers.quality_correctness_weakness;
+    assert.ok(question?.type === 'choice' && answer?.type === 'choice');
+    const concern = Object.keys(question.criteria).find(key => key !== 'none')!;
+    answer.choice = concern;
+    answer.probabilities = Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === concern ? 1 : 0]));
+  });
+  const gated = await cli(['assess', '--input', context, '--json', '--fail-on-priorities'], concerned.env);
+  assert.equal(gated.code, 1, gated.stderr);
+  assert.deepEqual(qualityEvaluationSchema.parse(JSON.parse(gated.stdout)).priorities.map(priority => priority.metric), ['correctness']);
+  assert.equal((await cli(['assess', '--input', context], concerned.env)).code, 0);
+});
