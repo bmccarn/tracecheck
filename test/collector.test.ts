@@ -193,3 +193,63 @@ test('round-robins packet support so fan-in does not crowd out another change co
   assert.ok(plan.packets[0]!.sourcePaths.includes('second.test.ts'));
   assert.ok(plan.packets[0]!.sourcePaths.includes('second-dependency.ts'));
 });
+
+const ratioModule = 'export function ratio(a: number, b: number) {\n  if (!b) return 0;\n  return a / b;\n}\n\nexport function half(value: number, parts: number) {\n  return value / parts;\n}\n';
+
+test('reviews a renamed and edited file against the base content of its old path', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const oldPath = 'src/old [name]\tfile.ts';
+  const newPath = 'lib/new "name" é.ts';
+  await mkdir(join(repo.root, 'src'));
+  await mkdir(join(repo.root, 'lib'));
+  await writeFile(join(repo.root, oldPath), ratioModule);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  repo.git('mv', oldPath, newPath);
+  await writeFile(join(repo.root, newPath), ratioModule.replace('  if (!b) return 0;\n', ''));
+  const plan = await collect({ repo: repo.root });
+
+  const source = plan.sources.find(item => item.path === newPath)!;
+  assert.equal(source.previousPath, oldPath);
+  assert.equal(source.before, ratioModule);
+  assert.deepEqual(plan.candidates.map(candidate => [candidate.path, candidate.symbol]), [[newPath, 'ratio']]);
+  assert.ok(!plan.sources.some(item => item.path === oldPath));
+});
+
+test('records a pure rename without changed ranges or candidates', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'ratio.ts'), ratioModule);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  repo.git('mv', 'ratio.ts', 'quotient.ts');
+  const plan = await collect({ repo: repo.root });
+
+  const source = plan.sources.find(item => item.path === 'quotient.ts')!;
+  assert.equal(source.role, 'changed');
+  assert.equal(source.previousPath, 'ratio.ts');
+  assert.equal(source.before, ratioModule);
+  assert.equal(plan.candidates.length, 0);
+});
+
+test('reports renames that cross into or out of ineligible paths', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const padding = (name: string) => Array.from({ length: 12 }, (_value, index) => `export const ${name}${index} = ${index};\n`).join('');
+  await mkdir(join(repo.root, 'dist'));
+  await writeFile(join(repo.root, 'dist/ratio.ts'), ratioModule);
+  await writeFile(join(repo.root, 'notes.ts'), padding('note'));
+  await writeFile(join(repo.root, 'keys.ts'), padding('key'));
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add rename sources');
+  repo.git('mv', 'dist/ratio.ts', 'ratio.ts');
+  await writeFile(join(repo.root, 'ratio.ts'), ratioModule.replace('  if (!b) return 0;\n', ''));
+  repo.git('mv', 'notes.ts', 'notes.txt');
+  repo.git('mv', 'keys.ts', 'credentials.ts');
+  await writeFile(join(repo.root, 'credentials.ts'), `${padding('key')}const apiKey = "abcdefghijklmnopqrstuvwxyz123456";\n`);
+  const plan = await collect({ repo: repo.root });
+  const limitations = plan.limitations.join('\n');
+
+  const fromGenerated = plan.sources.find(item => item.path === 'ratio.ts')!;
+  assert.equal(fromGenerated.previousPath, 'dist/ratio.ts');
+  assert.equal(fromGenerated.before, undefined);
+  assert.match(limitations, /Renamed from unsupported or generated path dist\/ratio\.ts; reviewed without a baseline \(ratio\.ts\)/);
+  assert.match(limitations, /Unsupported or generated file \(notes\.ts -> notes\.txt\)/);
+  assert.match(limitations, /potential secret-bearing file omitted \(keys\.ts -> credentials\.ts\)/);
+  assert.ok(!JSON.stringify(plan).includes('abcdefghijklmnopqrstuvwxyz123456'));
+});

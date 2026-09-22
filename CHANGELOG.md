@@ -15,6 +15,7 @@
 - Skip source-check candidates that cannot be defects (non-zero literal divisors, catch handlers that rethrow, and `JSON.parse` inside a `try` block), stop selecting unchanged module-level code, and flag `/=` and `%=`.
 - Retry network failures when calling Jev, and report `Jev request failed (network error)` after the last attempt instead of `fetch failed`.
 - Add `JEV_TIMEOUT_MS` for the per-request timeout, and name the limit and its duration when a request, review, or verification times out.
+- Keep the baseline of renamed files: a renamed and edited file is reviewed against the old path's content, pure renames produce no changed ranges or candidates, and renames across unsupported paths are reported.
 
 ## 0.3.0 — 2026-09-18
 

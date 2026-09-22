@@ -41,7 +41,19 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const root = await realpath((await git(resolve(options.repo), ['rev-parse', '--show-toplevel'])).trim());
   const base = (await git(root, ['rev-parse', '--verify', '--end-of-options', `${options.base ?? 'HEAD'}^{commit}`])).trim();
   const head = (await git(root, ['rev-parse', 'HEAD'])).trim();
-  const changed = (await git(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-only', '-z', base, '--'])).split('\0').filter(Boolean);
+  // Rename detection runs once here; readGitChangeContext diffs each detected pair with the same default threshold.
+  const changed: string[] = [];
+  const renames = new Map<string, string>();
+  const statusFields = (await git(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'])).split('\0');
+  if (statusFields.pop() !== '') throw new Error('Git change listing failed');
+  for (let index = 0; index < statusFields.length;) {
+    const status = statusFields[index++]!;
+    const recordPaths = statusFields.slice(index, index += /^[RC]/.test(status) ? 2 : 1);
+    if (!status || recordPaths.length !== (/^[RC]/.test(status) ? 2 : 1) || recordPaths.some(path => !path)) throw new Error('Git change listing failed');
+    const path = recordPaths.at(-1)!;
+    changed.push(path);
+    if (status.startsWith('R')) renames.set(path, recordPaths[0]!);
+  }
   const untracked = (await git(root, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
   const tracked = (await git(root, ['ls-files', '-z'])).split('\0').filter(Boolean);
 
@@ -63,6 +75,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     if (entry.samples.length < 3) entry.samples.push(path);
     omissions.set(reason, entry);
   };
+  const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path: string, message: string) => {
     const issues = sourceIssues.get(path) ?? [];
     if (!issues.includes(message)) issues.push(message);
@@ -95,8 +108,9 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       let excerptBudget = options.focus === false ? Math.floor(MAX_PACKET_CHARS / 2) : SOURCE_EXCERPT_CHARS;
       let current = focusSource(raw, ranges, excerptBudget);
       let old = before === undefined ? undefined : focusSource(before, beforeRanges, excerptBudget);
+      const previousPath = role === 'changed' ? renames.get(path) : undefined;
       let source: Source = {
-        path, role, content: current.content, ...(old ? { before: old.content } : {}),
+        path, ...(previousPath ? { previousPath } : {}), role, content: current.content, ...(old ? { before: old.content } : {}),
         evidence: { currentRanges: current.ranges, beforeRanges: old?.ranges, totalLines: current.totalLines,
           complete: current.complete && (!old || old.complete), digest: hash([raw, before]) },
       };
@@ -105,7 +119,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
         current = focusSource(raw, ranges, excerptBudget);
         old = before === undefined ? undefined : focusSource(before, beforeRanges, excerptBudget);
         source = {
-          path, role, content: current.content, ...(old ? { before: old.content } : {}),
+          path, ...(previousPath ? { previousPath } : {}), role, content: current.content, ...(old ? { before: old.content } : {}),
           evidence: { currentRanges: current.ranges, beforeRanges: old?.ranges, totalLines: current.totalLines,
             complete: current.complete && (!old || old.complete), digest: hash([raw, before]) },
         };
@@ -134,7 +148,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     } catch (error) {
       signal.throwIfAborted();
       const message = error instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
-      recordOmission(`${message} omitted`, path);
+      recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
       return undefined;
     }
@@ -144,7 +158,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const eligibleChanges: string[] = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
-      recordOmission('Unsupported or generated file', path);
+      recordOmission('Unsupported or generated file', label(path));
       noteSource(path, `Unsupported or generated file omitted: ${path}`);
       continue;
     }
@@ -155,11 +169,19 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     } catch (error) {
       signal.throwIfAborted();
       const message = error instanceof Error && /Symlink|external path|oversized|secret|Binary|changed during|Base version unavailable/i.test(error.message) ? error.message : 'Deleted or unreadable file';
-      recordOmission(`${message} omitted`, path);
+      recordOmission(`${message} omitted`, label(path));
       noteSource(path, `${message} omitted: ${path}`);
     }
   }
-  await readGitChangeContext({ root, base, paths: eligibleChanges, signal,
+  // A rename from an unsupported or generated path keeps that content out of review, so the new path has no baseline.
+  const baselineRenames = new Map<string, string>();
+  for (const path of eligibleChanges) {
+    const from = renames.get(path);
+    if (!from) continue;
+    if (isSource(from)) baselineRenames.set(path, from);
+    else noteSource(path, `Renamed from unsupported or generated path ${from}; reviewed without a baseline: ${path}`);
+  }
+  await readGitChangeContext({ root, base, paths: eligibleChanges, renames: baselineRenames, signal,
     onBaseline: async (path, change, baseline) => { await load(path, 'changed', undefined, change, baseline); } });
 
   const indexPaths = tracked.filter(path => isSource(path) && isImportable(path)).sort();
@@ -301,6 +323,6 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   if ((await git(root, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('Repository HEAD changed during collection; retry the preview.');
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
+  const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
