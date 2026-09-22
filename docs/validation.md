@@ -1,5 +1,14 @@
 # Validation
 
+## Current state — September 22, 2026
+
+- Version 0.3.0 is the current release. The `v0.3.0` release run published it to npm under `latest` through trusted publishing, and the registry lists a provenance attestation for it. The same run created the GitHub release with the npm and marketplace archives and published the plugin payload to `bmccarn/tracecheck-plugins`.
+- In isolated client profiles, the README's marketplace commands install Tracecheck 0.3.0 from `bmccarn/tracecheck-plugins`. Adding `bmccarn/tracecheck` as a marketplace installs the same version. `npx --yes @bmccarn/tracecheck@0.3.0 mcp` completes an MCP handshake as version 0.3.0 and lists the four tools.
+- `main` contains the changes listed under *Unreleased* in the [changelog](../CHANGELOG.md). They ship in the next release. On `main`, `npm test` passes 142 tests, and CI runs the bundle drift check, the offline demo, and `npm run release:check` on Node 22.18.0 and the latest Node 24.x release.
+- Not yet verified: a full agent turn inside a native client, because the isolated profiles have no client login; Cursor's discovery of the MCP server and skill in its editor; and accuracy on real projects beyond the [accuracy benchmark](accuracy.md).
+
+The sections below are dated records, newest first. When an older record says a step was pending, such as npm trusted publishing, it describes that date. This summary gives the current state.
+
 ## Stable 0.3.0 preparation — September 18, 2026
 
 - `npm run release:check` passes all 82 tests, type-checking, builds, synchronized metadata, and offline CLI/four-tool MCP checks for the actual `0.3.0` npm and marketplace archives. The tagged release gate selects `latest`. Workflow lint passes; primary LSP checks confirm all five updated metadata files with no diagnostics.
@@ -63,7 +72,7 @@ The entries below record earlier releases and are not measurements of the curren
 
 ## Historical Tracecheck 0.2
 
-## Current checks
+## Automated checks
 
 - `npm run validate`: 26 tests passed; source, examples, and tests type-check; compiled and standalone builds pass.
 - All nineteen baseline dimension keys and the four conditional dimensions are regression-tested.

@@ -2,7 +2,7 @@
 
 ## September 17, 2026 baseline
 
-This benchmark measures **verification of a supplied concern**, not automatic bug discovery or the accuracy of the 19 quality scores. It uses RapidRegs Ingest at commit `b3d8ac8054dd1dc8c5c99ef4b2dbdcf345a28ef5`, Jev `jev-1.13.0`, and the existing support thresholds: confidence ≥ 0.6 and selected probability ≥ 0.8. Thresholds were frozen before inference and were not adjusted to improve the reported results.
+This benchmark measures **verification of a supplied concern**, not automatic bug discovery or the accuracy of the 19 quality scores. It uses RapidRegs Ingest at commit `b3d8ac8054dd1dc8c5c99ef4b2dbdcf345a28ef5`, Jev `jev-1.13.0`, and the existing support thresholds: confidence ≥ 0.6 and selected probability ≥ 0.8. Thresholds were frozen before inference and were not adjusted to improve the reported results. RapidRegs Ingest is not publicly available, so only maintainers with access to it can [reproduce](#reproduce) the benchmark.
 
 There are six defect families: storage error propagation, subprocess shutdown escalation, oversized citation URLs, citation identity, canonical hashes, and URL preference. The first two use historical before/fix pairs; the other four use controlled mutations. Each bug/clean pair has an ordinary and an adversarial-comment variant: **24 cases, but only six independent families**. Four families were assigned to development and two to holdout before inference. The holdout is now observed; future tuning needs a fresh holdout.
 
@@ -37,7 +37,7 @@ A live review of the collected evidence returned all 19 dimensions in one reques
 
 ## Reproduce
 
-From a source checkout, with Python 3 and a local RapidRegs repository containing the pinned history:
+The benchmark is maintainer-only. It needs a source checkout of Tracecheck, Python 3, and a local clone of RapidRegs Ingest that contains the pinned commit:
 
 ```sh
 # Offline label checks; no API key or external service required.
