@@ -75,7 +75,7 @@ function boundedCache(root: string, cache: RootCache): void {
 }
 
 function errorDetail(error: unknown): string {
-  if (error instanceof Error && /Symlink|External path|Nonregular|oversized|secret|Binary|changed during/.test(error.message)) return error.message;
+  if (error instanceof Error && /Symlink|External path|Nonregular|oversized|credential|Binary|changed during/.test(error.message)) return error.message;
   return 'Unreadable file';
 }
 
@@ -203,7 +203,7 @@ export async function buildImportIndex(options: {
       try {
         const content = await readSource(physicalRoot, path, signal);
         if (content.includes('\0')) throw new Error('Binary file');
-        if (hasSecret(content)) throw new Error('Potential secret-bearing file');
+        if (hasSecret(content)) throw new Error('File with a potential credential');
         const after = await metadata(physicalRoot, path, signal);
         if (!fingerprintMatches(fingerprint, after)) throw new Error('File changed during collection');
         const edges = importsFor(path, content, options.known).sort();

@@ -33,8 +33,9 @@ test('bad anchors, duplicates, oversized evidence and secrets fail before infere
   await assert.rejects(verify(duplicate, never), /unique/);
   const big = input(); big.evidence.push({ id: 'big', path: 'b.py', startLine: 1, role: 'caller', content: 'x'.repeat(60000) });
   await assert.rejects(verify(big, never), /byte budget\. Trim each excerpt/);
-  const secret = input(); secret.contract = 'apiKey = "abcdefghijklmnopqrstuvwxyz123456"';
-  await assert.rejects(verify(secret, never), /credential/);
+  // Assembled at runtime so the repository never contains a literal secret.
+  const secret = input(); secret.contract = `apiKey = "${['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('')}"`;
+  await assert.rejects(verify(secret, never), /credential in field contract/);
 });
 
 test('local evidence rejects stale quotes, traversal, and mid-request edits', async t => {

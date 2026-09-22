@@ -60,7 +60,9 @@ test('collection supports legitimate dot-prefixed paths but rejects symlink esca
 test('secret screening protects manual contexts before any HTTP request', async () => {
   let calls = 0;
   const client = new Jev({ apiKey: 'fixture', fetch: async () => { calls++; throw new Error('Must not send'); } });
-  await assert.rejects(client.evaluate({ files: [{ content: 'const apiKey = "abcdefghijklmnopqrstuvwxyz123456";' }] }, {}), /Potential credential/);
+  // Assembled at runtime so the repository never contains a literal secret.
+  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+  await assert.rejects(client.evaluate({ files: [{ path: 'config.ts', content: `const apiKey = "${credential}";` }] }, {}), /Potential credential in config\.ts/);
   assert.equal(calls, 0);
 });
 
