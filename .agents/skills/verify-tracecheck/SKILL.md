@@ -47,7 +47,7 @@ Offline paths need no key: `preview`, `compare`, the MCP `tracecheck_preview` to
   echo '[{"tool":"tracecheck_preview","arguments":{}},{"tool":"tracecheck_review","arguments":{"snapshot":"$snapshot"}}]' > "$RUN/calls.json"
   node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"
   ```
-  The server receives only `PATH`, `HOME`, provider variables, and variables named with `--env NAME`. `$snapshot` is replaced with the snapshot from the latest successful preview in the same run. A step `{"run": ["cmd", "arg", ...]}` runs a local command between tool calls in the same server session, for example to edit the fixture after a preview. `--list` records `tools/list`. Each call is saved as `NN-<tool>.json` with its arguments, `isError`, `structuredContent`, and text content; server stderr goes to `server-stderr.log`.
+  The server receives only `PATH`, `HOME`, provider variables, and variables named with `--env NAME`. `$snapshot` is replaced with the snapshot from the latest successful preview in the same run. A step `{"run": ["cmd", "arg", ...]}` runs a local command between tool calls in the same server session, for example to edit the fixture after a preview. `--list` records `tools/list`. `--progress` sends a progress token with every call and records the notifications under `progress` with their arrival time. Each call is saved as `NN-<tool>.json` with its arguments, `isError`, `structuredContent`, and text content; server stderr goes to `server-stderr.log`.
 
 Drive every entry point the feature map lists for the behavior under test. A CLI run does not prove the MCP path, or the reverse.
 
@@ -76,5 +76,5 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
 | `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |
 | `stand-in-provider.mjs` | `node $S/stand-in-provider.mjs [--port N] [--latency-ms N] [--fail-path REGEX] [--fail-times N]`, started with `hub` | A loopback System One stand-in with fixed latency; one JSON log line per request with its packet and in-flight count |
-| `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored |
+| `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... [--progress] (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored; `--progress` records each call's progress notifications |
 | `scripts/build.mjs --check` | `node scripts/build.mjs --check` (repository script) | Exit 1 when `dist/plugin.mjs` differs from a fresh build; `dist/` is untouched |

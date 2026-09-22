@@ -27,6 +27,8 @@ export type CollectOptions = {
   signal?: AbortSignal; collection?: CollectionOptions; discovery?: DiscoveryScope;
   /** Validated content of the repository configuration file, if any; a change to it changes the snapshot. */
   projectConfig?: ProjectConfig;
+  /** Called as each collection phase starts, with a short description of the phase. */
+  onPhase?: (message: string) => void;
 };
 
 type Loaded = { source: Source; names?: string[] };
@@ -47,6 +49,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   // Rename detection runs once here; readGitChangeContext diffs each detected pair with the same default threshold.
   const changed: string[] = [];
   const renames = new Map<string, string>();
+  options.onPhase?.('Listing changed files');
   const statusFields = await readGitRecords(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'], signal, 'Git change listing failed');
   for (let index = 0; index < statusFields.length;) {
     const status = statusFields[index++]!;
@@ -177,6 +180,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   }
 
   // Safety-check current sources before they become diff pathspecs; baseline bytes stream directly into load.
+  options.onPhase?.('Reading changed files');
   const eligibleChanges: string[] = [];
   for (const path of changePaths) {
     if (!isSource(path)) {
@@ -202,6 +206,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     onBaseline: async (path, change, baseline) => { await load(path, 'changed', undefined, change, baseline); } });
 
   const indexPaths = tracked.filter(path => isSource(path) && isImportable(path)).sort();
+  options.onPhase?.('Indexing imports');
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
   limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
@@ -234,6 +239,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   }
 
 
+  options.onPhase?.('Assembling change packets');
   const packets: ReviewPacket[] = [];
   const sourceByPath = new Map([...loaded].map(([path, item]) => [path, item.source]));
   const primaryPaths = [...changedSourcePaths].sort();

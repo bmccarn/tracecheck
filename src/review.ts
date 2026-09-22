@@ -246,11 +246,15 @@ type Outcome = { response: TypedResponse } | { error: unknown };
 
 /**
  * Sends requests with at most `limit` in flight and returns their outcomes in plan order. Every call receives `signal`;
- * an abort rejects with the signal's reason and starts no further request.
+ * an abort rejects with the signal's reason and starts no further request. `onProgress` hears the plan, then each
+ * finished request in completion order, so its count only rises.
  */
-async function evaluateAll(evaluator: TypedEvaluator, requests: PlannedRequest[], limit: number, signal?: AbortSignal): Promise<Outcome[]> {
+async function evaluateAll(evaluator: TypedEvaluator, requests: PlannedRequest[], limit: number, signal?: AbortSignal,
+  onProgress?: ReviewOptions['onProgress']): Promise<Outcome[]> {
   const outcomes: Outcome[] = new Array(requests.length);
   let next = 0;
+  let completed = 0;
+  onProgress?.(0, requests.length);
   const worker = async () => {
     for (let index = next++; index < requests.length; index = next++) {
       signal?.throwIfAborted();
@@ -261,6 +265,7 @@ async function evaluateAll(evaluator: TypedEvaluator, requests: PlannedRequest[]
         signal?.throwIfAborted();
         outcomes[index] = { error };
       }
+      onProgress?.(++completed, requests.length);
     }
   };
   await Promise.all(Array.from({ length: Math.min(limit, requests.length) }, worker));
@@ -279,6 +284,8 @@ export type ReviewOptions = {
   signal?: AbortSignal;
   /** Most provider requests in flight at once; defaults to DEFAULT_CONCURRENCY. */
   concurrency?: number;
+  /** Called with 0 once the requests are planned, then once per finished request with the number finished so far. */
+  onProgress?: (completed: number, total: number) => void;
 };
 
 /**
@@ -290,11 +297,11 @@ export type ReviewOptions = {
 async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: Record<string, Question> | undefined,
   options: ReviewOptions & { previousEvaluation?: PreviousEvaluation }): Promise<Report> {
   const started = Date.now();
-  const { signal, concurrency = DEFAULT_CONCURRENCY } = options;
+  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress } = options;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('Review concurrency must be a positive whole number.');
   const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
   const requests = packets.filter(hasSourceEvidence).flatMap(evidence => planPacket(plan, evidence, broad));
-  const outcomes = await evaluateAll(evaluator, requests, concurrency, signal);
+  const outcomes = await evaluateAll(evaluator, requests, concurrency, signal, onProgress);
   signal?.throwIfAborted();
 
   const decisions: Decision[] = [];

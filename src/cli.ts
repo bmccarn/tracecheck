@@ -13,6 +13,7 @@ import { reportSchema } from './schema.js';
 import { toSarif } from './sarif.js';
 import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
+import { ReviewProgress } from './progress.js';
 import type { Report } from './domain.js';
 
 /** Exit codes for review and verify statuses, as the help text documents them. */
@@ -73,6 +74,7 @@ async function main() {
     'index-timeout-ms': { type: 'string' }, 'collection-timeout-ms': { type: 'string' },
     'review-timeout-ms': { type: 'string' },
     sarif: { type: 'string' }, 'fail-on-priorities': { type: 'boolean', default: false },
+    quiet: { type: 'boolean', short: 'q', default: false },
   } });
   const command = positionals[0];
   if (values.help || !command) {
@@ -83,7 +85,7 @@ Usage:
                      [--context TEXT] [collection limits] [--json]
   tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
                      [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--previous FILE] [--json] [--out FILE] [--sarif FILE]
+                     [--previous FILE] [--json] [--out FILE] [--sarif FILE] [--quiet]
   tracecheck verify  --input FILE [--repo PATH] [--out FILE]
   tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
   tracecheck compare --previous FILE --current FILE
@@ -106,6 +108,8 @@ Options:
   --json                      Print JSON instead of Markdown (preview, review, assess).
   --out FILE                  Save the review report, verification result, or evaluation as JSON.
   --sarif FILE                review: also write supported findings as SARIF 2.1.0.
+  -q, --quiet                 review: do not print progress lines to stderr. Progress never goes
+                              to stdout, so the report is the same either way.
   --fail-on-priorities        assess: exit 1 when the evaluation lists actionable quality priorities.
   -h, --help                  Show this help.
 
@@ -182,7 +186,8 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     task: values.task, repositoryContext: values.context, collection: collectionOptions(values),
     reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')) }, controller.signal);
   const { reviewTimeoutMs, request: collectionRequest } = settings;
-  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal });
+  const progress = command === 'review' && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${update.message}`)) : undefined;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === 'preview') {
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.join(', ')}`).join('\n');
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
@@ -192,10 +197,13 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)]);
   const previous = values.previous ? await readPrevious(values.previous) : undefined;
   const provider = jevSettings(process.env, settings.provider);
-  const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }), { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous });
+  const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }),
+    { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous, onProgress: progress?.requests });
   reviewSignal.throwIfAborted();
+  progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');
+  progress?.finished();
   if (values.out) await writeJson(values.out, report);
   if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
