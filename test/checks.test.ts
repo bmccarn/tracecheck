@@ -33,6 +33,11 @@ test('parses decorators without enabling JSX in TypeScript', () => {
   assert.deepEqual(found('model.mjs', 'export @observable class Model {\n  ratio(a, b) { return a / b; }\n}\n'), ['zero-divisor ratio: a / b']);
 });
 
+test('selects sites in decorator arguments on parameter properties', () => {
+  const code = 'class Service {\n  constructor(@Inject(JSON.parse(raw)) private readonly store: Store, @Limit(b / c) size: number) {}\n}\n';
+  assert.deepEqual(found('service.ts', code), ['unhandled-json constructor: JSON.parse(raw)', 'zero-divisor constructor: b / c']);
+});
+
 test('reports a parse failure by file and error code without quoting source', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'average.ts'), 'let hiddenSourceName = 1;\nlet hiddenSourceName = 2;\n');
