@@ -11,6 +11,7 @@ Assess evaluates caller-supplied task text, files, and repository context across
 - `assess-gate` makes the CLI exit `1` with `--fail-on-priorities` when `priorities` is not empty; without the flag the exit is `0`.
 - `assess-mcp` returns the same evaluation from `tracecheck_assess`.
 - `assess-limits` bounds one assessment to 90 seconds; Ctrl-C in the CLI and client cancellation in MCP abort the provider request.
+- `assess-credential-guard` refuses input that carries a credential-shaped string before any provider request, naming the file path or input field but not the value.
 
 ## How to get to it (user POV)
 
@@ -30,6 +31,7 @@ Preconditions:
 - **MCP entry.** Use `[{"tool":"tracecheck_assess","arguments":<context.json>}]` with `mcp-call.mjs` (no `--repo` needed). The record has `isError: false` and 19 metrics in `structuredContent.metrics`.
 - **Cancellation.** Point `TYPESAFE_BASE_URL` at a local HTTP server that never answers, set a dummy `JEV_API_KEY`, start the CLI assess command, and send `SIGINT` after a second. The command exits `2` with an abort message instead of being killed by the signal.
 - **Missing key.** Run the CLI command with `env -i PATH="$PATH" node dist/plugin.mjs assess --input "$RUN/context.json"`. Exit `2` with a message naming the three key variables.
+- **Credential guard.** Supply a file such as `{"path":"config/.env","content":"API_KEY=<random-looking value>\n"}`, built at run time rather than committed. Point `TYPESAFE_BASE_URL` at a loopback HTTP server that counts requests, with any placeholder key. The CLI exits `2` and the MCP record has `isError: true`, both with `Potential credential in config/.env (field files[0].content)`; the server receives no request and the value is absent from the output.
 
 ## Gotchas
 
