@@ -266,7 +266,7 @@ codex plugin add tracecheck@tracecheck-plugins
 
 Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ (22.x) or 24.11+ and a Jev key in the launching environment. The release-only marketplace becomes available only when the stable `0.3.0` publication has populated it from the verified release artifact. For local-bundle development and prepublication installation, follow the [publishing guide](docs/publishing.md#prerelease-local-bundle-installation).
 
-Existing installations from `bmccarn/tracecheck` remain pinned to historical `v0.2.0`. Re-register against the release-only marketplace after stable `0.3.0` publication to receive the newer runtime and skill together.
+Adding `bmccarn/tracecheck` itself as a marketplace also installs the current stable release: its in-repo catalogs pin the latest stable tag and move with each stable release, never to a release candidate. Installations added while the catalogs pinned `v0.2.0` receive the current release after refreshing the marketplace and updating or reinstalling the plugin.
 
 ## MCP and agent setup
 

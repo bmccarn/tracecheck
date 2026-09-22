@@ -11,6 +11,9 @@ const targets = [
   { path: '.claude-plugin/plugin.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; } },
 ];
 
+// Catalogs that let users add this repository itself as a marketplace. They pin a stable release tag.
+const catalogPaths = ['.agents/plugins/marketplace.json', '.claude-plugin/marketplace.json'];
+
 function fail(message) {
   throw new Error(message);
 }
@@ -21,6 +24,13 @@ async function readJson(path) {
   } catch {
     fail(`Cannot read valid JSON from ${path}.`);
   }
+}
+
+function catalogSource(path, value) {
+  const entries = Array.isArray(value?.plugins) ? value.plugins.filter(entry => entry?.name === 'tracecheck') : [];
+  const source = entries[0]?.source;
+  if (entries.length !== 1 || typeof source !== 'object' || source === null) fail(`${path} must list the tracecheck plugin once with a source object.`);
+  return source;
 }
 
 
@@ -49,11 +59,24 @@ async function main() {
   }
   validateMetadata(values);
 
+  const catalogs = [];
+  for (const path of catalogPaths) {
+    const value = await readJson(path);
+    catalogs.push({ path, value, source: catalogSource(path, value) });
+  }
+
+  // Prereleases never reach the marketplaces, so the catalogs keep the current stable tag.
+  const stable = !version.includes('-');
+  for (const { value, target } of values) target.setVersion(value, version);
+  if (stable) for (const { source } of catalogs) source.ref = `v${version}`;
+
   const suffix = `.release-prepare-${process.pid}-${randomUUID()}`;
-  const staged = values.map(({ path, value, target }) => {
-    target.setVersion(value, version);
-    return { path, backup: `${path}${suffix}.backup`, temporary: `${path}${suffix}.next`, content: `${JSON.stringify(value, null, 2)}\n` };
-  });
+  const staged = [...values, ...(stable ? catalogs : [])].map(({ path, value }) => ({
+    path,
+    backup: `${path}${suffix}.backup`,
+    temporary: `${path}${suffix}.next`,
+    content: `${JSON.stringify(value, null, 2)}\n`,
+  }));
   const replaced = [];
   let preserveBackups = false;
   try {
@@ -85,6 +108,9 @@ async function main() {
   }
 
   console.log(`Prepared release metadata for ${version}.`);
+  console.log(stable
+    ? `Marketplace catalogs now pin v${version}.`
+    : `Marketplace catalogs keep ${catalogs.map(({ source }) => source.ref).join(', ')} for this prerelease.`);
 }
 
 main().catch(error => {

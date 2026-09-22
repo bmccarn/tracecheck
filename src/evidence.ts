@@ -47,30 +47,55 @@ export function focusSource(content: string, targets: Range[], maxCharacters = 1
   return { content: parts.join('\n'), ranges, totalLines: lines.length, complete: false };
 }
 
+/** Files the collector reviews as source; imports of anything else, such as images, add no edge. */
+export const isSource = (path: string) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path)
+  && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path)
+  && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
+
+const PYTHON_TARGETS = ['.py', '/__init__.py'];
+// Extensionless specifiers and directory imports, in resolution order.
+const SCRIPT_TARGETS = ['.ts', '.tsx', '.js', '.jsx',
+  ...['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs'].map(extension => `/index.${extension}`)];
+// NodeNext: an emitted-extension specifier names the TypeScript source that produces it.
+const SCRIPT_SOURCES: Record<string, string[]> = { '.js': ['.ts', '.tsx'], '.jsx': ['.tsx'], '.mjs': ['.mts'], '.cjs': ['.cts'] };
+
+/** Names in a Python import list: `a.b as x, c`, optionally parenthesized with comments. */
+function pythonNames(list: string): string[] {
+  return list.replace(/#[^\n]*/g, '').replace(/[()]/g, '').split(',')
+    .map(item => item.trim().split(/\s+/)[0]!).filter(name => /^[\w.*]+$/.test(name));
+}
+
+/** Resolves relative JS/TS and Python imports to known source files; unsupported targets such as images add no edge. */
 export function importsFor(path: string, content: string, known: Set<string>): string[] {
   const result = new Set<string>();
-  const resolveStem = (stem: string, extensions: string[]) => {
-    const normalized = posix.normalize(stem);
-    const found = [normalized, ...extensions.map(extension => normalized + extension)].find(item => known.has(item));
+  const resolveFirst = (candidates: string[]) => {
+    const found = candidates.map(item => posix.normalize(item)).find(item => isSource(item) && known.has(item));
     if (found) result.add(found);
   };
   if (path.endsWith('.py')) {
-    for (const match of content.matchAll(/^\s*(?:from\s+([.\w]+)\s+import\s+([\w*]+)|import\s+([\w.]+))/gm)) {
-      const module = match[1] ?? match[3]!;
-      const dots = module.match(/^\.+/)?.[0].length ?? 0;
-      const stem = module.slice(dots).replaceAll('.', '/');
-      const roots = dots ? [posix.join(posix.dirname(path), ...Array(Math.max(0, dots - 1)).fill('..'))] : ['', 'src'];
-      for (const root of roots) {
-        resolveStem(posix.join(root, stem), ['.py', '/__init__.py']);
-        if (match[2] && match[2] !== '*') resolveStem(posix.join(root, stem, match[2]), ['.py', '/__init__.py']);
+    const statements = content.replace(/\\\r?\n/g, ' ');
+    for (const match of statements.matchAll(/^[ \t]*(?:from[ \t]+([.\w]+)[ \t]+import\b[ \t]*(\([^)]*\)|[^\n;#]*)|import[ \t]+([^\n;#]*))/gm)) {
+      const [, from, imported, plain] = match;
+      const members = from ? pythonNames(imported!).filter(name => /^\w+$/.test(name)) : [];
+      for (const module of from ? [from] : pythonNames(plain!)) {
+        const dots = module.match(/^\.+/)?.[0].length ?? 0;
+        const stem = module.slice(dots).replaceAll('.', '/');
+        const roots = dots ? [posix.join(posix.dirname(path), ...Array(Math.max(0, dots - 1)).fill('..'))] : ['', 'src'];
+        for (const root of roots) {
+          const base = posix.join(root, stem);
+          resolveFirst(PYTHON_TARGETS.map(suffix => base + suffix));
+          for (const member of members) resolveFirst(PYTHON_TARGETS.map(suffix => posix.join(base, member) + suffix));
+        }
       }
     }
   } else {
     for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
       if (!match[1]!.startsWith('.')) continue;
       const stem = posix.join(posix.dirname(path), match[1]!);
-      resolveStem(stem, ['.ts', '.tsx', '.js', '.jsx', '/index.ts', '/index.js']);
-      if (stem.endsWith('.js')) resolveStem(stem.slice(0, -3), ['.ts', '.tsx']);
+      resolveFirst([stem, ...SCRIPT_TARGETS.map(suffix => stem + suffix)]);
+      const extension = posix.extname(stem);
+      const sources = SCRIPT_SOURCES[extension];
+      if (sources) resolveFirst(sources.map(suffix => stem.slice(0, -extension.length) + suffix));
     }
   }
   return [...result];
