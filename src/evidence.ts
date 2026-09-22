@@ -47,9 +47,12 @@ export function focusSource(content: string, targets: Range[], maxCharacters = 1
   return { content: parts.join('\n'), ranges, totalLines: lines.length, complete: false };
 }
 
-const PYTHON_MODULE = /\.py$/;
+/** Files the collector reviews as source; imports of anything else, such as images, add no edge. */
+export const isSource = (path: string) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path)
+  && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path)
+  && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
+
 const PYTHON_TARGETS = ['.py', '/__init__.py'];
-const SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
 // Extensionless specifiers and directory imports, in resolution order.
 const SCRIPT_TARGETS = ['.ts', '.tsx', '.js', '.jsx',
   ...['ts', 'tsx', 'mts', 'cts', 'js', 'jsx', 'mjs', 'cjs'].map(extension => `/index.${extension}`)];
@@ -62,11 +65,11 @@ function pythonNames(list: string): string[] {
     .map(item => item.trim().split(/\s+/)[0]!).filter(name => /^[\w.*]+$/.test(name));
 }
 
-/** Resolves relative JS/TS and Python imports to known module files; other targets such as assets add no edge. */
+/** Resolves relative JS/TS and Python imports to known source files; unsupported targets such as images add no edge. */
 export function importsFor(path: string, content: string, known: Set<string>): string[] {
   const result = new Set<string>();
-  const resolveFirst = (candidates: string[], module: RegExp) => {
-    const found = candidates.map(item => posix.normalize(item)).find(item => module.test(item) && known.has(item));
+  const resolveFirst = (candidates: string[]) => {
+    const found = candidates.map(item => posix.normalize(item)).find(item => isSource(item) && known.has(item));
     if (found) result.add(found);
   };
   if (path.endsWith('.py')) {
@@ -80,8 +83,8 @@ export function importsFor(path: string, content: string, known: Set<string>): s
         const roots = dots ? [posix.join(posix.dirname(path), ...Array(Math.max(0, dots - 1)).fill('..'))] : ['', 'src'];
         for (const root of roots) {
           const base = posix.join(root, stem);
-          resolveFirst(PYTHON_TARGETS.map(suffix => base + suffix), PYTHON_MODULE);
-          for (const member of members) resolveFirst(PYTHON_TARGETS.map(suffix => posix.join(base, member) + suffix), PYTHON_MODULE);
+          resolveFirst(PYTHON_TARGETS.map(suffix => base + suffix));
+          for (const member of members) resolveFirst(PYTHON_TARGETS.map(suffix => posix.join(base, member) + suffix));
         }
       }
     }
@@ -89,10 +92,10 @@ export function importsFor(path: string, content: string, known: Set<string>): s
     for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
       if (!match[1]!.startsWith('.')) continue;
       const stem = posix.join(posix.dirname(path), match[1]!);
-      resolveFirst([stem, ...SCRIPT_TARGETS.map(suffix => stem + suffix)], SCRIPT_MODULE);
+      resolveFirst([stem, ...SCRIPT_TARGETS.map(suffix => stem + suffix)]);
       const extension = posix.extname(stem);
       const sources = SCRIPT_SOURCES[extension];
-      if (sources) resolveFirst(sources.map(suffix => stem.slice(0, -extension.length) + suffix), SCRIPT_MODULE);
+      if (sources) resolveFirst(sources.map(suffix => stem.slice(0, -extension.length) + suffix));
     }
   }
   return [...result];

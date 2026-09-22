@@ -167,18 +167,18 @@ test('links wrapped, comma-separated, and aliased Python imports', () => {
     ['pkg/__init__.py', 'pkg/calc.py', 'pkg/fmt.py', 'pkg/sub/__init__.py']);
 });
 
-test('resolves NodeNext module specifiers to TypeScript sources and ignores assets', () => {
+test('resolves NodeNext module specifiers to TypeScript sources and links only reviewable files', () => {
   const known = new Set(['y.mts', 'y.cts', 'z.tsx', 'a.ts', 'b.tsx', 'c.js', 'd.jsx', 'e.ts', 'e.js', 'plain.mjs', 'common.cjs',
-    'dir/index.tsx', 'jsx/index.jsx', 'mod/index.mts', 'ts/index.ts', 'js/index.js', 'logo.png', 'styles.css', 'data.json']);
+    'dir/index.tsx', 'jsx/index.jsx', 'mod/index.mts', 'ts/index.ts', 'js/index.js', 'logo.png', 'styles.css', 'data.json', 'vendor/lib.js']);
   const cases: Array<[string, string[]]> = [
     ['./y.mjs', ['y.mts']], ['./y.cjs', ['y.cts']], ['./z.jsx', ['z.tsx']], ['./dir', ['dir/index.tsx']],
     ['./jsx', ['jsx/index.jsx']], ['./mod', ['mod/index.mts']], ['./ts', ['ts/index.ts']], ['./js/', ['js/index.js']],
     ['./a', ['a.ts']], ['./a.js', ['a.ts']], ['./b.js', ['b.tsx']], ['./c', ['c.js']], ['./c.js', ['c.js']], ['./d', ['d.jsx']],
     ['./e.js', ['e.js', 'e.ts']], ['./y.mts', ['y.mts']], ['./plain.mjs', ['plain.mjs']], ['./common.cjs', ['common.cjs']],
-    ['./logo.png', []], ['./styles.css', []], ['./data.json', []],
+    ['./styles.css', ['styles.css']], ['./data.json', ['data.json']], ['./logo.png', []], ['./vendor/lib.js', []],
   ];
   for (const [specifier, expected] of cases) {
     assert.deepEqual(importsFor('main.mts', `import value from '${specifier}';`, known).sort(), expected, specifier);
   }
-  assert.deepEqual(importsFor('lib/main.cts', "const y = require('../y.cjs'); import '../styles.css';", known), ['y.cts']);
+  assert.deepEqual(importsFor('lib/main.cts', "const y = require('../y.cjs'); import '../logo.png';", known), ['y.cts']);
 });

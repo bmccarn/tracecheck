@@ -6,7 +6,7 @@ import { findCandidates } from './checks.js';
 import { collectionOptionsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { readGitChangeContext, type GitChange } from './git-context.js';
-import { focusSource, symbolRanges } from './evidence.js';
+import { focusSource, isSource, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { hasSecret, readSource } from './safety.js';
 
@@ -21,9 +21,6 @@ const PRIMARY_TARGET_CHARS = 30_000;
 const PRIMARY_TARGET_BYTES = 40_000;
 const isImportable = (path: string) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
 const isTest = (path: string) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
-const isSource = (path: string) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path)
-  && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path)
-  && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
 
 export type CollectOptions = {
   repo: string; base?: string; includeUntracked?: boolean; task?: string; repositoryContext?: string;

@@ -43378,8 +43378,8 @@ function pythonNames(list) {
 }
 function importsFor(path, content, known) {
   const result = /* @__PURE__ */ new Set();
-  const resolveFirst = (candidates, module) => {
-    const found = candidates.map((item) => posix.normalize(item)).find((item) => module.test(item) && known.has(item));
+  const resolveFirst = (candidates) => {
+    const found = candidates.map((item) => posix.normalize(item)).find((item) => isSource(item) && known.has(item));
     if (found) result.add(found);
   };
   if (path.endsWith(".py")) {
@@ -43393,8 +43393,8 @@ function importsFor(path, content, known) {
         const roots = dots ? [posix.join(posix.dirname(path), ...Array(Math.max(0, dots - 1)).fill(".."))] : ["", "src"];
         for (const root of roots) {
           const base = posix.join(root, stem);
-          resolveFirst(PYTHON_TARGETS.map((suffix) => base + suffix), PYTHON_MODULE);
-          for (const member of members2) resolveFirst(PYTHON_TARGETS.map((suffix) => posix.join(base, member) + suffix), PYTHON_MODULE);
+          resolveFirst(PYTHON_TARGETS.map((suffix) => base + suffix));
+          for (const member of members2) resolveFirst(PYTHON_TARGETS.map((suffix) => posix.join(base, member) + suffix));
         }
       }
     }
@@ -43402,10 +43402,10 @@ function importsFor(path, content, known) {
     for (const match of content.matchAll(/(?:\bfrom\s*|\bimport\s*|\brequire\s*\()\s*['"]([^'"]+)['"]/g)) {
       if (!match[1].startsWith(".")) continue;
       const stem = posix.join(posix.dirname(path), match[1]);
-      resolveFirst([stem, ...SCRIPT_TARGETS.map((suffix) => stem + suffix)], SCRIPT_MODULE);
+      resolveFirst([stem, ...SCRIPT_TARGETS.map((suffix) => stem + suffix)]);
       const extension = posix.extname(stem);
       const sources = SCRIPT_SOURCES[extension];
-      if (sources) resolveFirst(sources.map((suffix) => stem.slice(0, -extension.length) + suffix), SCRIPT_MODULE);
+      if (sources) resolveFirst(sources.map((suffix) => stem.slice(0, -extension.length) + suffix));
     }
   }
   return [...result];
@@ -43420,13 +43420,12 @@ function symbolRanges(content, names) {
   }
   return ranges;
 }
-var PYTHON_MODULE, PYTHON_TARGETS, SCRIPT_MODULE, SCRIPT_TARGETS, SCRIPT_SOURCES;
+var isSource, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES;
 var init_evidence = __esm({
   "src/evidence.ts"() {
     "use strict";
-    PYTHON_MODULE = /\.py$/;
+    isSource = (path) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path) && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path) && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
     PYTHON_TARGETS = [".py", "/__init__.py"];
-    SCRIPT_MODULE = /\.[cm]?[jt]sx?$/;
     SCRIPT_TARGETS = [
       ".ts",
       ".tsx",
@@ -43977,7 +43976,7 @@ async function collect(options) {
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
 }
-var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, isSource, sourceChars, sourceBytes;
+var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, isTest, sourceChars, sourceBytes;
 var init_collector = __esm({
   "src/collector.ts"() {
     "use strict";
@@ -43999,7 +43998,6 @@ var init_collector = __esm({
     PRIMARY_TARGET_BYTES = 4e4;
     isImportable = (path) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
     isTest = (path) => /(^|\/)(tests?|__tests__)\/|(^|\/)test_[^/]+\.py$|\.(?:test|spec)\./.test(path);
-    isSource = (path) => /\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|swift|c|h|cpp|cs|rb|php|sh|sql|graphql|json|ya?ml|toml|md|css|html)$/.test(path) && !/(^|\/)(?:node_modules|dist|build|vendor|coverage|\.git|\.venv)(\/|$)/.test(path) && !/(?:\.min\.js|package-lock\.json|pnpm-lock\.yaml)$/.test(path);
     sourceChars = (source) => source.content.length + (source.before?.length ?? 0);
     sourceBytes = (source) => Buffer.byteLength(JSON.stringify(source));
   }

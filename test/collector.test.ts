@@ -96,7 +96,7 @@ test('collects Python callers and tests that use wrapped or comma-separated impo
     [['pkg/calc.py', 'changed'], ['pkg/report.py', 'caller'], ['tests/test_summary.py', 'test']]);
 });
 
-test('links NodeNext module specifiers without collecting imported assets', async t => {
+test('links NodeNext module specifiers and stylesheets but not images', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'lib.mts'), 'export const scale = 2;');
   await writeFile(join(repo.root, 'logo.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
@@ -107,8 +107,8 @@ test('links NodeNext module specifiers without collecting imported assets', asyn
   await writeFile(join(repo.root, 'app.tsx'), 'import { scale } from "./lib.mjs";\nimport logo from "./logo.png";\nimport "./app.css";\nexport const size = (value: number) => value / scale + logo.length;');
   const plan = await collect({ repo: repo.root });
   assert.deepEqual(plan.sources.map(source => [source.path, source.role]).sort(),
-    [['app.tsx', 'changed'], ['lib.mts', 'dependency'], ['main.ts', 'caller']]);
-  assert.doesNotMatch([...plan.limitations, ...plan.packets.flatMap(packet => packet.limitations)].join('\n'), /logo\.png|app\.css/);
+    [['app.css', 'dependency'], ['app.tsx', 'changed'], ['lib.mts', 'dependency'], ['main.ts', 'caller']]);
+  assert.doesNotMatch([...plan.limitations, ...plan.packets.flatMap(packet => packet.limitations)].join('\n'), /logo\.png/);
 });
 
 test('packs every eligible changed path exactly once across bounded packets', async t => {

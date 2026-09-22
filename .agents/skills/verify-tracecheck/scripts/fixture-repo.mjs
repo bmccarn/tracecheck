@@ -39,7 +39,7 @@ const scenarios = {
     change: { 'pkg/calc.py': 'def mean(values):\n    return sum(values) / len(values)\n' },
   },
   'module-paths': {
-    description: 'TSX module changes; it imports .mjs, .cjs, and directory specifiers backed by .mts, .cts, and index.tsx sources, plus an image and a stylesheet. A caller imports it as ./app.jsx.',
+    description: 'TSX module changes; it imports .mjs, .cjs, and directory specifiers backed by .mts, .cts, and index.tsx sources, plus a stylesheet (a dependency) and an image (no edge). A caller imports it as ./app.jsx.',
     baseline: {
       'src/lib.mts': 'export const scale = 2;\n',
       'src/legacy.cts': 'export const offset = 1;\n',
