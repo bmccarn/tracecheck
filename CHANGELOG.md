@@ -9,8 +9,10 @@
 - Link Python callers and tests through parenthesized, comma-separated, and aliased imports.
 - Resolve NodeNext module paths (`.mjs` to `.mts`, `.cjs` to `.cts`, `.jsx` to `.tsx`, and directory `index` files), and stop creating edges to unsupported files such as images.
 - Point both in-repo marketplace catalogs at the current stable release, update them during release preparation, and fail the release gates when a catalog ref does not match.
-- Retry network failures when calling Jev, and report `Jev request failed (network error)` after the last attempt instead of `fetch failed`.
-- Add `JEV_TIMEOUT_MS` for the per-request timeout, and name the limit and its duration when a request, review, or verification times out.
+- Build only the bundle in `npm run build`, type-check once with `npm run check`, and stop emitting unused JavaScript and declaration files into `dist/`.
+- CI now tests on Node 22.18.0 and the current LTS release, fails when the committed bundle differs from a fresh build, runs the offline demo, and cancels superseded pull request runs. `engines.node` now matches the bundled Babel range (`^22.18.0 || >=24.11.0`).
+- Parse JSX in `.js`, `.mjs`, and `.cjs` files and decorators in JavaScript and TypeScript, so these files get source checks instead of a parse-failure limitation.
+- Skip source-check candidates that cannot be defects (non-zero literal divisors, catch handlers that rethrow, and `JSON.parse` inside a `try` block), stop selecting unchanged module-level code, and flag `/=` and `%=`.
 
 ## 0.3.0 — 2026-09-18
 

@@ -12,7 +12,7 @@ const pkg = existsSync('package.json') ? JSON.parse(readFileSync('package.json',
 add('checkout', pkg.name === '@bmccarn/tracecheck', `cwd ${process.cwd()}; package ${pkg.name ?? 'missing'} ${pkg.version ?? ''}`.trim());
 
 const [major, minor] = process.versions.node.split('.').map(Number);
-add('node', major > 22 || (major === 22 && minor >= 18), `node ${process.versions.node}; package requires >=22.18.0`);
+add('node', (major === 22 && minor >= 18) || (major === 24 && minor >= 11) || major > 24, `node ${process.versions.node}; package requires ${pkg.engines?.node ?? '^22.18.0 || >=24.11.0'}`);
 
 add('dependencies', existsSync('node_modules/@modelcontextprotocol/client') && existsSync('node_modules/esbuild'), 'run `npm ci` when false');
 

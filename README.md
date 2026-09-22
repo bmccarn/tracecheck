@@ -8,7 +8,7 @@ Your agent investigates the code. Tracecheck checks its hypotheses against the e
 
 [![Powered by Jev](https://img.shields.io/badge/Powered_by-Jev-6D5EF5?style=for-the-badge)](https://typesafe.ai)
 [![MCP stdio](https://img.shields.io/badge/MCP-stdio-111827?style=for-the-badge)](#mcp-and-agent-setup)
-[![Node.js 22.18+](https://img.shields.io/badge/Node.js-22.18%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
+[![Node.js 22.18+ or 24.11+](https://img.shields.io/badge/Node.js-22.18%2B%20%7C%2024.11%2B-339933?style=for-the-badge&logo=nodedotjs&logoColor=white)](package.json)
 
 [Quick start](#quick-start) · [How it works](#how-it-works) · [Agent setup](#mcp-and-agent-setup) · [Quality dimensions](#quality-dimensions) · [Distribution](#distribution) · [Roadmap](#roadmap)
 
@@ -50,7 +50,7 @@ The division of work is deliberate: code extracts locations and computes compari
 
 ### Requirements
 
-- **Node.js 22.18 or newer** and npm.
+- **Node.js 22.18 or later 22.x, or 24.11 or newer**, and npm.
 - A Jev API key from the [TypeSafe console](https://console.typesafe.ai) for live assessments.
 - Git and a repository with at least one commit for automatic collection. Supplied-context assessment does not require Git.
 
@@ -264,7 +264,7 @@ codex plugin marketplace add bmccarn/tracecheck-plugins
 codex plugin add tracecheck@tracecheck-plugins
 ```
 
-Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ and a Jev key in the launching environment. The release-only marketplace becomes available only when the stable `0.3.0` publication has populated it from the verified release artifact. For local-bundle development and prepublication installation, follow the [publishing guide](docs/publishing.md#prerelease-local-bundle-installation).
+Start a new task and ask to use the Tracecheck skill. Both installations require Node.js 22.18+ (22.x) or 24.11+ and a Jev key in the launching environment. The release-only marketplace becomes available only when the stable `0.3.0` publication has populated it from the verified release artifact. For local-bundle development and prepublication installation, follow the [publishing guide](docs/publishing.md#prerelease-local-bundle-installation).
 
 Adding `bmccarn/tracecheck` itself as a marketplace also installs the current stable release: its in-repo catalogs pin the latest stable tag and move with each stable release, never to a release candidate. Installations added while the catalogs pinned `v0.2.0` receive the current release after refreshing the marketplace and updating or reinstalling the plugin.
 
@@ -383,8 +383,11 @@ Partial discovery reports successfully indexed versus eligible file counts and b
 The broad assessment accepts code in any language, but that is not a claim of equal accuracy across languages. Automatic collection supports common source, configuration, and documentation extensions. Exact parser-derived findings currently cover **JS/TS division or remainder boundaries, swallowed failures, and JSON parsing boundaries**. A matching syntax pattern is a hypothesis for Jev to assess, not an automatic bug report.
 
 ```sh
-npm run validate                    # Type checks, tests, and builds
-npm run package:check               # Tarball contents and offline CLI/MCP execution
+npm run check                       # Type checks source, tests, examples, and benchmarks; emits nothing
+npm run build                       # Bundles dist/plugin.mjs
+npm run validate                    # Type checks, bundles, and tests
+npm run package:check               # Bundles, then checks tarball contents and offline CLI/MCP execution
+npm run release:check               # validate, package checks, and release metadata; type checks and bundles once
 npm run demo                        # Scripted example; no live inference
 npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
@@ -394,7 +397,7 @@ npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project labe
 
 Live commands require credentials and consume API usage. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
 
-GitHub Actions runs `npm ci`, `npm run validate`, and `npm run package:check` on pushes and pull requests using Node 22.18.0. These checks need no live inference credentials.
+GitHub Actions runs on pull requests and pushes to `main`, using Node 22.18.0 and the current 24.x LTS release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo, and runs `npm run release:check`. These checks need no live inference credentials. Commit the rebuilt bundle with any change that affects it.
 
 ## Troubleshooting
 
