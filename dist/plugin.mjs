@@ -44108,8 +44108,9 @@ var init_jev = __esm({
           }
           if (response.status === 400) {
             const body2 = await boundedJson(response).catch(() => null);
-            const error62 = external_exports.object({ detail: external_exports.object({ error_type: external_exports.string() }) }).safeParse(body2);
-            if (error62.success && error62.data.detail.error_type === "max_tokens_exceeded") {
+            const direct = external_exports.object({ detail: external_exports.object({ error_type: external_exports.string() }) }).safeParse(body2);
+            const relayed = external_exports.object({ error: external_exports.object({ message: external_exports.string() }) }).safeParse(body2);
+            if (direct.success && direct.data.detail.error_type === "max_tokens_exceeded" || relayed.success && /"error_type"\s*:\s*"max_tokens_exceeded"/.test(relayed.data.error.message)) {
               throw new Error("Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.");
             }
           } else await response.body?.cancel();

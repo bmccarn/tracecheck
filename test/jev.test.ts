@@ -54,6 +54,11 @@ test('validates native Noul and Score responses and catches out-of-rubric scores
 test('turns the provider context-limit code into actionable scope guidance', async () => {
   const client = new Jev({ apiKey: 'fixture-key', fetch: async () => Response.json({ detail: { error_type: 'max_tokens_exceeded', secret: 'must not be echoed' } }, { status: 400 }) });
   await assert.rejects(client.evaluate({}, {}), error => error instanceof Error && /Split the review/.test(error.message) && !/echoed/.test(error.message));
+  // OpenRouter relays the same code inside its own envelope (body captured from a live over-limit request).
+  const relayed = new Jev({ apiKey: 'fixture-key', baseUrl: 'https://openrouter.ai/api', fetch: async () => Response.json({ error: { message: 'HTTP 400: {"detail":{"error_type":"max_tokens_exceeded"}}', code: 400 } }, { status: 400 }) });
+  await assert.rejects(relayed.evaluate({}, {}), /Split the review/);
+  const other = new Jev({ apiKey: 'fixture-key', fetch: async () => Response.json({ error: { message: 'Invalid request parameters', code: 400 } }, { status: 400 }) });
+  await assert.rejects(other.evaluate({}, {}), error => error instanceof Error && /HTTP 400/.test(error.message) && !/Invalid request/.test(error.message));
 });
 
 test('selects TypeSafe or OpenRouter from the configured credentials', () => {

@@ -35,7 +35,8 @@ try {
   assert.equal(report.decisions.length, 1);
   assert.equal(Object.keys(report.quality!.metrics).length, 19);
   assert.equal(report.usage.requests, 1);
-  assert.equal(report.models[0]?.startsWith('jev-'), true);
+  // OpenRouter reports its namespaced ID, for example typesafe/jev-1.13-20260917.
+  assert.match(report.models[0] ?? '', /^(?:typesafe\/)?jev-/);
   const repeat = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
   assert.ok(!repeat.isError);
   const repeated = repeat.structuredContent as { report: { id: string }; cached: boolean };

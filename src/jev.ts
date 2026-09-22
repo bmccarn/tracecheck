@@ -122,8 +122,11 @@ export class Jev implements Evaluator, TypedEvaluator {
       // Read only a known error code; never surface a remote body that may echo source.
       if (response.status === 400) {
         const body: unknown = await boundedJson(response).catch(() => null);
-        const error = z.object({ detail: z.object({ error_type: z.string() }) }).safeParse(body);
-        if (error.success && error.data.detail.error_type === 'max_tokens_exceeded') {
+        const direct = z.object({ detail: z.object({ error_type: z.string() }) }).safeParse(body);
+        // OpenRouter forwards TypeSafe's error body as a string inside its own error envelope.
+        const relayed = z.object({ error: z.object({ message: z.string() }) }).safeParse(body);
+        if ((direct.success && direct.data.detail.error_type === 'max_tokens_exceeded')
+          || (relayed.success && /"error_type"\s*:\s*"max_tokens_exceeded"/.test(relayed.data.error.message))) {
           throw new Error('Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.');
         }
       } else await response.body?.cancel();

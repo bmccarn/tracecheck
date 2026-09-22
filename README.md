@@ -347,15 +347,15 @@ Tracecheck does not load `.env` files automatically or persist your API key. Rev
 - `preview` is local. `preview --json` shows the captured source as well as the collection metadata.
 - The collector skips generated paths, symlinks, binary files, and some recognizable secret patterns. Known credential patterns are also checked at the provider boundary for manually supplied context. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
+- Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
 
 ### Using Jev through OpenRouter
 
-OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts the same requests as TypeSafe's API and returns the same answers. Set `OPENROUTER_API_KEY` to use it. OpenRouter's documented TypeSafe SDK setup also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
+OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts TypeSafe's request format. Set `OPENROUTER_API_KEY` to use it. The setup from OpenRouter's TypeSafe SDK guide also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
 
-OpenRouter maps bare model IDs such as `jev-latest` and `jev-1.13` to its `typesafe/` models, so `JEV_MODEL` needs no prefix. Reports record the model ID that OpenRouter returns, for example `typesafe/jev-1.13-20260917`. OpenRouter bills these requests to your OpenRouter account, and the review context passes through OpenRouter on its way to TypeSafe.
+`JEV_MODEL` takes the same bare IDs as TypeSafe, such as `jev-latest`, and OpenRouter routes them to its `typesafe/` models. Reports record the model ID that OpenRouter returns, for example `typesafe/jev-1.13-20260917`. OpenRouter bills these requests to your OpenRouter account, and review context passes through OpenRouter on its way to TypeSafe.
 
-OpenRouter lists a 32,000-token context for Jev. A review request larger than that fails, and Tracecheck reports the failure instead of a partial review.
-- Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
+OpenRouter lists a 32,000-token context for Jev. When a request exceeds the provider's limit, Tracecheck gives the same "split the review" guidance it gives for TypeSafe.
 
 ### Collection limits
 
