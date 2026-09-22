@@ -35988,11 +35988,20 @@ function isIdentifier(node2, opts) {
 function isStringLiteral(node2, opts) {
   return isType$1("StringLiteral", node2, opts);
 }
+function isNumericLiteral(node2, opts) {
+  return isType$1("NumericLiteral", node2, opts);
+}
 function isMemberExpression(node2, opts) {
   return isType$1("MemberExpression", node2, opts);
 }
 function isThisExpression(node2, opts) {
   return isType$1("ThisExpression", node2, opts);
+}
+function isThrowStatement(node2, opts) {
+  return isType$1("ThrowStatement", node2, opts);
+}
+function isTryStatement(node2, opts) {
+  return isType$1("TryStatement", node2, opts);
 }
 function isUnaryExpression(node2, opts) {
   return isType$1("UnaryExpression", node2, opts);
@@ -36014,6 +36023,9 @@ function isMetaProperty(node2, opts) {
 }
 function isSuper(node2, opts) {
   return isType$1("Super", node2, opts);
+}
+function isBigIntLiteral(node2, opts) {
+  return isType$1("BigIntLiteral", node2, opts);
 }
 function isPrivateName(node2, opts) {
   return isType$1("PrivateName", node2, opts);
@@ -42992,10 +43004,33 @@ Expected ${val.length + 1} quasis but got ${node2.quasis.length}`);
 
 // src/checks.ts
 function parseSource(path, content) {
-  return parse3(content, { sourceType: "unambiguous", plugins: [
-    .../\.[cm]?tsx?$/.test(path) ? ["typescript"] : [],
-    .../\.[jt]sx$/.test(path) ? ["jsx"] : []
-  ] });
+  const language = /\.[cm]?tsx?$/.test(path) ? ["typescript"] : [];
+  if (/\.(?:[jt]sx|[cm]?js)$/.test(path)) language.push("jsx");
+  let failure2;
+  for (const decorators of decoratorPlugins) {
+    try {
+      return parse3(content, { sourceType: "unambiguous", plugins: [...language, ...decorators] });
+    } catch (error62) {
+      failure2 ??= error62;
+    }
+  }
+  throw failure2;
+}
+function parseErrorCategory(error62) {
+  const code2 = error62?.reasonCode;
+  return typeof code2 === "string" && /^\w+$/.test(code2) ? code2 : "UnknownError";
+}
+function isObviousNonIssue(node2, parents) {
+  if (isBinaryExpression(node2) || isAssignmentExpression(node2)) {
+    return isNumericLiteral(node2.right) && node2.right.value !== 0 || isBigIntLiteral(node2.right) && node2.right.value !== 0n;
+  }
+  if (isCatchClause(node2)) return node2.body.body.some((statement) => isThrowStatement(statement));
+  const chain2 = [...parents, node2];
+  for (let index = chain2.length - 2; index >= 0 && !isFunction(chain2[index]); index--) {
+    const parent = chain2[index];
+    if (isTryStatement(parent) && parent.handler && parent.block === chain2[index + 1]) return true;
+  }
+  return false;
 }
 function findCandidates(path, content, changed) {
   const file3 = parseSource(path, content);
@@ -43003,20 +43038,21 @@ function findCandidates(path, content, changed) {
   const occurrences = /* @__PURE__ */ new Map();
   function visit2(node2, parents) {
     let check2;
-    if (isBinaryExpression(node2) && ["/", "%"].includes(node2.operator)) check2 = "zero-divisor";
+    if (isBinaryExpression(node2) && ["/", "%"].includes(node2.operator) || isAssignmentExpression(node2) && ["/=", "%="].includes(node2.operator)) check2 = "zero-divisor";
     if (isCatchClause(node2)) check2 = "swallowed-failure";
     if (isCallExpression(node2) && isMemberExpression(node2.callee) && !node2.callee.computed && isIdentifier(node2.callee.object, { name: "JSON" }) && isIdentifier(node2.callee.property, { name: "parse" })) check2 = "unhandled-json";
     if (check2) {
-      const container = [...parents].reverse().find((parent) => isFunction(parent)) ?? file3.program;
-      const scope = { start: container.loc.start.line, end: container.loc.end.line };
-      const owner = parents[parents.indexOf(container) - 1];
-      const name = "id" in container && isIdentifier(container.id) ? container.id.name : "key" in container && isIdentifier(container.key) ? container.key.name : owner && isVariableDeclarator(owner) && isIdentifier(owner.id) ? owner.id.name : "<anonymous-or-module>";
+      const container = [...parents].reverse().find((parent) => isFunction(parent));
+      const bounds = container ?? parents[2] ?? node2;
+      const scope = { start: bounds.loc.start.line, end: bounds.loc.end.line };
+      const owner = container && parents[parents.indexOf(container) - 1];
+      const name = container === void 0 ? "<anonymous-or-module>" : "id" in container && isIdentifier(container.id) ? container.id.name : "key" in container && isIdentifier(container.key) ? container.key.name : owner && isVariableDeclarator(owner) && isIdentifier(owner.id) ? owner.id.name : "<anonymous-or-module>";
       const symbol2 = name;
       const quote = content.slice(node2.start, node2.end);
       const key = hash2([path, symbol2, check2, quote.replace(/\s+/g, " ")]);
       const occurrence = occurrences.get(key) ?? 0;
       occurrences.set(key, occurrence + 1);
-      if (changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
+      if (!isObviousNonIssue(node2, parents) && changed.some((range) => range.start <= scope.end && range.end >= scope.start)) {
         candidates.push({
           id: hash2([key, occurrence]).slice(0, 24),
           check: check2,
@@ -43038,7 +43074,7 @@ function findCandidates(path, content, changed) {
   visit2(file3, []);
   return candidates;
 }
-var checks;
+var checks, decoratorPlugins;
 var init_checks3 = __esm({
   "src/checks.ts"() {
     "use strict";
@@ -43059,11 +43095,12 @@ var init_checks3 = __esm({
         verification: "Pass malformed JSON through the public caller and assert its documented failure response."
       }
     };
+    decoratorPlugins = [["decorators-legacy", "decoratorAutoAccessors"], ["decorators"]];
   }
 });
 
 // src/collection-options.ts
-var collectionOptionsSchema, reviewTimeoutSchema;
+var collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS;
 var init_collection_options = __esm({
   "src/collection-options.ts"() {
     "use strict";
@@ -43075,6 +43112,7 @@ var init_collection_options = __esm({
       collectionTimeoutMs: external_exports.number().int().positive().max(36e5).default(12e4)
     }).strict();
     reviewTimeoutSchema = external_exports.number().int().positive().max(36e5).default(3e5);
+    VERIFY_TIMEOUT_MS = 9e4;
   }
 });
 
@@ -43537,11 +43575,11 @@ async function buildImportIndex(options) {
   if (!cache || cache.identity !== rootIdentity || cache.universe !== universe || cache.known !== known) {
     cache = { identity: rootIdentity, universe, known, entries: /* @__PURE__ */ new Map() };
   }
-  const deadline = options.discovery ? void 0 : AbortSignal.timeout(options.limits.indexTimeoutMs);
-  const signal = deadline ? options.signal ? AbortSignal.any([options.signal, deadline]) : deadline : options.signal;
+  const deadline2 = options.discovery ? void 0 : AbortSignal.timeout(options.limits.indexTimeoutMs);
+  const signal = deadline2 ? options.signal ? AbortSignal.any([options.signal, deadline2]) : deadline2 : options.signal;
   const stopped = () => {
     options.signal?.throwIfAborted();
-    return deadline?.aborted ?? false;
+    return deadline2?.aborted ?? false;
   };
   const limitations = [];
   const omissions = /* @__PURE__ */ new Map();
@@ -43570,7 +43608,7 @@ async function buildImportIndex(options) {
         return { kind: "metadata", fingerprint };
       } catch (error62) {
         options.signal?.throwIfAborted();
-        return deadline?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+        return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
       }
     });
     const slots = /* @__PURE__ */ new Map();
@@ -43615,7 +43653,7 @@ async function buildImportIndex(options) {
         return { kind: "indexed", fingerprint: after, edges };
       } catch (error62) {
         options.signal?.throwIfAborted();
-        return deadline?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
+        return deadline2?.aborted ? { kind: "interrupted" } : { kind: "omitted", reason: errorDetail(error62) };
       }
     });
     const readByPath = new Map(reads.map((entry, index) => [entry.path, readResults[index]]));
@@ -43823,8 +43861,8 @@ async function collect(options) {
               candidates.push(candidate);
             }
             if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
-          } catch {
-            noteSource(path, `Source could not be parsed; no candidates collected: ${path}`);
+          } catch (error62) {
+            noteSource(path, `Source could not be parsed (${parseErrorCategory(error62)}); no candidates collected: ${path}`);
           }
         }
       }
@@ -44048,6 +44086,18 @@ var init_collector = __esm({
   }
 });
 
+// src/deadline.ts
+function deadline(ms, message) {
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(new Error(message)), ms).unref();
+  return controller.signal;
+}
+var init_deadline = __esm({
+  "src/deadline.ts"() {
+    "use strict";
+  }
+});
+
 // src/jev.ts
 async function boundedJson(response) {
   const reader = response.body?.getReader();
@@ -44079,8 +44129,17 @@ function jevSettings(env = process.env) {
   return {
     apiKey: typesafeKey || openRouterKey || "",
     baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
-    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL
+    model: env.JEV_MODEL?.trim() || DEFAULT_MODEL,
+    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS)
   };
+}
+function requestTimeout(value) {
+  const text = value?.trim();
+  if (!text) return DEFAULT_TIMEOUT_MS;
+  if (!/^[1-9]\d*$/.test(text) || Number(text) > MAX_TIMEOUT_MS) {
+    throw new Error(`JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`);
+  }
+  return Number(text);
 }
 function jevFromEnv(signal, env = process.env) {
   return new Jev({ ...jevSettings(env), signal });
@@ -44101,12 +44160,30 @@ function systemOneEndpoint(baseUrl) {
   }
   return `${url2.origin}${url2.pathname.replace(/\/+$/, "")}/v1/systemone`;
 }
-var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, Jev;
+function backoff(attempt) {
+  return 500 * 2 ** (attempt - 1) + Math.random() * 150;
+}
+function pause(ms, signal) {
+  return new Promise((done, reject) => {
+    signal.throwIfAborted();
+    const abort = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", abort);
+      done();
+    }, ms);
+    signal.addEventListener("abort", abort, { once: true });
+  });
+}
+var answerSchema, responseSchema, TYPESAFE_BASE_URL, OPENROUTER_BASE_URL, DEFAULT_MODEL, DEFAULT_TIMEOUT_MS, MAX_TIMEOUT_MS, MAX_ATTEMPTS, RETRYABLE_STATUSES, Jev;
 var init_jev = __esm({
   "src/jev.ts"() {
     "use strict";
     init_zod();
     init_safety();
+    init_deadline();
     answerSchema = external_exports.object({
       type: external_exports.literal("choice"),
       choice: external_exports.string(),
@@ -44131,6 +44208,10 @@ var init_jev = __esm({
     TYPESAFE_BASE_URL = "https://api.typesafe.ai";
     OPENROUTER_BASE_URL = "https://openrouter.ai/api";
     DEFAULT_MODEL = "jev-latest";
+    DEFAULT_TIMEOUT_MS = 45e3;
+    MAX_TIMEOUT_MS = 36e5;
+    MAX_ATTEMPTS = 3;
+    RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
     Jev = class {
       constructor(options) {
         this.options = options;
@@ -44145,17 +44226,37 @@ var init_jev = __esm({
         assertSafeOutbound(state);
         const body = JSON.stringify({ model: this.model, state, questions });
         if (Buffer.byteLength(body) > 18e4) throw new Error("Review request exceeds the local 180 KB request budget. Reduce the review scope.");
-        const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 45e3);
-        const signal = this.options.signal ? AbortSignal.any([timeout, this.options.signal]) : timeout;
+        const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeout = deadline(timeoutMs, `Jev request timed out after ${timeoutMs} ms. Set JEV_TIMEOUT_MS to allow more time.`);
+        const caller = this.options.signal;
+        const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
+        try {
+          return await this.send(body, questions, signal);
+        } catch (error62) {
+          if (caller?.aborted) throw caller.reason;
+          if (timeout.aborted) throw timeout.reason;
+          throw error62;
+        }
+      }
+      async send(body, questions, signal) {
         const request = this.options.fetch ?? fetch;
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 1; ; attempt++) {
           signal.throwIfAborted();
-          const response = await request(this.endpoint, {
-            method: "POST",
-            headers: { Authorization: `Bearer ${this.options.apiKey}`, "Content-Type": "application/json" },
-            body,
-            signal
-          });
+          let response;
+          try {
+            response = await request(this.endpoint, {
+              method: "POST",
+              headers: { Authorization: `Bearer ${this.options.apiKey}`, "Content-Type": "application/json" },
+              body,
+              signal
+            });
+          } catch (error62) {
+            if (signal.aborted || attempt === MAX_ATTEMPTS) {
+              throw new Error("Jev request failed (network error); no successful review was recorded.", { cause: error62 });
+            }
+            await pause(backoff(attempt), signal);
+            continue;
+          }
           if (response.ok) {
             const parsed = responseSchema.safeParse(await boundedJson(response));
             if (!parsed.success) throw new Error("Jev returned an invalid response; review is incomplete.");
@@ -44178,28 +44279,16 @@ var init_jev = __esm({
               throw new Error("Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.");
             }
           } else await response.body?.cancel();
-          if (![429, 500, 502, 503, 504, 529].includes(response.status) || attempt === 2) {
+          if (!RETRYABLE_STATUSES.includes(response.status) || attempt === MAX_ATTEMPTS) {
             throw new Error(`Jev request failed (HTTP ${response.status}); no successful review was recorded.`);
           }
           const retryAfter = response.headers.get("retry-after");
           const seconds = retryAfter === null ? NaN : Number(retryAfter);
           const requestedDelay = Number.isFinite(seconds) ? seconds * 1e3 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
-          const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : 500 * 2 ** attempt + Math.random() * 150;
+          const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : backoff(attempt);
           if (delay > 1e4) throw new Error("Jev requested a longer retry delay; try this review again later.");
-          await new Promise((done, reject) => {
-            signal.throwIfAborted();
-            const abort = () => {
-              clearTimeout(timer);
-              reject(signal.reason);
-            };
-            const timer = setTimeout(() => {
-              signal.removeEventListener("abort", abort);
-              done();
-            }, delay);
-            signal.addEventListener("abort", abort, { once: true });
-          });
+          await pause(delay, signal);
         }
-        throw new Error("Jev retry budget exhausted.");
       }
     };
   }
@@ -58318,7 +58407,7 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: verificationOutputSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(9e4)]);
+    const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const selected = repo || args.repo ? await target(args.repo) : void 0;
     const output2 = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
@@ -58362,7 +58451,10 @@ function createServer(repo, evaluatorFactory) {
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const signal = AbortSignal.any([ctx.mcpReq.signal, AbortSignal.timeout(args.reviewTimeoutMs)]);
+    const signal = AbortSignal.any([
+      ctx.mcpReq.signal,
+      deadline(args.reviewTimeoutMs, `Review timed out after ${args.reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)
+    ]);
     const root = await target(args.repo);
     const discovery = previewScope(args.snapshot);
     const collectionRequest = {
@@ -58419,6 +58511,7 @@ var init_mcp = __esm({
     init_quality();
     init_schema();
     init_collection_options();
+    init_deadline();
     releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
     CACHE_LIMIT = 16;
     CACHE_TTL_MS = 3e5;
@@ -58429,6 +58522,7 @@ var init_mcp = __esm({
 init_verify();
 init_collector();
 init_jev();
+init_deadline();
 init_review();
 init_quality();
 import { parseArgs } from "node:util";
@@ -58506,7 +58600,7 @@ All values are positive safe integers. Review timeout defaults to 300000 ms.
 Preview is local. Review sends bounded evidence for all change packets to Jev and requires
 JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
 TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
-(default: jev-latest).
+(default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
 Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
@@ -58530,7 +58624,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error("verify requires --input evidence.json");
     const controller2 = new AbortController();
     process.once("SIGINT", () => controller2.abort());
-    const signal = AbortSignal.any([controller2.signal, AbortSignal.timeout(9e4)]);
+    const signal = AbortSignal.any([controller2.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const input2 = JSON.parse(await readFile(values.input, "utf8"));
     const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, jevFromEnv(signal), signal);
     if (values.out) {
@@ -58577,7 +58671,10 @@ ${plan.sources.map((source) => `${source.role}: ${source.path}${source.previousP
 ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     return;
   }
-  const reviewSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(reviewTimeoutMs)]);
+  const reviewSignal = AbortSignal.any([
+    controller.signal,
+    deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)
+  ]);
   if (values.previous && plan.packets.length > 1) throw new Error("Previous evaluation comparison is supported only for a single change packet.");
   const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))) : void 0;
   if (values.previous && !previousReport?.quality) throw new Error("Previous report has no single-packet quality evaluation to compare.");

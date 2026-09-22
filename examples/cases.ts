@@ -21,7 +21,7 @@ export async function save(write: () => Promise<void>) {
 export const result = save(async () => { throw new Error('disk full'); });` },
   { id: 'save-rethrows', expected: 'not_supported', code: `// Contract: true means the record was persisted. Storage failures must reject.
 export async function save(write: () => Promise<void>) {
-  try { await write(); } catch (error) { throw error; }
+  try { await write(); } catch (error) { return Promise.reject(error); }
   return true;
 }
 export const result = save(async () => { throw new Error('disk full'); });` },

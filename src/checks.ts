@@ -1,4 +1,4 @@
-import { parse } from '@babel/parser';
+import { parse, type ParserPlugin } from '@babel/parser';
 import * as t from '@babel/types';
 import { hash, type Candidate, type Range } from './domain.js';
 
@@ -19,11 +19,44 @@ const checks = {
   },
 } as const;
 
+// Legacy decorators cover TypeScript experimentalDecorators, including parameter
+// decorators; standard decorators also allow `export @dec class`.
+const decoratorPlugins: ParserPlugin[][] = [['decorators-legacy', 'decoratorAutoAccessors'], ['decorators']];
+
 export function parseSource(path: string, content: string) {
-  return parse(content, { sourceType: 'unambiguous', plugins: [
-    ...(/\.[cm]?tsx?$/.test(path) ? ['typescript' as const] : []),
-    ...(/\.[jt]sx$/.test(path) ? ['jsx' as const] : []),
-  ] });
+  const language: ParserPlugin[] = /\.[cm]?tsx?$/.test(path) ? ['typescript'] : [];
+  // JSX stays off for .ts, .mts, and .cts so `<T>value` type assertions parse.
+  if (/\.(?:[jt]sx|[cm]?js)$/.test(path)) language.push('jsx');
+  let failure: unknown;
+  for (const decorators of decoratorPlugins) {
+    try { return parse(content, { sourceType: 'unambiguous', plugins: [...language, ...decorators] }); }
+    catch (error) { failure ??= error; }
+  }
+  throw failure;
+}
+
+/** Names a parse failure by its error code; parser messages can quote source text. */
+export function parseErrorCategory(error: unknown) {
+  const code = (error as { reasonCode?: unknown } | undefined)?.reasonCode;
+  return typeof code === 'string' && /^\w+$/.test(code) ? code : 'UnknownError';
+}
+
+/**
+ * Sites that cannot be defects: a non-zero literal divisor, a catch handler that
+ * always rethrows, and a JSON.parse that its enclosing try statement handles.
+ */
+function isObviousNonIssue(node: t.Node, parents: t.Node[]) {
+  if (t.isBinaryExpression(node) || t.isAssignmentExpression(node)) {
+    return (t.isNumericLiteral(node.right) && node.right.value !== 0) || (t.isBigIntLiteral(node.right) && node.right.value !== 0n);
+  }
+  if (t.isCatchClause(node)) return node.body.body.some(statement => t.isThrowStatement(statement));
+  // A try block protects only code that runs while it executes, so the search stops at the nearest function.
+  const chain = [...parents, node];
+  for (let index = chain.length - 2; index >= 0 && !t.isFunction(chain[index]); index--) {
+    const parent = chain[index]!;
+    if (t.isTryStatement(parent) && parent.handler && parent.block === chain[index + 1]) return true;
+  }
+  return false;
 }
 
 export function findCandidates(path: string, content: string, changed: Range[]): Candidate[] {
@@ -32,15 +65,19 @@ export function findCandidates(path: string, content: string, changed: Range[]):
   const occurrences = new Map<string, number>();
   function visit(node: t.Node, parents: t.Node[]) {
     let check: keyof typeof checks | undefined;
-    if (t.isBinaryExpression(node) && ['/', '%'].includes(node.operator)) check = 'zero-divisor';
+    if ((t.isBinaryExpression(node) && ['/', '%'].includes(node.operator))
+      || (t.isAssignmentExpression(node) && ['/=', '%='].includes(node.operator))) check = 'zero-divisor';
     if (t.isCatchClause(node)) check = 'swallowed-failure';
     if (t.isCallExpression(node) && t.isMemberExpression(node.callee) && !node.callee.computed
       && t.isIdentifier(node.callee.object, { name: 'JSON' }) && t.isIdentifier(node.callee.property, { name: 'parse' })) check = 'unhandled-json';
     if (check) {
-      const container = [...parents].reverse().find(parent => t.isFunction(parent)) ?? file.program;
-      const scope = { start: container.loc!.start.line, end: container.loc!.end.line };
-      const owner = parents[parents.indexOf(container) - 1];
-      const name = ('id' in container && t.isIdentifier(container.id)) ? container.id.name
+      const container = [...parents].reverse().find(parent => t.isFunction(parent));
+      // Outside any function, the enclosing top-level statement bounds the site; parents start [File, Program, statement].
+      const bounds = container ?? parents[2] ?? node;
+      const scope = { start: bounds.loc!.start.line, end: bounds.loc!.end.line };
+      const owner = container && parents[parents.indexOf(container) - 1];
+      const name = container === undefined ? '<anonymous-or-module>'
+        : ('id' in container && t.isIdentifier(container.id)) ? container.id.name
         : ('key' in container && t.isIdentifier(container.key)) ? container.key.name
         : owner && t.isVariableDeclarator(owner) && t.isIdentifier(owner.id) ? owner.id.name : '<anonymous-or-module>';
       const symbol = name;
@@ -48,7 +85,8 @@ export function findCandidates(path: string, content: string, changed: Range[]):
       const key = hash([path, symbol, check, quote.replace(/\s+/g, ' ')]);
       const occurrence = occurrences.get(key) ?? 0;
       occurrences.set(key, occurrence + 1);
-      if (changed.some(range => range.start <= scope.end && range.end >= scope.start)) {
+      // Skipped sites still count as occurrences, so selected sites keep their IDs.
+      if (!isObviousNonIssue(node, parents) && changed.some(range => range.start <= scope.end && range.end >= scope.start)) {
         candidates.push({ id: hash([key, occurrence]).slice(0, 24), check, path, symbol,
           range: { start: node.loc!.start.line, end: node.loc!.end.line },
           quote, ...checks[check] });

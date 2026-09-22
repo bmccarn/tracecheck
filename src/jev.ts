@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { assertSafeOutbound } from './safety.js';
+import { deadline } from './deadline.js';
 import type { Choice, Evaluator, Response, Question, TypedResponse, TypedEvaluator } from './domain.js';
 
 const answerSchema = z.object({
@@ -35,10 +36,14 @@ async function boundedJson(response: globalThis.Response): Promise<unknown> {
 export const TYPESAFE_BASE_URL = 'https://api.typesafe.ai';
 export const OPENROUTER_BASE_URL = 'https://openrouter.ai/api';
 export const DEFAULT_MODEL = 'jev-latest';
-/** Environment variables that select the provider, credential, and model. */
-export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL'] as const;
+export const DEFAULT_TIMEOUT_MS = 45_000;
+const MAX_TIMEOUT_MS = 3_600_000;
+const MAX_ATTEMPTS = 3;
+const RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
+/** Environment variables that select the provider, credential, model, and request timeout. */
+export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS'] as const;
 
-export type JevSettings = { apiKey: string; baseUrl: string; model: string };
+export type JevSettings = { apiKey: string; baseUrl: string; model: string; timeoutMs: number };
 
 /**
  * Resolves provider settings from the environment. A TypeSafe key takes precedence over an
@@ -52,7 +57,17 @@ export function jevSettings(env: NodeJS.ProcessEnv = process.env): JevSettings {
     apiKey: typesafeKey || openRouterKey || '',
     baseUrl: env.TYPESAFE_BASE_URL?.trim() || (!typesafeKey && openRouterKey ? OPENROUTER_BASE_URL : TYPESAFE_BASE_URL),
     model: env.JEV_MODEL?.trim() || DEFAULT_MODEL,
+    timeoutMs: requestTimeout(env.JEV_TIMEOUT_MS),
   };
+}
+
+function requestTimeout(value: string | undefined): number {
+  const text = value?.trim();
+  if (!text) return DEFAULT_TIMEOUT_MS;
+  if (!/^[1-9]\d*$/.test(text) || Number(text) > MAX_TIMEOUT_MS) {
+    throw new Error(`JEV_TIMEOUT_MS must be a whole number of milliseconds from 1 to ${MAX_TIMEOUT_MS}.`);
+  }
+  return Number(text);
 }
 
 export function jevFromEnv(signal?: AbortSignal, env: NodeJS.ProcessEnv = process.env): Jev {
@@ -93,14 +108,37 @@ export class Jev implements Evaluator, TypedEvaluator {
     assertSafeOutbound(state);
     const body = JSON.stringify({ model: this.model, state, questions });
     if (Buffer.byteLength(body) > 180_000) throw new Error('Review request exceeds the local 180 KB request budget. Reduce the review scope.');
-    const timeout = AbortSignal.timeout(this.options.timeoutMs ?? 45_000);
-    const signal = this.options.signal ? AbortSignal.any([timeout, this.options.signal]) : timeout;
+    const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    const timeout = deadline(timeoutMs, `Jev request timed out after ${timeoutMs} ms. Set JEV_TIMEOUT_MS to allow more time.`);
+    const caller = this.options.signal;
+    const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
+    try {
+      return await this.send(body, questions, signal);
+    } catch (error) {
+      // Report the limit that stopped the request rather than the error it caused downstream.
+      if (caller?.aborted) throw caller.reason;
+      if (timeout.aborted) throw timeout.reason;
+      throw error;
+    }
+  }
+
+  private async send(body: string, questions: Record<string, Question>, signal: AbortSignal): Promise<TypedResponse> {
     const request = this.options.fetch ?? fetch;
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       signal.throwIfAborted();
-      const response = await request(this.endpoint, {
-        method: 'POST', headers: { Authorization: `Bearer ${this.options.apiKey}`, 'Content-Type': 'application/json' }, body, signal,
-      });
+      let response: globalThis.Response;
+      try {
+        response = await request(this.endpoint, {
+          method: 'POST', headers: { Authorization: `Bearer ${this.options.apiKey}`, 'Content-Type': 'application/json' }, body, signal,
+        });
+      } catch (error) {
+        // Connection resets, DNS failures, and TLS errors reject fetch without a response.
+        if (signal.aborted || attempt === MAX_ATTEMPTS) {
+          throw new Error('Jev request failed (network error); no successful review was recorded.', { cause: error });
+        }
+        await pause(backoff(attempt), signal);
+        continue;
+      }
       if (response.ok) {
         const parsed = responseSchema.safeParse(await boundedJson(response));
         if (!parsed.success) throw new Error('Jev returned an invalid response; review is incomplete.');
@@ -130,22 +168,29 @@ export class Jev implements Evaluator, TypedEvaluator {
           throw new Error('Jev context limit exceeded. Split the review into coherent slices that retain relevant contracts and callers.');
         }
       } else await response.body?.cancel();
-      if (![429, 500, 502, 503, 504, 529].includes(response.status) || attempt === 2) {
+      if (!RETRYABLE_STATUSES.includes(response.status) || attempt === MAX_ATTEMPTS) {
         throw new Error(`Jev request failed (HTTP ${response.status}); no successful review was recorded.`);
       }
       const retryAfter = response.headers.get('retry-after');
       const seconds = retryAfter === null ? NaN : Number(retryAfter);
       const requestedDelay = Number.isFinite(seconds) ? seconds * 1_000 : retryAfter ? Date.parse(retryAfter) - Date.now() : NaN;
-      const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : 500 * 2 ** attempt + Math.random() * 150;
+      const delay = Number.isFinite(requestedDelay) ? Math.max(0, requestedDelay) : backoff(attempt);
       // Long Retry-After values must not be silently shortened.
       if (delay > 10_000) throw new Error('Jev requested a longer retry delay; try this review again later.');
-      await new Promise<void>((done, reject) => {
-        signal.throwIfAborted();
-        const abort = () => { clearTimeout(timer); reject(signal.reason); };
-        const timer = setTimeout(() => { signal.removeEventListener('abort', abort); done(); }, delay);
-        signal.addEventListener('abort', abort, { once: true });
-      });
+      await pause(delay, signal);
     }
-    throw new Error('Jev retry budget exhausted.');
   }
+}
+
+function backoff(attempt: number): number {
+  return 500 * 2 ** (attempt - 1) + Math.random() * 150;
+}
+
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise<void>((done, reject) => {
+    signal.throwIfAborted();
+    const abort = () => { clearTimeout(timer); reject(signal.reason); };
+    const timer = setTimeout(() => { signal.removeEventListener('abort', abort); done(); }, ms);
+    signal.addEventListener('abort', abort, { once: true });
+  });
 }

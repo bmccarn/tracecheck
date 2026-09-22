@@ -6,8 +6,8 @@ Preview collects the working-tree change against a base commit without contactin
 
 - `preview-packets` groups every supported changed file into packets and prints a snapshot.
 - `preview-sources` collects changed files with baselines plus related dependencies, callers, and tests.
-- `preview-candidates` selects division, catch-handler, and `JSON.parse` candidates in changed JS/TS functions.
-- `preview-gaps` reports omitted files, parse failures, budget limits, and heuristic-discovery limitations.
+- `preview-candidates` selects division (`/`, `%`, `/=`, `%=`), catch-handler, and `JSON.parse` candidates in changed JS/TS functions, or in the changed top-level statement for module-level code. It skips non-zero literal divisors, catch handlers with a top-level `throw`, and `JSON.parse` inside the protected block of a `try` with a handler.
+- `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, and heuristic-discovery limitations.
 - `preview-options` applies `--base`, `--include-untracked`, and the collection limits.
 - `preview-mcp` returns the same scope from `tracecheck_preview` and registers the snapshot for review.
 
@@ -29,6 +29,8 @@ Preconditions:
 - **Rename.** Use the `rename` fixture. `new.ts` is `changed` with `previousPath: "old.ts"`, and its `before` is the base content of `old.ts`, including the removed `if (!b) return 0;` guard. The human output lists `changed: new.ts (renamed from old.ts)`, and the MCP `files` entry carries `previousPath`.
 - **Pure rename.** Use the `rename-pure` fixture. `quotient.ts` has `previousPath: "ratio.ts"` and a baseline, and `candidates` is empty because a rename without edits has no changed ranges.
 - **Rename across eligibility.** Use the `rename-ineligible` fixture. `limitations` include `Unsupported or generated file (notes.ts -> notes.txt)` and `Renamed from unsupported or generated path dist/ratio.ts; reviewed without a baseline (ratio.ts)`; `ratio.ts` has no `before`.
+- **Parsing.** Use the `jsx-js` and `decorators` fixtures. Each yields one candidate (`zero-divisor` in `Progress`, `swallowed-failure` in `create`) and no `Source could not be parsed` limitation. The `parse-error` fixture yields `Source could not be parsed (VarRedeclaration); no candidates collected: src/broken.ts`, and no limitation quotes the redeclared identifier.
+- **Candidate filters.** Use the `noise` fixture. Expect exactly two candidates in `summarize`: `zero-divisor` on `total /= samples.length` and `swallowed-failure` on the handler with `if (!retry) throw error;`. The unchanged module-level `limits.total / limits.workers`, the literal divisors, the rethrowing handler, and both guarded `JSON.parse` calls are absent.
 - **Python imports.** Use the `python-import` fixture. Expect `pkg/report.py` as a `caller` (it uses a parenthesized multi-line import) and `tests/test_calc.py` as a `test`.
 - **JS/TS module paths.** Use the `module-paths` fixture. Expect `src/app.tsx` as `changed`, `src/main.ts` as `caller` (imports `./app.jsx`), and `src/lib.mts`, `src/legacy.cts`, `src/widgets/index.tsx`, and `src/app.css` as `dependency` sources. `src/logo.png` is not a source and appears in no limitation.
 - **MCP entry.** Write `[{"tool":"tracecheck_preview","arguments":{}}]` to `$RUN/calls.json` and run `node $S/mcp-call.mjs --out "$RUN/mcp" --repo "$ROOT" --calls "$RUN/calls.json"`. The record `01-tracecheck_preview.json` has `isError: false` and `structuredContent.snapshot` equal to the CLI snapshot for the same fixture, settings, and task.

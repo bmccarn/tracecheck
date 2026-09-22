@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { posix, resolve } from 'node:path';
 import { promisify } from 'node:util';
-import { findCandidates } from './checks.js';
+import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionOptionsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { readGitChangeContext, type GitChange } from './git-context.js';
@@ -141,7 +141,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
             const covered = found.filter(candidate => current.ranges.some(range => range.start <= candidate.range.start && range.end >= candidate.range.end));
             for (const candidate of covered) if (!candidateIds.has(candidate.id)) { candidateIds.add(candidate.id); candidates.push(candidate); }
             if (covered.length !== found.length) noteSource(path, `Candidates outside captured evidence omitted: ${path}`);
-          } catch { noteSource(path, `Source could not be parsed; no candidates collected: ${path}`); }
+          } catch (error) { noteSource(path, `Source could not be parsed (${parseErrorCategory(error)}); no candidates collected: ${path}`); }
         }
       }
       return source;

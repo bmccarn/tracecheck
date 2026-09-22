@@ -5,11 +5,12 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
 import { jevFromEnv } from './jev.js';
+import { deadline } from './deadline.js';
 import { reviewAll, render } from './review.js';
 import { assess, qualityInputSchema, qualityEvaluationSchema, renderQuality } from './quality.js';
 import { compare } from './history.js';
 import { reportSchema } from './schema.js';
-import { collectionOptionsSchema, reviewTimeoutSchema, type CollectionOptions } from './collection-options.js';
+import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 
 function positiveSafeInteger(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -60,7 +61,7 @@ All values are positive safe integers. Review timeout defaults to 300000 ms.
 Preview is local. Review sends bounded evidence for all change packets to Jev and requires
 JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
 TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
-(default: jev-latest).
+(default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
 Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
@@ -84,7 +85,7 @@ Use --task and --context to supply requirements and repository facts.`);
     if (!values.input) throw new Error('verify requires --input evidence.json');
     const controller = new AbortController();
     process.once('SIGINT', () => controller.abort());
-    const signal = AbortSignal.any([controller.signal, AbortSignal.timeout(90_000)]);
+    const signal = AbortSignal.any([controller.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
     const input = JSON.parse(await readFile(values.input, 'utf8'));
     const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, jevFromEnv(signal), signal);
     if (values.out) {
@@ -120,7 +121,8 @@ Use --task and --context to supply requirements and repository facts.`);
     console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\nSnapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
     return;
   }
-  const reviewSignal = AbortSignal.any([controller.signal, AbortSignal.timeout(reviewTimeoutMs)]);
+  const reviewSignal = AbortSignal.any([controller.signal,
+    deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)]);
   if (values.previous && plan.packets.length > 1) throw new Error('Previous evaluation comparison is supported only for a single change packet.');
   const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, 'utf8'))) : undefined;
   if (values.previous && !previousReport?.quality) throw new Error('Previous report has no single-packet quality evaluation to compare.');
