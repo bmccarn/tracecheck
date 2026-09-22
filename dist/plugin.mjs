@@ -20525,12 +20525,14 @@ function qualityQuestions() {
   }
   return questions;
 }
-async function assess(raw, evaluator) {
+async function assess(raw, evaluator, signal) {
   const started = Date.now();
   const input2 = qualityInputSchema.parse(raw);
   const { previousEvaluation, scope: requestedScope, ...state } = input2;
   const scope = requestedScope ?? hash2({ task: input2.task, paths: input2.files?.map((file3) => file3.path).sort() });
+  signal?.throwIfAborted();
   const response = await evaluator.evaluate(state, qualityQuestions());
+  signal?.throwIfAborted();
   const result = transformQuality(response, scope, hash2(state), previousEvaluation);
   result.usage.elapsedMs = Date.now() - started;
   return result;
@@ -20596,6 +20598,9 @@ function transformQuality(response, scope, snapshot, previous) {
   };
   return compareQuality(result, previous);
 }
+function comparableQuality(evaluation, previous) {
+  return previous.scope === evaluation.scope && previous.model === evaluation.model && previous.rubricVersion === evaluation.rubricVersion;
+}
 function compareQuality(evaluation, previous) {
   const result = structuredClone(evaluation);
   result.comparison = [];
@@ -20604,7 +20609,7 @@ function compareQuality(evaluation, previous) {
   result.unresolvedWeaknesses = [];
   result.warnings = [];
   if (previous) {
-    if (previous.scope !== result.scope || previous.model !== result.model || previous.rubricVersion !== result.rubricVersion) {
+    if (!comparableQuality(result, previous)) {
       result.warnings.push("Comparison skipped: scope, model, or rubric changed. Current assessment remains valid.");
     } else {
       for (const dimension of dimensions) {
@@ -20635,7 +20640,7 @@ function renderQuality(evaluation) {
   lines.push("", ...evaluation.warnings.map((value) => `Comparison note: ${value}`), "", "Scores are independent quality signals; they are not an overall grade or proof of correctness.");
   return lines.join("\n");
 }
-var RUBRIC_VERSION, metricSchema, prioritySchema, qualityEvaluationSchema, qualityInputSchema, levels;
+var RUBRIC_VERSION, metricSchema, prioritySchema, qualityEvaluationSchema, previousEvaluationSchema, ASSESS_TIMEOUT_MS, qualityInputSchema, levels;
 var init_quality = __esm({
   "src/quality.ts"() {
     "use strict";
@@ -20673,13 +20678,24 @@ var init_quality = __esm({
       warnings: external_exports.array(external_exports.string()),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
     });
+    previousEvaluationSchema = external_exports.object({
+      rubricVersion: external_exports.string(),
+      model: external_exports.string(),
+      scope: external_exports.string(),
+      metrics: external_exports.record(external_exports.string(), external_exports.object({
+        status: metricSchema.shape.status,
+        score: external_exports.number().min(1).max(10).optional(),
+        weakness: external_exports.object({ code: external_exports.string(), actionable: external_exports.boolean() }).optional()
+      }))
+    }).describe("A previous evaluation with the same scope, model, and rubric version. Pass the complete prior output; only these fields are read.");
+    ASSESS_TIMEOUT_MS = 9e4;
     qualityInputSchema = external_exports.object({
       task: external_exports.string().trim().min(1).optional(),
       diff: external_exports.string().trim().min(1).optional(),
       files: external_exports.array(external_exports.object({ path: external_exports.string().min(1), content: external_exports.string() }).strict()).optional(),
       repositoryContext: external_exports.string().trim().min(1).optional(),
       scope: external_exports.string().min(1).optional().describe("Stable identity for this review scope, such as repository and feature name."),
-      previousEvaluation: qualityEvaluationSchema.optional()
+      previousEvaluation: previousEvaluationSchema.optional()
     }).strict().superRefine((input2, ctx) => {
       if (!input2.task && !input2.diff && !input2.repositoryContext && !input2.files?.some((file3) => file3.content.trim())) {
         ctx.addIssue({ code: "custom", message: "Supply current task, diff, file content, or repository context." });
@@ -21049,27 +21065,32 @@ async function reviewAll(plan, evaluator, options = {}) {
         usage: { input_tokens: broad.inputTokens, output_tokens: broad.outputTokens }
       },
       packets.length === 1 ? hash2([plan.root, plan.base]) : hash2([plan.root, plan.base, packet.changedPaths]),
-      plan.snapshot,
-      packets.length === 1 ? options.previousEvaluation : void 0
+      plan.snapshot
     );
     evaluation.usage.requests = broad.requests;
     evaluation.usage.elapsedMs = Date.now() - started;
     return [{ packetId: packet.id, changedPaths: [...packet.changedPaths], evaluation }];
   });
   if (packets.length === 1 && packetQualities.length) report.quality = packetQualities[0].evaluation;
-  else if (packetQualities.length) {
-    report.packetQualities = packetQualities;
-    if (options.previousEvaluation) report.limitations = unique([
-      ...report.limitations,
-      "Previous broad quality evaluation was not compared because this review has multiple packet scopes."
-    ]);
-  }
+  else if (packetQualities.length) report.packetQualities = packetQualities;
   report.status = reportStatus(report.decisions, report.limitations);
   if (packetQualities.some(({ evaluation }) => evaluation.priorities.length)) report.status = "needs_attention";
   else if (report.status === "no_findings" && packetQualities.some(({ evaluation }) => Object.values(evaluation.metrics).some((metric) => ["uncertain", "insufficient_context"].includes(metric.status)))) report.status = "inconclusive";
+  applyPreviousEvaluation(report, options.previousEvaluation);
   report.usage.elapsedMs = Date.now() - started;
   report.id = hash2([report.id, report.quality ?? report.packetQualities]).slice(0, 24);
   return report;
+}
+function applyPreviousEvaluation(report, previous) {
+  if (!previous) return;
+  let reason;
+  if (report.quality) {
+    if (!comparableQuality(report.quality, previous)) reason = "its scope, model, or rubric version differs from this review";
+    report.quality = compareQuality(report.quality, previous);
+  } else {
+    reason = report.packetQualities?.length ? "this review has multiple packet scopes; comparison applies only to a single-packet quality result" : "this review produced no quality result";
+  }
+  if (reason) report.limitations = unique([...report.limitations, `Previous evaluation was not compared because ${reason}.`]);
 }
 function render(report) {
   const findings = report.decisions.filter((item) => item.status !== "not_supported");
@@ -21187,7 +21208,10 @@ import { isAbsolute as isAbsolute2 } from "node:path";
 async function verify(raw, evaluator, signal) {
   const input2 = verificationInputSchema.parse(raw);
   assertSafeOutbound(input2);
-  if (input2.evidence.reduce((n, item) => n + item.content.length, 0) > 6e4) throw new Error("Evidence exceeds the 60,000 character budget.");
+  const evidenceBytes = input2.evidence.reduce((n, item) => n + Buffer.byteLength(item.content), 0);
+  if (evidenceBytes > MAX_EVIDENCE_BYTES) {
+    throw new Error(`Evidence is ${evidenceBytes} bytes of UTF-8 and exceeds the ${MAX_EVIDENCE_BYTES}-byte budget. Trim each excerpt to the lines that decide the hypothesis, then verify again.`);
+  }
   if (new Set(input2.evidence.map((item) => item.id)).size !== input2.evidence.length) throw new Error("Evidence IDs must be unique.");
   const target = input2.evidence.find((item) => item.id === input2.target.evidenceId);
   if (!target) throw new Error("Target evidence is missing.");
@@ -21269,7 +21293,7 @@ ${item.content}`);
     missingEvidence: missing && missing.confidence >= 0.6 && (missing.probabilities[missing.choice] ?? 0) >= 0.8 ? missing.choice : "unspecified"
   });
 }
-var evidenceSchema, verificationInputSchema, verificationOutputSchema;
+var MAX_EVIDENCE_BYTES, evidenceSchema, verificationInputSchema, verificationOutputSchema;
 var init_verify = __esm({
   "src/verify.ts"() {
     "use strict";
@@ -21278,6 +21302,7 @@ var init_verify = __esm({
     init_schema();
     init_review();
     init_safety();
+    MAX_EVIDENCE_BYTES = 6e4;
     evidenceSchema = external_exports.object({
       id: external_exports.string().min(1).max(80),
       path: external_exports.string().min(1).max(1e3),
@@ -58366,28 +58391,15 @@ var init_stdio = __esm({
 // src/mcp.ts
 var mcp_exports = {};
 __export(mcp_exports, {
+  ExpiringCache: () => ExpiringCache,
   createServer: () => createServer,
   serve: () => serve
 });
 import { realpath as realpath5 } from "node:fs/promises";
 function createServer(repo, evaluatorFactory) {
   const server = new McpServer({ name: "tracecheck", version: releaseVersion });
-  const cache = /* @__PURE__ */ new Map();
-  const previewScopes = /* @__PURE__ */ new Map();
-  const rememberPreview = (snapshot, discovery) => {
-    const now = Date.now();
-    for (const [key, entry] of previewScopes) if (entry.expires <= now) previewScopes.delete(key);
-    if (!previewScopes.has(snapshot) && previewScopes.size >= CACHE_LIMIT) previewScopes.delete(previewScopes.keys().next().value);
-    previewScopes.set(snapshot, { expires: now + CACHE_TTL_MS, discovery });
-  };
-  const previewScope = (snapshot) => {
-    const entry = previewScopes.get(snapshot);
-    if (!entry || entry.expires <= Date.now()) {
-      previewScopes.delete(snapshot);
-      throw new Error("Preview snapshot is unknown or expired. Run tracecheck_preview again.");
-    }
-    return entry.discovery;
-  };
+  const cache = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
+  const previewScopes = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = {
     repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
     base: external_exports.string().min(1).default("HEAD").describe("Git baseline; the working tree is compared against this commit."),
@@ -58413,12 +58425,13 @@ function createServer(repo, evaluatorFactory) {
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_assess", {
-    description: "Review caller-supplied task, diff, files, and repository context across 19 independent quality dimensions with Jev. Language-agnostic; no filesystem reads. Optional previousEvaluation is compared locally. Returns scores, confidence, prioritized concerns, and changes.",
+    description: `Review caller-supplied task, diff, files, and repository context across 19 independent quality dimensions with Jev. Language-agnostic; no filesystem reads. Optional previousEvaluation is compared locally. Returns scores, confidence, prioritized concerns, and changes. Times out after ${ASSESS_TIMEOUT_MS / 1e3} seconds.`,
     inputSchema: qualityInputSchema,
     outputSchema: qualityEvaluationSchema,
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
-    const output2 = await assess(args, jevFromEnv(ctx.mcpReq.signal));
+    const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
+    const output2 = await assess(args, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
   server.registerTool("tracecheck_preview", {
@@ -58435,7 +58448,7 @@ function createServer(repo, evaluatorFactory) {
   }, async (args, ctx) => {
     const plan = await collect({ ...args, repo: await target(args.repo), signal: ctx.mcpReq.signal });
     if (!plan.discovery) throw new Error("Collection did not produce a discovery scope. Run tracecheck_preview again.");
-    rememberPreview(plan.snapshot, plan.discovery);
+    previewScopes.set(plan.snapshot, plan.discovery);
     const output2 = {
       snapshot: plan.snapshot,
       packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
@@ -58447,7 +58460,7 @@ function createServer(repo, evaluatorFactory) {
   });
   server.registerTool("tracecheck_review", {
     description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
-    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.describe("Maximum review duration in milliseconds."), previousEvaluation: qualityEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
+    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.describe("Maximum review duration in milliseconds."), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
@@ -58456,7 +58469,8 @@ function createServer(repo, evaluatorFactory) {
       deadline(args.reviewTimeoutMs, `Review timed out after ${args.reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)
     ]);
     const root = await target(args.repo);
-    const discovery = previewScope(args.snapshot);
+    const discovery = previewScopes.get(args.snapshot);
+    if (!discovery) throw new Error("Preview snapshot is unknown or expired. Run tracecheck_preview again.");
     const collectionRequest = {
       repo: args.repo,
       base: args.base,
@@ -58469,19 +58483,17 @@ function createServer(repo, evaluatorFactory) {
     if (plan.snapshot !== args.snapshot) throw new Error("Repository context changed since preview. Run tracecheck_preview again.");
     const settings = jevSettings();
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
-    const existing = cache.get(key);
-    const cached2 = Boolean(existing && existing.expires > Date.now());
-    const report = cached2 ? existing.report : await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal });
-    signal.throwIfAborted();
-    const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
-    if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
-    if (!cached2) {
-      if (cache.size >= CACHE_LIMIT) cache.delete(cache.keys().next().value);
-      cache.set(key, { expires: Date.now() + CACHE_TTL_MS, report });
+    let report = cache.get(key);
+    const cached2 = report !== void 0;
+    if (!report) {
+      report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }), { signal });
+      signal.throwIfAborted();
+      const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
+      if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
+      cache.set(key, report);
     }
     const compared = structuredClone(report);
-    if (compared.quality) compared.quality = compareQuality(compared.quality, args.previousEvaluation);
-    else if (args.previousEvaluation && compared.packetQualities?.length) compared.limitations.push("Previous evaluation comparisons apply only to a single-packet quality result; no repository-wide comparison was performed.");
+    applyPreviousEvaluation(compared, args.previousEvaluation);
     const output2 = { cached: cached2, report: compared };
     return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
   });
@@ -58497,7 +58509,7 @@ async function serve(repo) {
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
 }
-var releaseVersion, CACHE_LIMIT, CACHE_TTL_MS;
+var releaseVersion, CACHE_LIMIT, CACHE_TTL_MS, ExpiringCache;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -58515,6 +58527,30 @@ var init_mcp = __esm({
     releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
     CACHE_LIMIT = 16;
     CACHE_TTL_MS = 3e5;
+    ExpiringCache = class {
+      constructor(limit, ttlMs, now = Date.now) {
+        this.limit = limit;
+        this.ttlMs = ttlMs;
+        this.now = now;
+      }
+      limit;
+      ttlMs;
+      now;
+      entries = /* @__PURE__ */ new Map();
+      get(key) {
+        const entry = this.entries.get(key);
+        if (entry && entry.expires > this.now()) return entry.value;
+        this.entries.delete(key);
+        return void 0;
+      }
+      /** Purges expired entries, then evicts the oldest live entry only when a new key would exceed the limit. */
+      set(key, value) {
+        const now = this.now();
+        for (const [existing, entry] of this.entries) if (entry.expires <= now) this.entries.delete(existing);
+        if (!this.entries.delete(key) && this.entries.size >= this.limit) this.entries.delete(this.entries.keys().next().value);
+        this.entries.set(key, { expires: now + this.ttlMs, value });
+      }
+    };
   }
 });
 
@@ -58531,10 +58567,12 @@ import { dirname, resolve as resolve4 } from "node:path";
 
 // src/history.ts
 function compare(previous, current) {
-  if (previous.root !== current.root || previous.base !== current.base || previous.checkVersion !== current.checkVersion || previous.policyVersion !== current.policyVersion || previous.models.join(",") !== current.models.join(",")) {
+  if (previous.root !== current.root || previous.base !== current.base || previous.checkVersion !== current.checkVersion || previous.policyVersion !== current.policyVersion || [...previous.models].sort().join("\n") !== [...current.models].sort().join("\n")) {
     throw new Error("Reports have different repositories, baselines, models, or policies and cannot be compared.");
   }
-  return previous.decisions.filter((item) => item.status === "supported").map((item) => {
+  const supported = previous.decisions.filter((item) => item.status === "supported");
+  const previouslySupported = new Set(supported.map((item) => item.id));
+  const earlier = supported.map((item) => {
     const next = current.decisions.find((candidate) => candidate.id === item.id);
     return {
       id: item.id,
@@ -58543,6 +58581,8 @@ function compare(previous, current) {
       status: !next ? "not_reassessed" : next.status === "not_supported" ? "no_longer_supported" : next.status === "supported" ? "still_present" : "unresolved"
     };
   });
+  const added = current.decisions.filter((item) => item.status === "supported" && !previouslySupported.has(item.id)).map((item) => ({ id: item.id, path: item.path, check: item.check, status: "newly_supported" }));
+  return [...earlier, ...added];
 }
 
 // src/cli.ts
@@ -58637,9 +58677,12 @@ Use --task and --context to supply requirements and repository facts.`);
   }
   if (command === "assess") {
     if (!values.input) throw new Error("assess requires --input context.json");
+    const controller2 = new AbortController();
+    process.once("SIGINT", () => controller2.abort());
+    const signal = AbortSignal.any([controller2.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
-    if (values.previous) input2.previousEvaluation = qualityEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
-    const evaluation = await assess(input2, jevFromEnv());
+    if (values.previous) input2.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
+    const evaluation = await assess(input2, jevFromEnv(signal), signal);
     if (values.out) {
       await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });

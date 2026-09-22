@@ -25,7 +25,7 @@ Call `tracecheck_verify` with one falsifiable defect hypothesis, the relevant be
 
 With `repo`, every excerpt must match current local source. Tracecheck checks those files again after inference and rejects changes. A repository-bound MCP server applies that binding automatically. Without `repo`, provenance is `caller_supplied`: references are checked against the supplied text only, not the filesystem or Git history. Neither provenance mode proves that the evidence is complete.
 
-The result contains `report.decisions[0]` (support, impact, raw distributions), `missingEvidence`, `nextAction`, and a snapshot binding the request. Missing-evidence selection is an independent model judgment; `unspecified` means no confident category was selected. All source remains untrusted evidence. Up to 12 excerpts and 60,000 evidence characters are allowed; no excerpts are silently truncated. Local reads are bounded to 256 KB per file.
+The result contains `report.decisions[0]` (support, impact, raw distributions), `missingEvidence`, `nextAction`, and a snapshot binding the request. Missing-evidence selection is an independent model judgment; `unspecified` means no confident category was selected. All source remains untrusted evidence. Up to 12 excerpts and 60,000 UTF-8 bytes of evidence are allowed; multibyte text such as CJK or emoji uses more than one byte per character, so trim excerpts when the budget is exceeded; no excerpts are silently truncated. Local reads are bounded to 256 KB per file.
 
 CLI equivalent: `tracecheck verify --input evidence.json --repo /path/to/project --out verification.json`. Output is JSON. Exit codes follow repository review: 1 supported concern, 3 inconclusive, 2 error, 0 no supported concern in this particular verification.
 
@@ -34,7 +34,7 @@ CLI equivalent: `tracecheck verify --input evidence.json --repo /path/to/project
 1. Choose an absolute `repo` and a baseline commit that remains fixed across checkpoints. `HEAD` covers staged and unstaged tracked edits, not changes already committed relative to HEAD. Opt in with `includeUntracked: true` when new source files belong to the task.
 2. Call `tracecheck_preview` with `repo`, `base`, `task`, and optional `repositoryContext` and `collection`. Inspect packet membership, `limitations`, and the file manifest before review. More packets require more provider calls.
 3. Call `tracecheck_review` in the same server process with exactly the same collection arguments plus its returned `snapshot`. A mismatched, expired, or evicted token requires another preview. Preview scopes are retained for up to five minutes and pin deadline-limited discovery across review and freshness checks. `collection` can set `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; review accepts `reviewTimeoutMs` separately. Raising discovery budgets does not enlarge model packets.
-4. Read every packet's assessment and the combined `report.decisions`. Single-packet reviews return `report.quality`; multiple packets return `report.packetQualities` with their changed paths. Preserve those scopes instead of averaging scores. Only a single-packet `report.quality` can be passed as `previousEvaluation`; the full report and packet array are not valid prior evaluations. `cached: true` means this result reuses the original assessment and timestamp.
+4. Read every packet's assessment and the combined `report.decisions`. Single-packet reviews return `report.quality`; multiple packets return `report.packetQualities` with their changed paths. Preserve those scopes instead of averaging scores. Only a single-packet `report.quality` can be passed as `previousEvaluation`; the full report and packet array are not valid prior evaluations. `cached: true` means this result reuses the original assessment and timestamp. When a supplied `previousEvaluation` cannot be compared, `report.limitations` says why.
 
 Example preview arguments (replace the path, baseline, and requirement):
 
@@ -49,7 +49,7 @@ Example preview arguments (replace the path, baseline, and requirement):
 
 ## Supplied-context review
 
-Call `tracecheck_assess` when repository access is unavailable or a focused selection is more useful. Include the actual source in `files`, a `diff` if available, the `task`, and relevant contracts or observed test results in `repositoryContext`. Use a stable `scope` identifying the same review subject. Pass the whole prior assessment as `previousEvaluation` for this tool.
+Call `tracecheck_assess` when repository access is unavailable or a focused selection is more useful. Include the actual source in `files`, a `diff` if available, the `task`, and relevant contracts or observed test results in `repositoryContext`. Use a stable `scope` identifying the same review subject. Pass the whole prior assessment as `previousEvaluation` for this tool; only its scope, model, rubric version, and metrics are read. The call times out after 90 seconds.
 
 This route reads no additional files. Include callers or tests yourself where they affect the judgment. Any language can be supplied; exact parser-based findings are only produced by the repository path for supported JS/TS checks.
 

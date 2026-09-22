@@ -24,12 +24,23 @@ export const qualityEvaluationSchema = z.object({
   usage: z.object({ inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), requests: z.number().nonnegative(), elapsedMs: z.number().nonnegative() }),
 });
 export type QualityEvaluation = z.infer<typeof qualityEvaluationSchema>;
+/** The fields compareQuality reads. Other fields of a complete prior evaluation are accepted and ignored. */
+export const previousEvaluationSchema = z.object({
+  rubricVersion: z.string(), model: z.string(), scope: z.string(),
+  metrics: z.record(z.string(), z.object({
+    status: metricSchema.shape.status, score: z.number().min(1).max(10).optional(),
+    weakness: z.object({ code: z.string(), actionable: z.boolean() }).optional(),
+  })),
+}).describe('A previous evaluation with the same scope, model, and rubric version. Pass the complete prior output; only these fields are read.');
+export type PreviousEvaluation = z.infer<typeof previousEvaluationSchema>;
+/** Overall bound for one assessment, including provider retries. */
+export const ASSESS_TIMEOUT_MS = 90_000;
 export const qualityInputSchema = z.object({
   task: z.string().trim().min(1).optional(), diff: z.string().trim().min(1).optional(),
   files: z.array(z.object({ path: z.string().min(1), content: z.string() }).strict()).optional(),
   repositoryContext: z.string().trim().min(1).optional(),
   scope: z.string().min(1).optional().describe('Stable identity for this review scope, such as repository and feature name.'),
-  previousEvaluation: qualityEvaluationSchema.optional(),
+  previousEvaluation: previousEvaluationSchema.optional(),
 }).strict().superRefine((input, ctx) => {
   if (!input.task && !input.diff && !input.repositoryContext && !input.files?.some(file => file.content.trim())) {
     ctx.addIssue({ code: 'custom', message: 'Supply current task, diff, file content, or repository context.' });
@@ -68,18 +79,20 @@ export function qualityQuestions(): Record<string, Question> {
   return questions;
 }
 
-export async function assess(raw: QualityInput, evaluator: TypedEvaluator): Promise<QualityEvaluation> {
+export async function assess(raw: QualityInput, evaluator: TypedEvaluator, signal?: AbortSignal): Promise<QualityEvaluation> {
   const started = Date.now();
   const input = qualityInputSchema.parse(raw);
   const { previousEvaluation, scope: requestedScope, ...state } = input;
   const scope = requestedScope ?? hash({ task: input.task, paths: input.files?.map(file => file.path).sort() });
+  signal?.throwIfAborted();
   const response = await evaluator.evaluate(state, qualityQuestions());
+  signal?.throwIfAborted();
   const result = transformQuality(response, scope, hash(state), previousEvaluation);
   result.usage.elapsedMs = Date.now() - started;
   return result;
 }
 
-export function transformQuality(response: TypedResponse, scope: string, snapshot: string, previous?: QualityEvaluation): QualityEvaluation {
+export function transformQuality(response: TypedResponse, scope: string, snapshot: string, previous?: PreviousEvaluation): QualityEvaluation {
   const metrics: QualityEvaluation['metrics'] = {};
   for (const dimension of dimensions) {
     const relevance = response.answers[`quality_${dimension.key}_relevance`];
@@ -116,11 +129,16 @@ export function transformQuality(response: TypedResponse, scope: string, snapsho
   return compareQuality(result, previous);
 }
 
-export function compareQuality(evaluation: QualityEvaluation, previous?: QualityEvaluation): QualityEvaluation {
+/** Whether a previous evaluation shares this evaluation's scope, model, and rubric version. */
+export function comparableQuality(evaluation: QualityEvaluation, previous: PreviousEvaluation): boolean {
+  return previous.scope === evaluation.scope && previous.model === evaluation.model && previous.rubricVersion === evaluation.rubricVersion;
+}
+
+export function compareQuality(evaluation: QualityEvaluation, previous?: PreviousEvaluation): QualityEvaluation {
   const result = structuredClone(evaluation);
   result.comparison = []; result.improvements = []; result.regressions = []; result.unresolvedWeaknesses = []; result.warnings = [];
   if (previous) {
-    if (previous.scope !== result.scope || previous.model !== result.model || previous.rubricVersion !== result.rubricVersion) {
+    if (!comparableQuality(result, previous)) {
       result.warnings.push('Comparison skipped: scope, model, or rubric changed. Current assessment remains valid.');
     } else {
       for (const dimension of dimensions) {

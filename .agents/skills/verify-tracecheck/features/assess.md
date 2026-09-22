@@ -9,6 +9,7 @@ Assess evaluates caller-supplied task text, files, and repository context across
 - `assess-priorities` lists actionable concerns.
 - `assess-previous` compares with a previous evaluation of the same scope and model.
 - `assess-mcp` returns the same evaluation from `tracecheck_assess`.
+- `assess-limits` bounds one assessment to 90 seconds; Ctrl-C in the CLI and client cancellation in MCP abort the provider request.
 
 ## How to get to it (user POV)
 
@@ -25,6 +26,7 @@ Preconditions:
 - **CLI JSON.** Run `$S/capture.sh "$RUN" assess -- node dist/plugin.mjs assess --input "$RUN/context.json" --json --out "$RUN/evaluation.json"`. Exit `0`. `jq '{model, usage, statuses: ([.metrics[].status] | group_by(.) | map({(.[0]): length}) | add), priorities}' "$RUN/evaluation.json"` shows 19 metrics and `usage.requests: 1`.
 - **Previous evaluation.** Fix the file (add an empty-input guard), save it as `$RUN/context-2.json`, and run `node dist/plugin.mjs assess --input "$RUN/context-2.json" --previous "$RUN/evaluation.json" --json`. Exit `0`; the output has `comparison`, `improvements`, `regressions`, and `unresolvedWeaknesses`. They stay empty when neither run published comparable scores, which is common for tiny inputs.
 - **MCP entry.** Use `[{"tool":"tracecheck_assess","arguments":<context.json>}]` with `mcp-call.mjs` (no `--repo` needed). The record has `isError: false` and 19 metrics in `structuredContent.metrics`.
+- **Cancellation.** Point `TYPESAFE_BASE_URL` at a local HTTP server that never answers, set a dummy `JEV_API_KEY`, start the CLI assess command, and send `SIGINT` after a second. The command exits `2` with an abort message instead of being killed by the signal.
 - **Missing key.** Run the CLI command with `env -i PATH="$PATH" node dist/plugin.mjs assess --input "$RUN/context.json"`. Exit `2` with a message naming the three key variables.
 
 ## Gotchas

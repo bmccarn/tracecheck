@@ -150,3 +150,11 @@ test('history never calls a disappeared candidate fixed', async () => {
   after.models = ['different-model'];
   assert.throws(() => compare(before, after), /cannot be compared/);
 });
+
+test('history ignores model order and reports newly supported findings', async () => {
+  const before = await review(planFor(), fixtureEvaluator('not_supported'));
+  const after = await review(planFor(), fixtureEvaluator());
+  before.models = ['model-a', 'model-b']; after.models = ['model-b', 'model-a'];
+  assert.deepEqual(compare(before, after).map(item => item.status), ['newly_supported']);
+  assert.deepEqual(compare(after, after).map(item => item.status), ['still_present']);
+});

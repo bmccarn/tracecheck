@@ -183,9 +183,9 @@ node dist/plugin.mjs compare \
 
 Keep the baseline fixed across commits by passing the same commit SHA with `--base` to both reviews. Quality comparisons require matching scope, model, and rubric; uncertain pairs do not produce numeric improvement claims. Source history additionally checks repository, baseline, and policy compatibility.
 
-A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews. Source-finding history still uses the combined decisions.
+A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a limitation that says why. Source-finding history still uses the combined decisions.
 
-Source findings can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. None of these means a fix has been executed and verified.
+Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
 
 ### Supply context directly
 
@@ -277,7 +277,7 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | `tracecheck_verify` | Verify an agent-selected hypothesis, contract, and source evidence; return uncertainty and a missing-evidence category. |
 | `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, and snapshot token. |
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
-| `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. |
+| `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 
 Configure your MCP client with:
 

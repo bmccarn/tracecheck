@@ -1,7 +1,7 @@
 import { CHECK_VERSION, POLICY_VERSION, hash } from './domain.js';
 import type { Answer, Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedEvaluator, TypedResponse } from './domain.js';
-import { qualityQuestions, transformQuality, renderQuality } from './quality.js';
-import type { QualityEvaluation } from './quality.js';
+import { comparableQuality, compareQuality, qualityQuestions, transformQuality, renderQuality } from './quality.js';
+import type { PreviousEvaluation } from './quality.js';
 
 const MAX_PROVIDER_REQUEST_BYTES = 160_000;
 const nonWhitespace = /\S/u;
@@ -250,7 +250,7 @@ export async function review(plan: ReviewPlan, evaluator: Evaluator, signal?: Ab
 }
 
 /** Broad quality review and source checks share a request only when all evidence and questions fit. */
-export async function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: { signal?: AbortSignal; previousEvaluation?: QualityEvaluation } = {}): Promise<Report> {
+export async function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: { signal?: AbortSignal; previousEvaluation?: PreviousEvaluation } = {}): Promise<Report> {
   const started = Date.now();
   const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
   const broadQuestions = qualityQuestions();
@@ -325,24 +325,38 @@ export async function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, opt
     const evaluation = transformQuality({ model: broad.model, answers: broad.answers,
       usage: { input_tokens: broad.inputTokens, output_tokens: broad.outputTokens } },
     packets.length === 1 ? hash([plan.root, plan.base]) : hash([plan.root, plan.base, packet.changedPaths]),
-    plan.snapshot, packets.length === 1 ? options.previousEvaluation : undefined);
+    plan.snapshot);
     evaluation.usage.requests = broad.requests;
     evaluation.usage.elapsedMs = Date.now() - started;
     return [{ packetId: packet.id, changedPaths: [...packet.changedPaths], evaluation }];
   });
   if (packets.length === 1 && packetQualities.length) report.quality = packetQualities[0]!.evaluation;
-  else if (packetQualities.length) {
-    report.packetQualities = packetQualities;
-    if (options.previousEvaluation) report.limitations = unique([...report.limitations,
-      'Previous broad quality evaluation was not compared because this review has multiple packet scopes.']);
-  }
+  else if (packetQualities.length) report.packetQualities = packetQualities;
   report.status = reportStatus(report.decisions, report.limitations);
   if (packetQualities.some(({ evaluation }) => evaluation.priorities.length)) report.status = 'needs_attention';
   else if (report.status === 'no_findings' && packetQualities.some(({ evaluation }) =>
     Object.values(evaluation.metrics).some(metric => ['uncertain', 'insufficient_context'].includes(metric.status)))) report.status = 'inconclusive';
+  applyPreviousEvaluation(report, options.previousEvaluation);
   report.usage.elapsedMs = Date.now() - started;
   report.id = hash([report.id, report.quality ?? report.packetQualities]).slice(0, 24);
   return report;
+}
+
+/**
+ * Compares a single-packet quality result with a previous evaluation in place. When no comparison is possible,
+ * a limitation says why; it does not change the review status.
+ */
+export function applyPreviousEvaluation(report: Report, previous: PreviousEvaluation | undefined): void {
+  if (!previous) return;
+  let reason: string | undefined;
+  if (report.quality) {
+    if (!comparableQuality(report.quality, previous)) reason = 'its scope, model, or rubric version differs from this review';
+    report.quality = compareQuality(report.quality, previous);
+  } else {
+    reason = report.packetQualities?.length ? 'this review has multiple packet scopes; comparison applies only to a single-packet quality result'
+      : 'this review produced no quality result';
+  }
+  if (reason) report.limitations = unique([...report.limitations, `Previous evaluation was not compared because ${reason}.`]);
 }
 
 export function render(report: Report): string {
