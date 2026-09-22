@@ -27,6 +27,9 @@
 - Add `review --sarif FILE`, which writes supported findings as SARIF 2.1.0 for code-scanning tools.
 - Add `assess --fail-on-priorities`, which exits 1 when the evaluation lists actionable quality priorities.
 - `--help` lists every flag and exit code, and `--previous` accepts either a saved review report or an assess evaluation for both `review` and `assess`.
+- Stream Git file listings so repositories with very large path lists collect successfully, and derive listing timeouts from the collection budget instead of a fixed 10 seconds.
+- Ignore `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and similar variables that would redirect collection to another repository.
+- Report a working-tree change during collection as a retryable error, add limitations for changed files with no textual hunks, and group coverage counts correctly for paths that contain `:`.
 
 ## 0.3.0 — 2026-09-18
 
