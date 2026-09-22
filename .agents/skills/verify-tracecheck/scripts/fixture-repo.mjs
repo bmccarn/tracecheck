@@ -3,7 +3,7 @@
 // Usage: node .agents/skills/verify-tracecheck/scripts/fixture-repo.mjs <scenario> [--list]
 // Prints JSON: { scenario, root, description, changed }. The caller removes `root` when done.
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
@@ -92,6 +92,25 @@ const scenarios = {
     change: { 'blank.ts': '\n\n' },
     stage: ['blank.ts'],
   },
+  hunkless: {
+    description: 'mode.ts gains the executable bit with no content change, and opaque.ts (marked -diff in .gitattributes) is edited. Expect a limitation naming each file.',
+    baseline: { '.gitattributes': 'opaque.ts -diff\n', 'mode.ts': 'export const mode = 1;\n', 'opaque.ts': 'export const opaque = 1;\n' },
+    change: { 'opaque.ts': 'export const opaque = 2;\n' },
+    chmod: { 'mode.ts': 0o755 },
+  },
+  'colon-paths': {
+    description: 'Two large files whose paths contain a colon each change one line. Expect one grouped limitation: Focused excerpts only for 2 file(s).',
+    baseline: Object.fromEntries(['src/a:one.ts', 'src/b:two.ts'].map(path => [path, Array.from({ length: 800 }, (_value, index) => `export const value${index} = ${index};\n`).join('')])),
+    change: Object.fromEntries(['src/a:one.ts', 'src/b:two.ts'].map(path => [path, Array.from({ length: 800 }, (_value, index) => `export const value${index} = ${index === 400 ? 0 : index};\n`).join('')])),
+  },
+  'large-listing': {
+    description: 'The division change plus 42,000 committed index-only paths (skip-worktree, about 8.8 MB of `git ls-files -z` output). Expect the division result.',
+    baseline: {
+      'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n',
+    },
+    indexOnly: Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`),
+    change: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+  },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },
@@ -125,8 +144,16 @@ try {
   write(scenario.baseline);
   git('add', '-A');
   git('commit', '-q', '-m', 'Fixture baseline');
+  if (scenario.indexOnly) {
+    // Index entries without working files: skip-worktree keeps them out of the diff while ls-files lists them.
+    const blob = execFileSync('git', ['-C', root, 'hash-object', '-w', '--stdin'], { input: 'x\n', encoding: 'utf8', env: gitEnv }).trim();
+    execFileSync('git', ['-C', root, 'update-index', '-z', '--index-info'], { input: scenario.indexOnly.map(path => `100644 ${blob}\t${path}\0`).join(''), env: gitEnv });
+    execFileSync('git', ['-C', root, 'update-index', '-z', '--skip-worktree', '--stdin'], { input: scenario.indexOnly.map(path => `${path}\0`).join(''), env: gitEnv });
+    git('commit', '-q', '-m', 'Index-only paths');
+  }
   for (const [from, to] of scenario.moves ?? []) git('mv', from, to);
   write(scenario.change);
+  for (const [path, mode] of Object.entries(scenario.chmod ?? {})) chmodSync(join(root, path), mode);
   if (scenario.stage) git('add', '--', ...scenario.stage);
   const changed = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', env: gitEnv }).trim().split('\n').filter(Boolean);
   console.log(JSON.stringify({ scenario: scenarioName, root, description: scenario.description, changed }, null, 2));

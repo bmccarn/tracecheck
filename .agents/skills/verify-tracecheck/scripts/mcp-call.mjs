@@ -1,14 +1,15 @@
 #!/usr/bin/env node
 // Drives the built MCP server over stdio the way an agent client does.
 // Usage (from the checkout root):
-//   node .agents/skills/verify-tracecheck/scripts/mcp-call.mjs --out DIR [--repo PATH] [--timeout-ms N] --calls FILE
+//   node .agents/skills/verify-tracecheck/scripts/mcp-call.mjs --out DIR [--repo PATH] [--timeout-ms N] [--env NAME]... --calls FILE
 //   node .agents/skills/verify-tracecheck/scripts/mcp-call.mjs --out DIR --list
 // FILE is a JSON array of { "tool": "tracecheck_preview", "arguments": { ... } }, or "-" for stdin.
 // A step { "run": ["git", "-C", "/path", "..."] } runs a local command between tool calls, in the same
 // server session, for example to edit the fixture after a preview.
 // The string "$snapshot" anywhere in arguments is replaced with the snapshot from the latest
 // successful tracecheck_preview call. Each call is written to DIR/NN-<tool>.json.
-// Only PATH, HOME, and provider variables are forwarded to the server; key values are never printed.
+// Only PATH, HOME, provider variables, and variables named with --env are forwarded to the server;
+// key values are never printed.
 import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
@@ -21,16 +22,17 @@ const { values } = parseArgs({
   options: {
     out: { type: 'string' }, repo: { type: 'string' }, calls: { type: 'string' },
     list: { type: 'boolean', default: false }, 'timeout-ms': { type: 'string', default: '600000' },
+    env: { type: 'string', multiple: true, default: [] },
   }
 });
 if (!values.out || (!values.list && !values.calls)) {
-  console.error('Usage: mcp-call.mjs --out DIR [--repo PATH] [--timeout-ms N] (--calls FILE|- | --list)');
+  console.error('Usage: mcp-call.mjs --out DIR [--repo PATH] [--timeout-ms N] [--env NAME]... (--calls FILE|- | --list)');
   process.exit(2);
 }
 const out = resolve(values.out);
 mkdirSync(out, { recursive: true });
 const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' };
-for (const name of PROVIDER_ENVIRONMENT) if (process.env[name]) env[name] = process.env[name];
+for (const name of [...PROVIDER_ENVIRONMENT, ...values.env]) if (process.env[name]) env[name] = process.env[name];
 const args = [resolve('dist/plugin.mjs'), 'mcp', ...(values.repo ? ['--repo', resolve(values.repo)] : [])];
 const client = new Client({ name: 'verify-tracecheck', version: '1.0.0' });
 const stderr = [];
