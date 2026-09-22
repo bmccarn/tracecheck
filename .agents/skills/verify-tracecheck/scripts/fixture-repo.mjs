@@ -7,6 +7,10 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+// Credential-shaped values are assembled at runtime so this file never contains a literal secret.
+const fakeCredential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+const lexer = extra => `export type TokenKind = 'StringLiteralExpressionToken' | 'NoSubstitutionTemplateLiteral' | 'IdentifierNameToken';\n\nexport function classify(text: string): TokenKind {\n  let token: TokenKind = 'IdentifierNameToken';\n  if (/^["']/.test(text)) token = 'StringLiteralExpressionToken';\n${extra}  return token;\n}\n`;
+
 const scenarios = {
   'json-regression': {
     description: 'TS decode() loses its try/catch, so malformed JSON now throws. Expect one unhandled-json candidate.',
@@ -86,11 +90,39 @@ const scenarios = {
     },
     change: { 'src/app.tsx': "import { scale } from './lib.mjs';\nimport { offset } from './legacy.cjs';\nimport { label } from './widgets';\nimport logo from './logo.png';\nimport './app.css';\n\nexport function size(value: number) {\n  return `${label}=${value / scale + offset} ${logo}`;\n}\n" },
   },
+  'symbol-focus': {
+    description: 'src/pricing.ts changes an `export const` arrow function (applyDiscount stops clamping the percent) next to `export function $round`. The caller src/checkout.ts is over 12,000 characters, with the applyDiscount call on line 302 and the $round call on line 453.',
+    baseline: {
+      'src/pricing.ts': 'export const applyDiscount = (price: number, percent: number) => price * (1 - Math.min(Math.max(percent, 0), 100) / 100);\n\nexport function $round(value: number) {\n  return Math.round(value * 100) / 100;\n}\n',
+      'src/checkout.ts': [
+        "import { applyDiscount, $round } from './pricing.js';",
+        ...Array.from({ length: 300 }, (_value, index) => `export const SKU_${index} = { id: 'SKU-${index}', cents: ${1000 + index} };`),
+        'export const discounted = (price: number, couponPercent: number) => applyDiscount(price, couponPercent);',
+        ...Array.from({ length: 150 }, (_value, index) => `export const SKU_${300 + index} = { id: 'SKU-${300 + index}', cents: ${1300 + index} };`),
+        'export const total = (prices: number[]) => $round(prices.reduce((sum, price) => sum + price, 0));',
+        ...Array.from({ length: 150 }, (_value, index) => `export const SKU_${450 + index} = { id: 'SKU-${450 + index}', cents: ${1450 + index} };`),
+      ].join('\n') + '\n',
+    },
+    change: { 'src/pricing.ts': 'export const applyDiscount = (price: number, percent: number) => price * (1 - percent / 100);\n\nexport function $round(value: number) {\n  return Math.round(value * 100) / 100;\n}\n' },
+  },
   'blank-packet': {
     description: 'A new whitespace-only file is staged. Expect one packet with no source evidence, no provider request, and no quality result.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },
     change: { 'blank.ts': '\n\n' },
     stage: ['blank.ts'],
+  },
+  credentials: {
+    description: 'A lexer with identifier-shaped token-kind literals and two config files that gain unquoted credentials (.env-style shell exports and YAML). Expect src/lexer.ts collected, and deploy/env.sh and config/app.yml omitted with their paths named.',
+    baseline: {
+      'src/lexer.ts': lexer(''),
+      'deploy/env.sh': 'export APP_ENV=production\n',
+      'config/app.yml': 'database:\n  host: db.internal\n',
+    },
+    change: {
+      'src/lexer.ts': lexer("  else if (text.startsWith('`')) token = 'NoSubstitutionTemplateLiteral';\n"),
+      'deploy/env.sh': `export APP_ENV=production\nexport API_TOKEN=${fakeCredential}\n`,
+      'config/app.yml': `database:\n  host: db.internal\n  password: ${fakeCredential}\n`,
+    },
   },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
