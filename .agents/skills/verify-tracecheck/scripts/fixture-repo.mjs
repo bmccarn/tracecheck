@@ -92,6 +92,11 @@ const scenarios = {
     change: { 'blank.ts': '\n\n' },
     stage: ['blank.ts'],
   },
+  'multi-packet': {
+    description: 'Nine small modules change their exported constant. Expect two change packets (eight changed paths, then one) with no candidates.',
+    baseline: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index};\n`])),
+    change: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index + 1};\n`])),
+  },
   clean: {
     description: 'Committed baseline with no working-tree change. Preview should report zero packets.',
     baseline: { 'index.ts': 'export const answer = 42;\n' },

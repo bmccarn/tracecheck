@@ -44319,6 +44319,15 @@ var init_jev = __esm({
   }
 });
 
+// src/version.ts
+var releaseVersion;
+var init_version = __esm({
+  "src/version.ts"() {
+    "use strict";
+    releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
+  }
+});
+
 // node_modules/@modelcontextprotocol/server/dist/chunk-Br0eD_fh.mjs
 var __create, __defProp2, __getOwnPropDesc, __getOwnPropNames2, __getProtoOf, __hasOwnProp, __commonJSMin, __exportAll, __copyProps, __toESM;
 var init_chunk_Br0eD_fh = __esm({
@@ -58509,7 +58518,7 @@ async function serve(repo) {
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
 }
-var releaseVersion, CACHE_LIMIT, CACHE_TTL_MS, ExpiringCache;
+var CACHE_LIMIT, CACHE_TTL_MS, ExpiringCache;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -58524,7 +58533,7 @@ var init_mcp = __esm({
     init_schema();
     init_collection_options();
     init_deadline();
-    releaseVersion = true ? "0.3.0" : createRequire(import.meta.url)("../package.json").version;
+    init_version();
     CACHE_LIMIT = 16;
     CACHE_TTL_MS = 3e5;
     ExpiringCache = class {
@@ -58587,6 +58596,71 @@ function compare(previous, current) {
 
 // src/cli.ts
 init_schema();
+
+// src/sarif.ts
+init_version();
+import { pathToFileURL } from "node:url";
+var levels2 = { high: "error", medium: "warning", low: "note", unknown: "warning" };
+function toSarif(report) {
+  const families = /* @__PURE__ */ new Map();
+  for (const decision of report.decisions) if (!families.has(decision.check)) families.set(decision.check, decision);
+  const ruleIds = [...families.keys()].sort();
+  const rules = ruleIds.map((id) => {
+    const { hypothesis, verification } = families.get(id);
+    return {
+      id,
+      name: id,
+      shortDescription: { text: /^.*?[.!?](?=\s|$)/su.exec(hypothesis)?.[0] ?? hypothesis },
+      fullDescription: { text: hypothesis },
+      help: { text: verification },
+      defaultConfiguration: { level: "warning" }
+    };
+  });
+  const results = report.decisions.filter((decision) => decision.status === "supported").map((decision) => ({
+    ruleId: decision.check,
+    ruleIndex: ruleIds.indexOf(decision.check),
+    kind: "fail",
+    level: levels2[decision.impact],
+    message: { text: decision.hypothesis },
+    locations: [{
+      physicalLocation: {
+        artifactLocation: { uri: decision.path.split("/").map(encodeURIComponent).join("/"), uriBaseId: "SRCROOT" },
+        region: { startLine: decision.range.start, endLine: decision.range.end, snippet: { text: decision.quote } }
+      },
+      logicalLocations: [{ name: decision.symbol }]
+    }],
+    fingerprints: { "tracecheckCandidate/v1": decision.id },
+    properties: {
+      impact: decision.impact,
+      impactConfidence: decision.impactConfidence,
+      confidence: decision.confidence,
+      probability: decision.probability,
+      verification: decision.verification
+    }
+  }));
+  const omitted = (status) => report.decisions.filter((decision) => decision.status === status).length;
+  return {
+    $schema: "https://json.schemastore.org/sarif-2.1.0.json",
+    version: "2.1.0",
+    runs: [{
+      tool: { driver: { name: "Tracecheck", version: releaseVersion, informationUri: "https://github.com/bmccarn/tracecheck", rules } },
+      originalUriBaseIds: { SRCROOT: { uri: pathToFileURL(report.root.endsWith("/") ? report.root : `${report.root}/`).href } },
+      results,
+      properties: {
+        reportId: report.id,
+        status: report.status,
+        snapshot: report.snapshot,
+        base: report.base,
+        head: report.head,
+        models: report.models,
+        limitations: report.limitations,
+        omittedDecisions: { uncertain: omitted("uncertain"), needsContext: omitted("needs_context"), notSupported: omitted("not_supported") }
+      }
+    }]
+  };
+}
+
+// src/cli.ts
 init_collection_options();
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
@@ -58602,6 +58676,22 @@ function collectionOptions(values) {
     indexTimeoutMs: positiveSafeInteger(values["index-timeout-ms"], "--index-timeout-ms"),
     collectionTimeoutMs: positiveSafeInteger(values["collection-timeout-ms"], "--collection-timeout-ms")
   });
+}
+async function readPrevious(file3) {
+  let value;
+  try {
+    value = JSON.parse(await readFile(file3, "utf8"));
+  } catch (error62) {
+    throw new Error(`--previous ${file3} is not a readable JSON file.`, { cause: error62 });
+  }
+  const report = reportSchema.safeParse(value);
+  if (report.success) {
+    if (report.data.quality) return report.data.quality;
+    throw new Error(report.data.packetQualities?.length ? `--previous ${file3} is a multi-packet review report; only a single-packet report has one quality evaluation to compare.` : `--previous ${file3} is a review report without a quality evaluation to compare.`);
+  }
+  const evaluation = previousEvaluationSchema.safeParse(value);
+  if (evaluation.success) return evaluation.data;
+  throw new Error(`--previous ${file3} is neither a report saved by review --out nor an evaluation saved by assess --out.`);
 }
 async function main() {
   const { values, positionals } = parseArgs({ allowPositionals: true, options: {
@@ -58620,28 +58710,60 @@ async function main() {
     "index-max-bytes": { type: "string" },
     "index-timeout-ms": { type: "string" },
     "collection-timeout-ms": { type: "string" },
-    "review-timeout-ms": { type: "string" }
+    "review-timeout-ms": { type: "string" },
+    sarif: { type: "string" },
+    "fail-on-priorities": { type: "boolean", default: false }
   } });
   const command = positionals[0];
   if (values.help || !command) {
-    console.log(`Tracecheck \u2014 evidence-backed review powered by Jev
+    console.log(`Tracecheck: evidence-backed review powered by Jev
 
-  tracecheck preview --repo PATH [--base HEAD] [--include-untracked] [collection limits] [--json]
-  tracecheck review  --repo PATH [--base HEAD] [collection limits] [--review-timeout-ms N] [--json] [--out report.json]
-  tracecheck verify  --input evidence.json [--repo PATH] [--out result.json]
-  tracecheck assess  --input context.json [--previous evaluation.json] [--out evaluation.json]
-  tracecheck compare --previous old.json --current current.json
-  tracecheck mcp     --repo PATH
+Usage:
+  tracecheck preview [--repo PATH] [--base REF] [--include-untracked] [--task TEXT] [--context TEXT]
+                     [collection limits] [--json]
+  tracecheck review  [--repo PATH] [--base REF] [--include-untracked] [--task TEXT] [--context TEXT]
+                     [collection limits] [--review-timeout-ms N] [--previous FILE] [--json]
+                     [--out FILE] [--sarif FILE]
+  tracecheck verify  --input FILE [--repo PATH] [--out FILE]
+  tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
+  tracecheck compare --previous FILE --current FILE
+  tracecheck mcp     [--repo PATH]
 
-Collection limits: --index-max-files N, --index-max-bytes N,
+Options:
+  --repo PATH                 Git repository to collect; defaults to the current directory. verify
+                              matches excerpts against it; mcp uses it when a call names none.
+  --base REF                  Git baseline (default: HEAD).
+  --include-untracked         Include supported, non-ignored untracked files.
+  --task TEXT                 Requested behavior or acceptance criteria.
+  --context TEXT              Repository facts, contracts, or observed test results.
+  --review-timeout-ms N       Review deadline (default: 300000).
+  --input FILE                verify: evidence JSON. assess: context JSON.
+  --previous FILE             review and assess: a report saved by review --out or an evaluation
+                              saved by assess --out; its quality evaluation is compared with this
+                              run. compare: the earlier review report.
+  --current FILE              compare: the later review report.
+  --json                      Print JSON instead of Markdown (preview, review, assess).
+  --out FILE                  Save the review report, verification result, or evaluation as JSON.
+  --sarif FILE                review: also write supported findings as SARIF 2.1.0.
+  --fail-on-priorities        assess: exit 1 when the evaluation lists actionable quality priorities.
+  -h, --help                  Show this help.
+
+Collection limits (preview and review): --index-max-files N, --index-max-bytes N,
 --index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
-All values are positive safe integers. Review timeout defaults to 300000 ms.
+All N values are positive safe integers.
 
-Preview is local. Review sends bounded evidence for all change packets to Jev and requires
-JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
+Exit codes:
+  0  Success. review and verify found nothing that needs attention; assess never fails on
+     its results unless --fail-on-priorities is set.
+  1  review: supported findings or quality priorities. verify: the hypothesis is supported.
+     assess --fail-on-priorities: actionable quality priorities.
+  2  Execution or input error.
+  3  review or verify is inconclusive.
+
+Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
+require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
 TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
 (default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
-Exit codes: 0 no findings, 1 supported findings, 2 error, 3 inconclusive.
 Each change packet receives an individual bounded quality assessment. Automatic
 source-anchored checks cover three JS/TS patterns; no code or tests are executed.
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
@@ -58681,13 +58803,14 @@ Use --task and --context to supply requirements and repository facts.`);
     process.once("SIGINT", () => controller2.abort());
     const signal = AbortSignal.any([controller2.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
-    if (values.previous) input2.previousEvaluation = previousEvaluationSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
+    if (values.previous) input2.previousEvaluation = await readPrevious(values.previous);
     const evaluation = await assess(input2, jevFromEnv(signal), signal);
     if (values.out) {
       await mkdir(dirname(resolve4(values.out)), { recursive: true });
       await writeFile(values.out, JSON.stringify(evaluation, null, 2) + "\n", { mode: 384 });
     }
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
+    if (values["fail-on-priorities"] && evaluation.priorities.length) process.exitCode = 1;
     return;
   }
   if (!["preview", "review"].includes(command)) throw new Error(`Unknown command: ${command}`);
@@ -58718,10 +58841,7 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     controller.signal,
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)
   ]);
-  if (values.previous && plan.packets.length > 1) throw new Error("Previous evaluation comparison is supported only for a single change packet.");
-  const previousReport = values.previous ? reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8"))) : void 0;
-  if (values.previous && !previousReport?.quality) throw new Error("Previous report has no single-packet quality evaluation to compare.");
-  const previous = previousReport?.quality;
+  const previous = values.previous ? await readPrevious(values.previous) : void 0;
   const report = await reviewAll(plan, jevFromEnv(reviewSignal), { signal: reviewSignal, previousEvaluation: previous });
   reviewSignal.throwIfAborted();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
@@ -58730,6 +58850,11 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     const destination = resolve4(values.out);
     await mkdir(dirname(destination), { recursive: true });
     await writeFile(destination, JSON.stringify(report, null, 2) + "\n", { mode: 384 });
+  }
+  if (values.sarif) {
+    const destination = resolve4(values.sarif);
+    await mkdir(dirname(destination), { recursive: true });
+    await writeFile(destination, JSON.stringify(toSarif(report), null, 2) + "\n", { mode: 384 });
   }
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
   process.exitCode = report.status === "needs_attention" ? 1 : report.status === "inconclusive" ? 3 : 0;
