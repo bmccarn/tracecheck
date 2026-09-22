@@ -10,7 +10,7 @@
       "source": {
         "source": "github",
         "repo": "bmccarn/tracecheck",
-        "ref": "v0.2.0"
+        "ref": "v0.3.0"
       },
       "description": "Continuous quality review with source-anchored findings."
     }

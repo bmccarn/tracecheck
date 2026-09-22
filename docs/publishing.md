@@ -11,7 +11,7 @@ One version covers the standalone CLI, four-tool MCP server, review skill, and p
 | GitHub releases | The verified npm and marketplace archives for the matching immutable tag |
 | `bmccarn/tracecheck-plugins` | Generated stable marketplace payload for Claude and Codex; never release candidates |
 
-Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. Before its first stable publication it does not provide an installation catalog; after a successful stable publication it is the canonical Claude/Codex marketplace source. Source-repository catalogs remain pinned to the historical `v0.2.0` release; they do not track development or automatically migrate existing installations.
+Development lives in `bmccarn/tracecheck`. The release-only marketplace repository is updated by the stable release workflow, not by ordinary merges. Before its first stable publication it does not provide an installation catalog; after a successful stable publication it is the canonical Claude/Codex marketplace source. The in-repo marketplace catalogs pin the latest stable release tag, so adding `bmccarn/tracecheck` as a marketplace installs that release. They never track development commits or release candidates.
 
 A prerelease must not move npm's `latest` tag or update the stable marketplace. Published versions and release tags are immutable. The workflow is not a cross-service transaction: npm, GitHub releases, and the marketplace can succeed independently; use the recovery procedure below after a partial publication.
 
@@ -26,7 +26,7 @@ npm ci
 npm run release:prepare -- 0.3.0
 ```
 
-Preparation validates all metadata before updating `package.json`, the lockfile, and the three plugin manifests together. It neither commits nor publishes. Update the changelog and relevant installation examples, then run:
+Preparation validates all metadata before updating `package.json`, the lockfile, and the three plugin manifests together. For a stable version it also points both in-repo marketplace catalogs at the new release tag; a prerelease leaves them on the current stable tag. The release gates fail when a catalog ref differs from the stable release tag, or, for a prerelease, does not name an earlier stable tag. Preparation neither commits nor publishes. Update the changelog and relevant installation examples, then run:
 
 ```sh
 npm run release:check
@@ -164,7 +164,7 @@ The stable workflow publishes the tested npm archive to `latest`, attaches the a
 
 It does not force-push or replace unrelated marketplace content. After successful stable publication, users add `bmccarn/tracecheck-plugins` and install `tracecheck@tracecheck-plugins`.
 
-Existing users of the source-repository marketplace must re-register the marketplace against `bmccarn/tracecheck-plugins` after its first stable publication, then update/reinstall Tracecheck. The marketplace name remains `tracecheck-plugins`. Until that migration, the source catalogs remain pinned to `v0.2.0` rather than silently shipping a release candidate.
+After the release PR merges, the in-repo catalogs on `main` name a tag that does not exist until it is pushed, so push the tag promptly. Users who added `bmccarn/tracecheck` as a marketplace while its catalogs pinned `v0.2.0` receive the current release after refreshing the marketplace and updating or reinstalling Tracecheck. The marketplace name is `tracecheck-plugins` in both repositories.
 
 ## Recovery and rollback
 
