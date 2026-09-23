@@ -4,7 +4,7 @@ Tracecheck turns Jev's typed answers into decisions through fixed gates. A sourc
 
 **The thresholds in `src/` are unchanged.** A gate decides what counts as a finding, so the maintainer chooses the policy. The [recommendation](#recommendation) below is one input to that choice.
 
-Run: September 23, 2026, model `typesafe/jev-1.13-20260917` through OpenRouter, 36 labeled pairs, 3 reviews of each variant.
+The run on September 23, 2026 used the model `typesafe/jev-1.13-20260917` through OpenRouter, 36 labeled pairs, and 3 reviews of each variant.
 
 ## Findings
 
