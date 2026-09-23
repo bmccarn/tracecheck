@@ -45,7 +45,7 @@ Preconditions:
 
 ## Gotchas
 
-- The stand-in provider answers every question the same way; use it for timing and failure handling, not for decision quality.
+- The stand-in provider answers `supported` for every source-check candidate unless `--verdict REGEX=STATUS` names another status for matching paths, and it gives every quality dimension the same score with no weakness. Use it for timing, failure handling, and the exit code of each status, not for decision quality.
 - Each nonempty packet makes at least one provider request, and the 76 quality questions cost roughly 15,000 input tokens per request. Keep fixtures small.
 - The MCP cache lasts five minutes per server process. `mcp-call.mjs` starts a new process each run, so cache hits only occur within one calls file.
 - `--previous` with a multi-packet plan runs the review and adds a limitation; a multi-packet previous report is rejected because it has no single quality evaluation.

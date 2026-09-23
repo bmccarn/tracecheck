@@ -20,13 +20,27 @@ Run the scripted journey before approving any change, and again with `--provider
 
 ```sh
 npm run journey                       # stand-in provider: deterministic, no key, runs in CI
-npm run journey -- --provider live    # real provider from the environment; asserts structure and exit codes only
+npm run journey -- --provider live    # real provider from the environment; adds outcome checks on its judgments
 npm run journey -- --package @bmccarn/tracecheck@0.3.0   # the same journey against a published release
 ```
 
-It packs the checkout and installs the tarball offline into a temporary prefix, as a user would, then works in a realistic TypeScript project with path aliases, a committed `.tracecheck.json`, and an uncommitted change that removes a divisor guard, removes JSON error handling, and renames a file. It drives `--help`, `preview`, `review` (JSON, Markdown, SARIF, progress, `--quiet`), a fix followed by `compare`, `verify` against local files, `assess --fail-on-priorities`, the missing-key and plain-HTTP errors, and then the four MCP tools through a real stdio client, including progress notifications, a cached repeat review, and a stale-snapshot rejection. Every step has assertions. Evidence goes to `.tracecheck/journey/<timestamp>-<provider>/`: `JOURNEY.md` with a pass/fail table, `summary.json`, and one record per CLI command and MCP call. The script exits 1 when any step fails. In live mode it also fails if a key value appears in the evidence.
+It packs the checkout and installs the tarball offline into a temporary prefix, as a user would, then works in a realistic TypeScript project with path aliases, a committed `.tracecheck.json`, and an uncommitted change that removes a divisor guard, removes JSON error handling, and renames a file. It drives `--help`, `preview`, `review` (JSON, Markdown, SARIF, progress, `--quiet`), a fix followed by `compare`, `verify` against local files, `assess --fail-on-priorities`, the missing-key and plain-HTTP errors, and then the four MCP tools through a real stdio client, including progress notifications, a cached repeat review, and a stale-snapshot rejection. It runs the installed `node_modules/.bin/tracecheck` shim and `npx --offline --package <tarball> tracecheck preview` in the project, and starts the MCP server exactly as `.mcp.json` and `mcp.json` specify, with no `--repo`, to check that a call without `repo` asks for one.
 
-When a change adds or alters a user-visible behavior, extend the journey with a step that asserts it, alongside the targeted proof below.
+Separate small repositories cover outcomes beyond that path: a change the stand-in judges clean (through `--verdict`), a working tree with nothing to review, an untracked file and a reviewed-file edit made while a CLI review waits on a slow stand-in, an untracked file created between MCP preview and review, a file name and source containing terminal control sequences, a repository-local `core.fsmonitor` command, a settings file that tries to raise limits or enable untracked files, a review over `--max-requests`, and a `--base` branch that has moved on.
+
+Every step has assertions and a kind:
+
+- An **outcome** check asserts a result the user acts on: an exit code, a refusal, or a side effect that must not happen.
+- A **plumbing** check shows that the parts connect and the output has the expected shape. The stand-in provider scripts every judgment, so offline these checks say nothing about review quality.
+- A **known-issue** check asserts the correct outcome for an open issue and names the issue. Its failure prints `KNOWN` and does not fail the journey. When one passes, make it an outcome check.
+
+With `--provider live`, two more outcome checks assert that both planted defects are supported, with the unfixed one still supported after the JSON fix, and that the review scores at least one quality dimension. Offline they are reported as skipped.
+
+Evidence goes to `.tracecheck/journey/<timestamp>-<provider>/`: `JOURNEY.md` with the passed count per kind and a table of steps, `summary.json`, and one record per CLI command and MCP call. The script exits 1 when any outcome or plumbing check fails. In live mode it also fails if a key value appears in the evidence.
+
+The script packs the current directory. To run the same journey against another commit's bundle, such as the base of a bug fix, extract that commit with `git archive`, run `npm ci` in the copy, and run this checkout's `journey.mjs` from the copy's root with `--out`.
+
+When a change adds or alters a user-visible behavior, extend the journey with a step that asserts it, alongside the targeted proof below. Make it an outcome check when it asserts what the user relies on.
 
 ## Launch
 
@@ -86,10 +100,10 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 
 | Helper | Invocation | Output |
 | --- | --- | --- |
-| `journey.mjs` | `npm run journey -- [--provider stand-in\|live] [--no-install \| --package SPEC] [--out DIR]` | The end-user journey above; exit 1 when any step fails |
+| `journey.mjs` | `npm run journey -- [--provider stand-in\|live] [--no-install \| --package SPEC] [--out DIR]` | The end-user journey above; exit 1 when any outcome or plumbing check fails |
 | `doctor.mjs` | `node $S/doctor.mjs` | Readiness JSON; exit 1 when not ready |
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
 | `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |
-| `stand-in-provider.mjs` | `node $S/stand-in-provider.mjs [--port N] [--latency-ms N] [--fail-path REGEX] [--fail-times N]`, started with `hub` | A loopback System One stand-in with fixed latency; one JSON log line per request with its packet and in-flight count |
+| `stand-in-provider.mjs` | `node $S/stand-in-provider.mjs [--port N] [--latency-ms N] [--fail-path REGEX] [--fail-times N] [--verdict REGEX=STATUS]...`, started with `hub` | A loopback System One stand-in with fixed latency. A review candidate whose path matches the first matching `--verdict` gets STATUS (`supported`, `not_supported`, `needs_context`, or `uncertain`); others are `supported`. One JSON log line per request with its packet, in-flight count, and verdicts; `GET /stats` returns the request count |
 | `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... [--progress] (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored; `--progress` records each call's progress notifications |
 | `scripts/build.mjs --check` | `node scripts/build.mjs --check` (repository script) | Exit 1 when `dist/plugin.mjs` differs from a fresh build; `dist/` is untouched |

@@ -30,7 +30,7 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 
 ## Journey coverage
 
-`scripts/journey.mjs` drives one realistic path through preview, review, compare, verify, assess, provider errors, and all four MCP tools. It proves those features work together for a typical user. A feature file below is still the recipe for exercising a feature's other entry points and edge cases.
+`scripts/journey.mjs` drives one realistic path through preview, review, compare, verify, assess, provider errors, and all four MCP tools, through the installed bin shim, `npx`, and the MCP launch the plugin manifests specify. Separate small repositories check exit codes, refusals, and absent side effects on paths off the main one. Each step is labeled an outcome, plumbing, or known-issue check (see the [skill](../SKILL.md#end-user-journey)). A feature file below is still the recipe for exercising a feature's other entry points and edge cases.
 
 ## Features
 
