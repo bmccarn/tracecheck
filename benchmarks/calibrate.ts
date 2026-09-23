@@ -48,16 +48,6 @@ type Row = CaseRow | ResponseRow | ReportRow
 
 type Prepared = { item: CalibrationCase; variant: VariantName; plan: ReviewPlan; row: CaseRow; problems: string[] };
 
-const [mode, ...args] = process.argv.slice(2);
-if (mode === 'run') await run(args);
-else if (mode === 'replay') {
-  if (!args[0]) throw new Error('Pass the run directory: npm run calibrate -- replay .tracecheck/calibration/<timestamp>');
-  console.log(await replay(resolve(args[0])));
-} else {
-  console.log('Usage: npm run calibrate -- run [--live] [--repeats 3] [--max-requests 400] [--concurrency 4] [--cases id,id] [--out dir]\n       npm run calibrate -- replay <run directory>');
-  process.exitCode = mode ? 1 : 0;
-}
-
 function wholeNumber(value: string | undefined, name: string): number {
   const number = Number(value);
   if (!Number.isSafeInteger(number) || number < 1) throw new Error(`${name} must be a positive whole number.`);
@@ -366,7 +356,7 @@ function pickSource(grid: SourcePoint[], allowed: (metrics: SourceMetrics) => bo
     || b.probability - a.probability || b.confidence - a.confidence)[0];
 }
 
-export async function replay(dir: string): Promise<string> {
+async function replay(dir: string): Promise<string> {
   const rows = await readRows(join(dir, 'raw.jsonl'));
   if (!rows.length) throw new Error(`No raw rows in ${join(dir, 'raw.jsonl')}.`);
   const key = (row: { caseId: string; variant: string; repeat: number }) => `${row.caseId}/${row.variant}/${row.repeat}`;
@@ -533,6 +523,15 @@ export async function replay(dir: string): Promise<string> {
       [name, `${point.relevance.toFixed(1)} / ${point.applicability.toFixed(1)} / ${point.scoreConfidence.toFixed(1)}`, ...qualityRow('Development', point.metrics)],
       [name, `${point.relevance.toFixed(1)} / ${point.applicability.toFixed(1)} / ${point.scoreConfidence.toFixed(1)}`, ...qualityRow('Holdout', qualityHoldout(point))],
     ])), 'Low noise: the most labeled-relevant dimensions scored on development data with at most 5% of labeled-irrelevant dimensions scored. Balanced: the largest gap between the two. Ties go to stricter gates.');
+  const median = (values: number[]) => values.length ? [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!.toFixed(2) : 'n/a';
+  sections.push('### Quality by dimension (all splits)', table(['Dimension', 'Labeled relevant', 'Labeled irrelevant', 'Median relevance', 'Median applicability', 'Median score confidence',
+    ...qualityPolicies.map(policy => `Scored under ${policy.name}`)], dimensionKeys.map(dimension => {
+      const values = evaluations.map(evaluation => evaluation.dimensions[dimension]!);
+      return [dimension, String(evaluations.filter(evaluation => evaluation.labels.relevant.includes(dimension)).length),
+        String(evaluations.filter(evaluation => evaluation.labels.irrelevant.includes(dimension)).length), median(values.map(value => value.relevance)),
+        median(values.map(value => value.applicability)), median(values.map(value => value.scoreConfidence)),
+        ...qualityPolicies.map(({ point }) => counted(ratio(values.map(value => value.relevance >= point.relevance && value.applicability >= point.applicability && value.scoreConfidence >= point.scoreConfidence))))];
+    })), 'Labeled counts are reviews in which the dimension carries that label.');
   const concernPolicy = qualityPolicies.find(policy => policy.name === 'Balanced') ?? qualityPolicies[0]!;
   sections.push(`### Concern gates at the Balanced quality gates, development (priority on defect · priority on clean)`, table(['Concern probability \\ confidence', ...hundredths(30, 60, 10).map(value => `≥ ${value.toFixed(1)}`)],
     hundredths(50, 80, 10).reverse().map(concernProbability => [`≥ ${concernProbability.toFixed(1)}`, ...hundredths(30, 60, 10).map(concernConfidence => {
@@ -570,3 +569,15 @@ export async function replay(dir: string): Promise<string> {
   }, null, 2) + '\n');
   return markdown;
 }
+
+// Dispatch last, so every module-level constant above is initialized before run or replay reads it.
+const [mode, ...args] = process.argv.slice(2);
+if (mode === 'run') await run(args);
+else if (mode === 'replay') {
+  if (!args[0]) throw new Error('Pass the run directory: npm run calibrate -- replay .tracecheck/calibration/<timestamp>');
+  console.log(await replay(resolve(args[0])));
+} else {
+  console.log('Usage: npm run calibrate -- run [--live] [--repeats 3] [--max-requests 400] [--concurrency 4] [--cases id,id] [--out dir]\n       npm run calibrate -- replay <run directory>');
+  process.exitCode = mode ? 1 : 0;
+}
+
