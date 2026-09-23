@@ -1,7 +1,7 @@
 import { mock, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { promises as fsPromises } from 'node:fs';
-import { chmod, mkdir, realpath, writeFile, symlink } from 'node:fs/promises';
+import { chmod, mkdir, readFile, realpath, writeFile, symlink } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { syncBuiltinESMExports } from 'node:module';
 import { join, relative } from 'node:path';
@@ -256,6 +256,30 @@ test('records a pure rename without changed ranges or candidates', async t => {
   assert.equal(source.previousPath, 'ratio.ts');
   assert.equal(source.before, ratioModule);
   assert.equal(plan.candidates.length, 0);
+});
+
+test('notes staged changes the working tree undoes and staged renames Git cannot pair, without reviewing the index', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'ratio.ts'), ratioModule);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  const clean = await collect({ repo: repo.root });
+  const average = await readFile(join(repo.root, 'average.ts'), 'utf8');
+  await writeFile(join(repo.root, 'average.ts'), average.replace('if (!xs.length) return 0; ', ''));
+  repo.git('add', 'average.ts');
+  await writeFile(join(repo.root, 'average.ts'), average);
+  const reverted = await collect({ repo: repo.root });
+  assert.equal(reverted.snapshot, clean.snapshot);
+  assert.ok(reverted.notes.some(note => /^1 staged change\(s\) .*: average\.ts\./.test(note)), reverted.notes.join('\n'));
+
+  repo.git('mv', 'ratio.ts', 'quotient.ts');
+  await writeFile(join(repo.root, 'quotient.ts'), 'export const quotient = (a: number, b: number) => a / b;\n');
+  const unpaired = await collect({ repo: repo.root });
+  assert.equal(unpaired.sources.find(source => source.path === 'quotient.ts')!.previousPath, undefined);
+  assert.ok(unpaired.notes.some(note => /^1 staged rename\(s\) .*: ratio\.ts -> quotient\.ts\.$/.test(note)), unpaired.notes.join('\n'));
+
+  repo.git('add', '-A');
+  const staged = await collect({ repo: repo.root });
+  assert.ok(!staged.notes.some(note => note.includes('staged')), staged.notes.join('\n'));
 });
 
 test('reports renames that cross into or out of ineligible paths', async t => {

@@ -16,6 +16,8 @@ export const reportSchema = z.object({
   checkVersion: z.string(), policyVersion: z.string(), models: z.array(z.string()),
   status: z.enum(['needs_attention', 'inconclusive', 'no_findings']),
   decisions: z.array(candidateSchema.extend({
+    // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
+    previousPath: z.string().optional(),
     status: z.enum(['supported', 'uncertain', 'needs_context', 'not_supported']),
     confidence: z.number().min(0).max(1), probability: z.number().min(0).max(1),
     impact: z.enum(['high', 'medium', 'low', 'unknown']), impactConfidence: z.number().min(0).max(1),
