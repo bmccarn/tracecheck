@@ -138,7 +138,9 @@ node dist/plugin.mjs review --repo /path/to/repo \
 
 Paths to the runtime above are relative to the Tracecheck checkout. `--repo` selects the repository being reviewed; report paths are relative to your current directory.
 
-By default, collection compares **HEAD with the working tree**, including staged and unstaged tracked changes. Use `--base REF` for another baseline and `--include-untracked` to include supported new files. Already committed changes need an earlier baseline to appear in the review.
+Collection compares **the base with the working tree**. The base is HEAD unless you pass `--base REF`. Tracked changes appear whether or not they are staged, but collection does not read the index: a change that is staged and then undone in the working tree is not reviewed, although a commit would include it. Use `--include-untracked` to include supported new files. Already committed changes need an earlier baseline to appear in the review.
+
+Not in 0.3.0: preview and review add a note naming each file whose staged change the working tree undoes, and each staged rename whose working-tree file differs too much from its source for Git to pair them. Such a rename is reviewed as a deleted file and a new file without a baseline. To review exactly what you are about to commit, make the working tree match the index first, for example with `git stash --keep-index`.
 
 Not in 0.3.0: the working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`. 0.3.0 compared with the tip of REF.
 
@@ -234,6 +236,8 @@ A single-packet repository review returns `report.quality`. Larger changes retur
 `--previous` takes either a report saved by `review --out` or an evaluation saved by `assess --out`, for both `review` and `assess`. Tracecheck reads the quality evaluation from it: a report's `quality`, or the evaluation itself. A multi-packet report has no single quality evaluation, so it is rejected, as is any other file. The comparison still requires the same scope, model, and rubric version; a review and an assessment usually have different scopes, so they are reported as not comparable unless the assessment `scope` matches.
 
 Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
+
+Not in 0.3.0: a finding keeps its history when its file is renamed. A candidate ID includes the file path, so the finding gets a new ID at the new path. A decision on a renamed file records the file's path at the base as `previousPath`, and `compare` matches an earlier finding to that decision when both name the same base file, check, symbol, and quoted code, ignoring whitespace. The entry then adds `currentId` and `currentPath`. 0.3.0 reported such a finding as `not_reassessed` and again as `newly_supported`.
 
 ### Supply context directly
 

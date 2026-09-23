@@ -58,6 +58,19 @@ const scenarios = {
     moves: [['dist/ratio.ts', 'ratio.ts'], ['notes.ts', 'notes.txt']],
     change: { 'ratio.ts': 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n' },
   },
+  'staged-reverted': {
+    description: 'mean() loses its empty-input guard and the change is staged, then the working tree restores the guard. Expect no packets, and a note naming src/stats.ts as a staged change the working tree undoes.',
+    baseline: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+    change: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+    stage: ['src/stats.ts'],
+    unstaged: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+  },
+  'rename-unpaired': {
+    description: 'git mv ratio.ts quotient.ts, then rewrite quotient.ts so Git no longer pairs it with ratio.ts. Expect quotient.ts without previousPath or baseline, and a note naming the staged rename ratio.ts -> quotient.ts.',
+    baseline: { 'ratio.ts': 'export function ratio(a: number, b: number) {\n  if (!b) return 0;\n  return a / b;\n}\n' },
+    moves: [['ratio.ts', 'quotient.ts']],
+    change: { 'quotient.ts': 'export const quotient = (a: number, b: number) => a / b;\n' },
+  },
   'python-import': {
     description: 'Python module changes; a caller imports it with a parenthesized multi-line import and a test imports it plainly.',
     baseline: {
@@ -263,6 +276,7 @@ try {
   write(scenario.change);
   for (const [path, mode] of Object.entries(scenario.chmod ?? {})) chmodSync(join(root, path), mode);
   if (scenario.stage) git('add', '--', ...scenario.stage);
+  if (scenario.unstaged) write(scenario.unstaged);
   const changed = execFileSync('git', ['-C', root, 'status', '--porcelain'], { encoding: 'utf8', env: gitEnv }).trim().split('\n').filter(Boolean);
   console.log(JSON.stringify({ scenario: scenarioName, root, description: scenario.description, changed }, null, 2));
 } catch (error) {

@@ -43,6 +43,20 @@ async function lookup(git: Git, root: string, args: string[]): Promise<string | 
   }
 }
 
+/** Lists `git diff --name-status` records; a rename or copy record carries its source path first. */
+async function readNameStatus(root: string, args: string[], signal: AbortSignal, failure: string): Promise<{ status: string; paths: string[] }[]> {
+  const fields = await readGitRecords(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', ...args, '--'], signal, failure);
+  const records: { status: string; paths: string[] }[] = [];
+  for (let index = 0; index < fields.length;) {
+    const status = fields[index++]!;
+    const count = /^[RC]/.test(status) ? 2 : 1;
+    const paths = fields.slice(index, index += count);
+    if (!status || paths.length !== count || paths.some(path => !path)) throw new Error(failure);
+    records.push({ status, paths });
+  }
+  return records;
+}
+
 /**
  * Resolves the commit the working tree is compared against: the merge base of `ref` and HEAD. When `ref` is HEAD or
  * one of its ancestors, that is the commit `ref` names. When `ref` is a branch that has moved on, commits made only on
@@ -87,18 +101,26 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const root = await gitRoot(options.repo, { signal });
   const baseRef = options.base ?? 'HEAD';
   const { base, head, movedOn } = await resolveBase(git, root, baseRef);
-  // Rename detection runs once here; readGitChangeContext diffs each detected pair with the same default threshold.
+  // Collection compares the base with the working tree, not the index. Rename detection runs once here;
+  // readGitChangeContext diffs each detected pair with the same default threshold.
   const changed: string[] = [];
   const renames = new Map<string, string>();
   options.onPhase?.('Listing changed files');
-  const statusFields = await readGitRecords(root, ['diff', '--no-ext-diff', '--no-textconv', '--name-status', '-z', '--find-renames', base, '--'], signal, 'Git change listing failed');
-  for (let index = 0; index < statusFields.length;) {
-    const status = statusFields[index++]!;
-    const recordPaths = statusFields.slice(index, index += /^[RC]/.test(status) ? 2 : 1);
-    if (!status || recordPaths.length !== (/^[RC]/.test(status) ? 2 : 1) || recordPaths.some(path => !path)) throw new Error('Git change listing failed');
-    const path = recordPaths.at(-1)!;
+  for (const { status, paths } of await readNameStatus(root, [base], signal, 'Git change listing failed')) {
+    const path = paths.at(-1)!;
     changed.push(path);
-    if (status.startsWith('R')) renames.set(path, recordPaths[0]!);
+    if (status.startsWith('R')) renames.set(path, paths[0]!);
+  }
+  // A commit records the index. A staged change that the working tree undoes, and a staged rename whose working-tree
+  // file no longer resembles its source, are named in notes; the review still reads only the working tree.
+  const listed = new Set(changed);
+  const inWorkingTree = new Set([...listed, ...renames.values()]);
+  const stagedReverted: string[] = [];
+  const stagedRenamesUnpaired: string[] = [];
+  for (const { status, paths } of await readNameStatus(root, ['--cached', head], signal, 'Git staged-change listing failed')) {
+    const [from, to] = paths as [string, string?];
+    if (paths.every(path => !inWorkingTree.has(path))) stagedReverted.push(paths.join(' -> '));
+    else if (status.startsWith('R') && to !== undefined && listed.has(to) && !renames.has(to)) stagedRenamesUnpaired.push(`${from} -> ${to}`);
   }
   const untracked = (await readGitRecords(root, ['ls-files', '--others', '--exclude-standard', '-z'], signal, 'Git untracked-file listing failed')).filter(Boolean);
   const tracked = (await readGitRecords(root, ['ls-files', '-z'], signal, 'Git tracked-file listing failed')).filter(Boolean);
@@ -111,6 +133,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   // output, can come and go without invalidating a preview or a review.
   const notes: string[] = [];
   if (movedOn) notes.push(`${baseRef} has commits that HEAD does not; the review compares against their merge base ${base.slice(0, 12)}, so changes made only on ${baseRef} are left out.`);
+  if (stagedReverted.length) notes.push(`${stagedReverted.length} staged change(s) are undone in the working tree, so the review does not see them, although a commit would include them: ${stagedReverted.join(', ')}. The review compares ${baseRef} with the working tree, not the index.`);
+  if (stagedRenamesUnpaired.length) notes.push(`${stagedRenamesUnpaired.length} staged rename(s) differ too much in the working tree for Git to pair the files, so each is reviewed as a deleted file and a new file without a baseline: ${stagedRenamesUnpaired.join(', ')}.`);
   if (!changePaths.length) notes.push(`No changes against ${baseRef}; nothing to review.`);
   else notes.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
   if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
