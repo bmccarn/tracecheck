@@ -9,6 +9,7 @@ import { execFileSync } from 'node:child_process';
 import { z } from 'zod';
 import { createServer, ExpiringCache } from '../src/mcp.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
+import { reportSchema } from '../src/schema.js';
 import type { TypedEvaluator } from '../src/domain.js';
 import { judgeNotSupported, repository, typedFixture } from './helpers.js';
 
@@ -333,4 +334,151 @@ test('an untracked file outside the review keeps an MCP preview valid, and a cle
   const changed = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: included.snapshot, includeUntracked: true } });
   assert.equal(changed.isError, true);
   assert.match(JSON.stringify(changed), /changed since preview/);
+});
+
+/** A promise and the function that settles it, for holding provider requests until a test releases them. */
+function held() {
+  let release!: () => void;
+  const promise = new Promise<void>(resolve => { release = resolve; });
+  return { promise, release };
+}
+
+const reviewOutput = z.object({ cached: z.boolean(), report: reportSchema });
+
+/** Starts a review call; `joined` settles once its progress reports the planned provider requests of the review it waits for. */
+function startReview(client: Client, snapshot: string, signal?: AbortSignal) {
+  const joined = held();
+  const updates: { progress: number; total?: number; message?: string }[] = [];
+  const result = client.callTool({ name: 'tracecheck_review', arguments: { snapshot } }, { signal, onprogress: update => {
+    updates.push(update);
+    if (update.message?.startsWith('Sending')) joined.release();
+  } });
+  return { result, joined: joined.promise, updates };
+}
+
+test('concurrent identical MCP reviews make one provider round and return the same report', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  const provider = held();
+  let calls = 0;
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(_state, questions) {
+    calls++;
+    await provider.promise;
+    return typedFixture(questions);
+  } })));
+  const { snapshot } = z.object({ snapshot: z.string() }).parse((await client.callTool({ name: 'tracecheck_preview', arguments: {} })).structuredContent);
+  const reviews = Array.from({ length: 3 }, () => startReview(client, snapshot));
+  await Promise.all(reviews.map(review => review.joined));
+  provider.release();
+  const outputs = await Promise.all(reviews.map(async review => reviewOutput.parse((await review.result).structuredContent)));
+  assert.ok(outputs[0]!.report.usage.requests > 0);
+  assert.equal(calls, outputs[0]!.report.usage.requests, 'the three calls made the requests of one review');
+  assert.deepEqual(outputs.map(output => output.cached).sort(), [false, true, true]);
+  for (const output of outputs.slice(1)) assert.deepEqual(output.report, outputs[0]!.report);
+  // A call that joined the review in flight still receives its progress, strictly increasing, through completion.
+  for (const { updates } of reviews) {
+    assert.ok(updates.every((update, index) => index === 0 || update.progress > updates[index - 1]!.progress), JSON.stringify(updates));
+    const last = updates.at(-1)!;
+    assert.equal(last.message, 'Review complete');
+    assert.equal(last.progress, last.total);
+  }
+});
+
+test('a cancelled call leaves a shared review running for the others, and the review stops when every call is cancelled', { timeout: 10_000 }, async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  let provider = held();
+  const stopped = held();
+  const aborted: unknown[] = [];
+  let calls = 0;
+  const client = await connect(t, createServer(repo.root, signal => ({ async evaluate(_state, questions) {
+    calls++;
+    const gate = provider.promise;
+    await new Promise<void>((resolve, reject) => {
+      void gate.then(resolve);
+      signal.addEventListener('abort', () => { aborted.push(signal.reason); stopped.release(); reject(signal.reason); }, { once: true });
+    });
+    return typedFixture(questions);
+  } })));
+  const preview = async () => z.object({ snapshot: z.string() }).parse((await client.callTool({ name: 'tracecheck_preview', arguments: {} })).structuredContent).snapshot;
+
+  // The first call starts the review, the second joins it, and then the first is cancelled.
+  let snapshot = await preview();
+  const cancelFirst = new AbortController();
+  const first = startReview(client, snapshot, cancelFirst.signal);
+  await first.joined;
+  const second = startReview(client, snapshot);
+  await second.joined;
+  cancelFirst.abort();
+  await assert.rejects(first.result);
+  // The server handles the cancellation notice before it answers this later request.
+  await client.listTools();
+  assert.deepEqual(aborted, [], 'the review stopped while a call still waited for it');
+  provider.release();
+  const kept = reviewOutput.parse((await second.result).structuredContent);
+  assert.equal(kept.cached, true);
+  assert.equal(calls, kept.report.usage.requests);
+  assert.ok(!kept.report.limitations.some(item => item.startsWith('Review incomplete')));
+
+  // When every waiting call is cancelled the review stops, and the next identical call starts a new one.
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 2;');
+  provider = held();
+  snapshot = await preview();
+  const before = calls;
+  const cancels = [new AbortController(), new AbortController()];
+  const waiting: ReturnType<typeof startReview>[] = [];
+  for (const cancel of cancels) {
+    const call = startReview(client, snapshot, cancel.signal);
+    await call.joined;
+    waiting.push(call);
+  }
+  cancels[0]!.abort();
+  await assert.rejects(waiting[0]!.result);
+  await client.listTools();
+  assert.deepEqual(aborted, [], 'the review stopped while a call still waited for it');
+  cancels[1]!.abort();
+  await assert.rejects(waiting[1]!.result);
+  await stopped.promise;
+  assert.equal(aborted.length, 1);
+  const retry = startReview(client, snapshot);
+  await retry.joined;
+  provider.release();
+  const fresh = reviewOutput.parse((await retry.result).structuredContent);
+  assert.equal(fresh.cached, false, 'the retry joined the stopped review');
+  assert.equal(calls - before, 2 * fresh.report.usage.requests);
+});
+
+test('a bound MCP server accepts any directory in its repository and rejects another repository', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const other = await repository(); t.after(other.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  const decode = 'import json\ndef decode(text):\n    return json.loads(text)';
+  await mkdir(join(repo.root, 'src'));
+  await writeFile(join(repo.root, 'src', 'decode.py'), `${decode}\n`);
+  // A repository inside the bound one's directory is still another repository.
+  const nested = join(repo.root, 'vendor');
+  await mkdir(nested);
+  execFileSync('git', ['init', '-q', nested]);
+  const client = await connect(t, createServer(repo.root, () => fixtureEvaluator));
+  const snapshotOf = (result: Awaited<ReturnType<typeof client.callTool>>) => {
+    assert.ok(!result.isError, JSON.stringify(result));
+    return z.object({ snapshot: z.string() }).parse(result.structuredContent).snapshot;
+  };
+  const src = join(repo.root, 'src');
+  const snapshot = snapshotOf(await client.callTool({ name: 'tracecheck_preview', arguments: {} }));
+  assert.equal(snapshotOf(await client.callTool({ name: 'tracecheck_preview', arguments: { repo: src } })), snapshot);
+  const review = await client.callTool({ name: 'tracecheck_review', arguments: { repo: src, snapshot } });
+  assert.ok(!review.isError, JSON.stringify(review));
+  // verify reads evidence paths relative to the directory the call names, as an unbound server and the CLI do.
+  const verified = await client.callTool({ name: 'tracecheck_verify', arguments: { repo: src,
+    hypothesis: 'Malformed JSON escapes the decode boundary.', contract: 'Malformed JSON must return None.',
+    evidence: [{ id: 'body', path: 'decode.py', role: 'implementation', startLine: 1, content: decode }],
+    target: { evidenceId: 'body', start: 3, end: 3, quote: '    return json.loads(text)' } } });
+  assert.ok(!verified.isError, JSON.stringify(verified));
+  assert.equal(z.object({ provenance: z.string() }).parse(verified.structuredContent).provenance, 'local_files_checked');
+  for (const elsewhere of [other.root, nested]) {
+    const refused = await client.callTool({ name: 'tracecheck_preview', arguments: { repo: elsewhere } });
+    assert.equal(refused.isError, true, elsewhere);
+    assert.deepEqual((refused.content as { text: string }[]).map(item => item.text), ['This server is bound to a different repository.']);
+  }
 });

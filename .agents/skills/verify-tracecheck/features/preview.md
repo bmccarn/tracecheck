@@ -56,4 +56,4 @@ Preconditions:
 - Git subprocesses drop `GIT_DIR`, `GIT_WORK_TREE`, `GIT_INDEX_FILE`, and the other repository-local variables from `git rev-parse --local-env-vars` except the configuration ones, so a caller's hook environment cannot redirect collection. Every Git command also runs with `-c core.fsmonitor=false -c core.hooksPath=/dev/null`.
 - Untracked files are ignored unless `--include-untracked` or `includeUntracked: true` is passed.
 - `preview --json` prints full source content. Treat the stdout file as source-bearing evidence.
-- The MCP server bound with `--repo` rejects a different `repo` argument; an unbound server requires `repo` on every collection call.
+- The MCP server bound with `--repo` accepts a `repo` argument that names any directory in the same Git working tree and rejects any other repository, including one nested inside it; an unbound server requires `repo` on every collection call.

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
 import { hash, type TypedEvaluator, type Answer } from './domain.js';
+import { gitRoot } from './git-context.js';
 import { reportSchema } from './schema.js';
 import { review } from './review.js';
 import { assertSafeOutbound, MAX_SOURCE_BYTES, readSource } from './safety.js';
@@ -54,6 +55,16 @@ async function readEvidence(root: string, item: { id: string; path: string }, si
   }
 }
 
+/**
+ * The real path of `repo`, which must be a directory in a Git working tree. A path that does not exist or is outside
+ * Git fails with a message that names it as given rather than with system error text. Evidence paths stay relative to
+ * `repo` itself, not to the working tree's top level.
+ */
+async function localRoot(repo: string, signal?: AbortSignal): Promise<string> {
+  await gitRoot(repo, { signal });
+  return realpath(repo);
+}
+
 /** The agent chooses the concern and evidence; code checks provenance and freshness. */
 export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, signal?: AbortSignal) {
   const input = verificationInputSchema.parse(raw);
@@ -69,7 +80,7 @@ export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, 
   const end = input.target.end - target.startLine + 1;
   if (start < 0 || end <= start || end > target.content.split('\n').length
     || target.content.split('\n').slice(start, end).join('\n') !== input.target.quote) throw new Error('Target quote does not match the supplied original line range.');
-  const root = input.repo ? await realpath(input.repo) : undefined;
+  const root = input.repo ? await localRoot(input.repo, signal) : undefined;
   const captured = new Map<string, { id: string; content: string }>();
   for (const item of input.evidence) {
     signal?.throwIfAborted();

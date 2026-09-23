@@ -211,7 +211,7 @@ node dist/plugin.mjs verify --input evidence.json --repo /path/to/project \
   --out .tracecheck/verification.json
 ```
 
-The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
+The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. `--repo` and the MCP `repo` argument name a directory in a Git working tree, and evidence paths are relative to that directory. A path that does not exist or is outside Git stops verification before inference with an error that names the path as given (not in 0.3.0, which showed the system error). Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
 
 ### Compare implementation checkpoints
 
@@ -350,7 +350,7 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. Refuses a review over its `maxRequests` budget (default 50) before any provider request. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 
-Not in 0.3.0. When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A client that resets its request timeout on progress can wait out a long review.
+Not in 0.3.0. When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A call that joins an identical review already running receives that review's progress, including the updates sent before it joined. A client that resets its request timeout on progress can wait out a long review.
 
 Configure your MCP client with one of these launch commands:
 
@@ -361,7 +361,7 @@ Configure your MCP client with one of these launch commands:
 
 Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. A source checkout also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`; 0.3.0 does not.
 
-Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
+Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. A bound server accepts a `repo` argument that names its repository or any directory in it (not in 0.3.0, which accepted only the exact path) and rejects any other repository, including one nested inside it. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
 The package includes portable plugin manifests, client compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The skill supplies the review cadence; the MCP server alone only exposes its tools. For a client without a plugin marketplace, load the complete `skills/tracecheck/` directory, not only `SKILL.md`, through the client's skill support. The [Cursor setup](docs/integrations.md#cursor-manual-mcp--skill) shows both steps.
 
@@ -411,6 +411,7 @@ Tracecheck does not load `.env` files automatically or persist your API key. To 
 - The collector skips generated paths, symlinks, binary files, and files that contain a potential credential. The same screening runs on every string in a provider request, including supplied task, diff, file, and context text. It detects private key blocks (including PGP, DSA, and encrypted keys), common provider token formats (AWS, GitHub, OpenAI-style, Slack, Google, Stripe, npm), passwords in URLs, and credential-named assignments (`password`, `token`, `secret`, `api_key`, and similar) whose quoted or unquoted value looks random. Values that read as identifiers, such as `'StringLiteralToken'`, and references such as `${API_TOKEN}` are not flagged. A skipped file is named in the collection limitations, and a blocked request names the file path or input field. Neither message includes the matched value. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
 - Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
+- Not in 0.3.0. Identical `tracecheck_review` calls made while a review is running wait for that review instead of calling the provider again, and all but the first report `cached: true`. A call that is cancelled or times out stops waiting and fails on its own. The review stops only when every call waiting for it has stopped, so a retry after the only waiting call was cancelled starts a new review.
 
 ### Project configuration file
 

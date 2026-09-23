@@ -409,6 +409,30 @@ try {
     return `CLI exit 2 and a bound MCP error, both: ${expected}${standIn ? ' The stand-in received no request.' : ''}`;
   }, 50);
 
+  await step(OUTCOME, 'verify names a --repo that does not exist or is outside Git as given, before any provider request', async () => {
+    const outsideGit = join(scratch, 'not-a-repository');
+    mkdirSync(outsideGit, { recursive: true });
+    const before = await providerRequests();
+    const errors = [];
+    for (const [name, repo, reason] of [['missing', join(scratch, 'no-such-directory'), 'No such file or directory'], ['outside-git', outsideGit, 'not a git repository']]) {
+      const expected = `Cannot open ${repo} as a Git working tree: `;
+      const run = cli(`verify-repo-${name}`, ['verify', '--input', join(evidence, 'verify-input.json'), '--repo', repo]);
+      expect(run.code === 2 && run.stderr.startsWith(`Tracecheck: ${expected}`) && run.stderr.includes(reason), `CLI verify with a ${name} --repo exited ${run.code}: ${lastLine(run.stderr)}`);
+      errors.push(run.stderr);
+      for (const [server, launch] of [['unbound', { command: process.execPath, args: [bundle, 'mcp'] }], ['bound', boundServer(project)]]) {
+        const mcp = await mcpSession(`verify-repo-${name}-${server}`, launch, call => call('tracecheck_verify', { ...evidenceInput, repo }));
+        const text = mcp.text.join(' ');
+        expect(mcp.isError && text.startsWith(expected) && text.includes(reason), `${server} MCP verify with a ${name} repo returned ${text.slice(0, 200)}`);
+        errors.push(text);
+      }
+    }
+    const raw = errors.find(text => /ENOENT|realpath|Command failed/.test(text));
+    expect(!raw, `an error quotes system error text: ${raw}`);
+    const after = await providerRequests();
+    expect(after === before, `the stand-in received ${after - before} request(s)`);
+    return `CLI exit 2 and unbound and bound MCP errors: ${lastLine(errors[0]).replaceAll(scratch, '<scratch>')}`;
+  }, 50);
+
   const assessInput = { task: JSON.parse(baseline['.tracecheck.json']).task, files: [{ path: 'src/lib/money.ts', content: money }] };
   writeFileSync(join(evidence, 'assess-input.json'), JSON.stringify(assessInput, null, 2));
   await step(PLUMBING, 'assess evaluates supplied files and gates on priorities', async () => {
@@ -680,6 +704,41 @@ try {
       `preview --base origin/main in a shallow clone exited ${unfetched.code}: ${lastLine(unfetched.stderr)}`);
     return 'CLI and MCP name the ref; the shallow clone is told to fetch origin main with fetch-depth: 0';
   }, 58);
+
+  await step(OUTCOME, 'identical MCP reviews sent at once make one provider round and return the same report', async () => {
+    const repo = makeRepo('concurrent-reviews', baseline, { 'src/lib/money.ts': change['src/lib/money.ts'] });
+    // The slow stand-in keeps the first review in flight while the other calls arrive.
+    const received = async () => slowStandIn ? (await slowStandIn.stats()).received : undefined;
+    const before = await received();
+    const reviews = await mcpSession('concurrent-reviews', { ...boundServer(repo), env: slowEnv() }, async call => {
+      const preview = await call('tracecheck_preview', {});
+      expect(!preview.isError, preview.text.join(' '));
+      return Promise.all(Array.from({ length: 3 }, () => call('tracecheck_review', { snapshot: preview.structuredContent.snapshot })));
+    });
+    const failed = reviews.find(review => review.isError);
+    expect(!failed, `a review failed: ${failed?.text.join(' ').slice(0, 200)}`);
+    const reports = reviews.map(review => JSON.stringify(review.structuredContent.report));
+    expect(reports.every(report => report === reports[0]), 'the calls returned different reports');
+    const cached = reviews.map(review => review.structuredContent.cached);
+    expect(cached.filter(value => !value).length === 1, `cached flags: ${cached.join(', ')}`);
+    const requests = reviews[0].structuredContent.report.usage.requests;
+    const sent = slowStandIn ? await received() - before : undefined;
+    expect(sent === undefined || sent === requests, `the stand-in received ${sent} request(s) for three calls; one review makes ${requests}`);
+    return `three calls, one report of ${requests} request(s)${slowStandIn ? `, ${sent} received by the stand-in` : ''}; cached ${cached.join(', ')}`;
+  }, 62);
+
+  await step(OUTCOME, 'a bound MCP server accepts a directory inside its repository and rejects another repository', async () => {
+    const other = makeRepo('other-repository', baseline);
+    const { bound, inside, foreign } = await mcpSession('bound-subdirectory', boundServer(project), async call => ({
+      bound: await call('tracecheck_preview', {}),
+      inside: await call('tracecheck_preview', { repo: join(project, 'src') }),
+      foreign: await call('tracecheck_preview', { repo: other }),
+    }));
+    expect(!bound.isError && !inside.isError && inside.structuredContent.snapshot === bound.structuredContent.snapshot,
+      `preview with repo src/: ${inside.isError ? inside.text.join(' ').slice(0, 200) : 'a different snapshot'}`);
+    expect(foreign.isError && foreign.text.join(' ') === 'This server is bound to a different repository.', `preview with another repository returned ${foreign.text.join(' ').slice(0, 200)}`);
+    return 'src/ accepted with the same snapshot as the bound repository; another repository refused';
+  }, 62);
 
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------
   const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
