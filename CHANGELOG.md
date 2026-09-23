@@ -52,6 +52,7 @@
 - `compare` follows a finding into a renamed file when its check, symbol, and quoted code are unchanged, and decisions record the previous path. Preview notes staged changes that the working tree undoes and staged renames Git cannot pair; the README states that collection compares the base with the working tree.
 - Partial reports count every collected packet in the header, list unevaluated work in an `Incomplete review` section near the top, and nest packet quality headings correctly. Related-file selection prefers callers and tests that use the changed functions.
 - Concurrent identical `tracecheck_review` calls share one in-flight review and one provider round. A server bound with `--repo` accepts subdirectories of its repository, and verify reports a missing or non-Git repository path without raw system errors.
+- Add `npm run calibrate`, a live calibration harness with 36 labeled defect and clean pairs that records raw provider answers and replays any threshold offline, and `docs/calibration.md` with the results.
 
 ## 0.3.0 — 2026-09-18
 

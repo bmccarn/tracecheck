@@ -525,9 +525,11 @@ npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
 npm run quality-smoke -- --live      # Live supplied-context Python assessments
 npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project label checks; maintainers only
+npm run calibrate -- run            # Offline check of the labeled gate-calibration cases
+npm run calibrate -- run --live     # Live gate calibration; about 216 requests
 ```
 
-Live commands require credentials and consume API usage. The accuracy benchmark measures a repository that is not publicly available, so only maintainers can run it; see [the accuracy benchmark](docs/accuracy.md). The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
+Live commands require credentials and consume API usage. The accuracy benchmark measures a repository that is not publicly available, so only maintainers can run it; see [the accuracy benchmark](docs/accuracy.md). The [decision-gate calibration](docs/calibration.md) measures the source-check and quality gates on labeled synthetic pairs and compares candidate thresholds for a maintainer decision. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
 
 GitHub Actions runs CI on every pull request and on every push to `main`. The workflow tests on Node 22.18.0, the oldest supported 22.x release, and on the latest Node 24.x release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo and the end-user journey, and runs `npm run release:check`. A new push to a pull request cancels that pull request's earlier run. The checks need no provider credentials. Commit the rebuilt bundle with any change that affects it.
 
@@ -565,7 +567,7 @@ Run `npm ci`, `npm run validate`, and `npm run journey` before submitting implem
 | [`src/mcp.ts`](src/mcp.ts) and [`src/cli.ts`](src/cli.ts) | MCP tools and command-line entry points. |
 | [`test/`](test/) and [`examples/`](examples/) | Regression tests, demos, and live smoke checks. |
 
-Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Agent evaluation](docs/agent-evaluation.md) · [Capability coverage](docs/parity.md)
+Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Gate calibration](docs/calibration.md) · [Agent evaluation](docs/agent-evaluation.md) · [Capability coverage](docs/parity.md)
 
 ## License
 
