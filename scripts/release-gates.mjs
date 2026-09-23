@@ -50,7 +50,12 @@ async function readJson(path) {
 function catalogRef(path, value) {
   const entries = Array.isArray(value?.plugins) ? value.plugins.filter(entry => entry?.name === 'tracecheck') : [];
   if (entries.length !== 1) fail(`${path} must list the tracecheck plugin once.`);
-  return entries[0].source?.ref;
+  const source = entries[0].source;
+  // Some clients clone a `github` source over SSH, which fails for users without GitHub SSH keys.
+  if (source?.source !== 'url' || typeof source.url !== 'string' || !source.url.startsWith('https://')) {
+    fail(`${path} must use a "url" source with an https:// Git URL so installs work without SSH keys.`);
+  }
+  return source.ref;
 }
 
 // Users who add this repository as a marketplace get the catalog ref, so it must name a published stable tag:

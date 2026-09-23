@@ -25,7 +25,7 @@ async function seed(directory: string, version = '0.2.0', catalogRef = `v${versi
 }
 
 async function writeCatalog(directory: string, path: string, ref: string) {
-  await writeJson(directory, path, { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'github', repo: 'bmccarn/tracecheck', ref }, category: 'Developer Tools' }] });
+  await writeJson(directory, path, { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'url', url: 'https://github.com/bmccarn/tracecheck.git', ref }, category: 'Developer Tools' }] });
 }
 
 async function run(directory: string, script: string, ...args: string[]) {
@@ -108,7 +108,7 @@ test('stable release preparation points every marketplace catalog at the new rel
   assert.equal((await run(directory, prepare, '0.3.0')).code, 0);
   const catalogs = await Promise.all(catalogPaths.map(async path => JSON.parse(await readFile(join(directory, path), 'utf8'))));
   for (const catalog of catalogs) {
-    assert.deepEqual(catalog, { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'github', repo: 'bmccarn/tracecheck', ref: 'v0.3.0' }, category: 'Developer Tools' }] });
+    assert.deepEqual(catalog, { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'url', url: 'https://github.com/bmccarn/tracecheck.git', ref: 'v0.3.0' }, category: 'Developer Tools' }] });
   }
   assert.deepEqual((await run(directory, gates)).stdout.trim().split('\n'), ['version=0.3.0', 'channel=latest']);
 });
@@ -122,6 +122,17 @@ test('release gates reject a marketplace catalog that does not pin the stable re
 
   assert.notEqual((await run(directory, gates, 'v1.2.3')).code, 0);
   assert.notEqual((await run(directory, gates)).code, 0);
+});
+
+test('release gates reject a marketplace catalog that some clients would clone over SSH', async t => {
+  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await seed(directory, '1.2.3');
+  await writeJson(directory, catalogPaths[1], { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'github', repo: 'bmccarn/tracecheck', ref: 'v1.2.3' } }] });
+
+  assert.notEqual((await run(directory, gates)).code, 0);
+  await writeCatalog(directory, catalogPaths[1], 'v1.2.3');
+  assert.equal((await run(directory, gates)).code, 0);
 });
 
 test('release gates require prerelease catalogs to pin an earlier stable release tag', async t => {
