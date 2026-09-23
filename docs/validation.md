@@ -9,6 +9,11 @@
 
 The sections below are dated records, newest first. When an older record says a step was pending, such as npm trusted publishing, it describes that date. This summary gives the current state.
 
+## Stable 0.4.0 preparation — September 23, 2026
+
+- `npm run release:check` passes: type checks, 189 tests, the bundle, synchronized metadata, and offline CLI and four-tool MCP checks against the actual `0.4.0` npm and marketplace archives. The gate selects the `latest` channel.
+- The offline end-user journey passes all 28 outcome checks and all 9 plumbing checks. It skips the three checks that need a live provider, because no provider key was available for this run. The live journey last ran for 0.4.0-rc.1, recorded below. Since the `v0.4.0-rc.1` tag, the runtime source is unchanged; only the journey script, the documentation, and the version metadata changed.
+
 ## Release candidate 0.4.0-rc.1 preparation — September 23, 2026
 
 - `npm run release:check` passes: type checks, 189 tests, the bundle, synchronized metadata, and offline CLI and four-tool MCP checks against the actual `0.4.0-rc.1` npm and marketplace archives.
