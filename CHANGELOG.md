@@ -42,6 +42,8 @@
 - Untracked files outside the review no longer invalidate a preview or review. A CLI review whose reviewed files change mid-run prints the report marked stale and exits 4.
 - Treat a committed `.tracecheck.json` as untrusted: it may only tighten defaults, so enabling untracked files, changing `base`, or raising limits, concurrency, or timeouts needs a flag or MCP argument. A task or context from the file is shown to the user.
 - Preview reports an estimate of provider requests and input bytes, and review refuses before sending anything when the estimate exceeds `--max-requests` or the MCP `maxRequests` argument (default 50).
+- Human-readable output shows control characters from paths, source, provider responses, and errors as visible escapes, so a reviewed file cannot send terminal escape sequences.
+- Every Git command sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, and the README documents which repository-local settings, such as clean filters, can still run commands in a checkout that was not freshly cloned.
 
 ## 0.3.0 — 2026-09-18
 
