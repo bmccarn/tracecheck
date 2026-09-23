@@ -21,6 +21,7 @@
     "prepack": "npm run build",
     "prepublishOnly": "npm run release:check",
     "package:check": "npm run build && node scripts/package-release.mjs",
+    "journey": "node .agents/skills/verify-tracecheck/scripts/journey.mjs",
     "release:check": "npm run validate && node scripts/package-release.mjs && node scripts/release-metadata.mjs && node scripts/release-gates.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "release:gates": "node scripts/release-gates.mjs",

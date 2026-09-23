@@ -466,6 +466,8 @@ npm run validate                    # Type checks, bundles, and tests
 npm run package:check               # Bundles, then checks tarball contents and offline CLI/MCP execution
 npm run release:check               # validate, package checks, and release metadata; type checks and bundles once
 npm run demo                        # Scripted example; no live inference
+npm run journey                     # End-user journey on the packed package; stand-in provider, no key
+npm run journey -- --provider live   # The same journey against the configured provider
 npm run benchmark -- --live          # Six synthetic source-check cases
 npm run smoke -- --live              # Live MCP review and cache verification
 npm run quality-smoke -- --live      # Live supplied-context Python assessments
@@ -474,7 +476,7 @@ npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project labe
 
 Live commands require credentials and consume API usage. The accuracy benchmark measures a repository that is not publicly available, so only maintainers can run it; see [the accuracy benchmark](docs/accuracy.md). The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
 
-GitHub Actions runs CI on every pull request and on every push to `main`. The workflow tests on Node 22.18.0, the oldest supported 22.x release, and on the latest Node 24.x release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo, and runs `npm run release:check`. A new push to a pull request cancels that pull request's earlier run. The checks need no provider credentials. Commit the rebuilt bundle with any change that affects it.
+GitHub Actions runs CI on every pull request and on every push to `main`. The workflow tests on Node 22.18.0, the oldest supported 22.x release, and on the latest Node 24.x release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo and the end-user journey, and runs `npm run release:check`. A new push to a pull request cancels that pull request's earlier run. The checks need no provider credentials. Commit the rebuilt bundle with any change that affects it.
 
 ## Troubleshooting
 
@@ -498,7 +500,7 @@ Later work includes broader source checks, incremental reassessment, and isolate
 
 ## Development
 
-Run `npm ci` and `npm run validate` before submitting implementation changes. A useful bug report includes a minimal reproducible fixture, expected behavior, actual report, and relevant model/version information; remove credentials and private source first.
+Run `npm ci`, `npm run validate`, and `npm run journey` before submitting implementation changes. The journey installs the packed package and drives every CLI command and MCP tool through a realistic project; see the [verification skill](.agents/skills/verify-tracecheck/SKILL.md). A useful bug report includes a minimal reproducible fixture, expected behavior, actual report, and relevant model/version information; remove credentials and private source first.
 
 | Location | Purpose |
 | --- | --- |
