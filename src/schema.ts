@@ -15,6 +15,8 @@ export const reportSchema = z.object({
   baseRef: z.string().optional(),
   checkVersion: z.string(), policyVersion: z.string(), models: z.array(z.string()),
   status: z.enum(['needs_attention', 'inconclusive', 'no_findings']),
+  // Change packets collected for the review, including any a failed request left unevaluated. Reports saved by 0.3.x have none.
+  packetCount: z.number().int().nonnegative().optional(),
   decisions: z.array(candidateSchema.extend({
     // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
     previousPath: z.string().optional(),
