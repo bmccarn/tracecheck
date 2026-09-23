@@ -1,10 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmod, mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, symlink, utimes, writeFile } from 'node:fs/promises';
 import { execFileSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { collect } from '../src/collector.js';
 import { readGitChangeContext } from '../src/git-context.js';
+import { loadProjectConfig } from '../src/project-config.js';
 import type { GitChange } from '../src/git-context.js';
 import { repository } from './helpers.js';
 
@@ -128,4 +130,53 @@ test('reports a working-tree change between the raw and patch diffs as retryable
   } finally {
     process.env.PATH = path;
   }
+});
+
+/** A repository with an edited file and a committed file whose content is unchanged but whose modification time is new. */
+async function staleStatRepository() {
+  const repo = await repository();
+  await writeFile(join(repo.root, 'stable.ts'), 'export const stable = 1;\n');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stable file');
+  // A modification time the index does not record, with the same content, makes `git diff` rewrite the index.
+  const past = new Date(Date.now() - 60_000);
+  await utimes(join(repo.root, 'stable.ts'), past, past);
+  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a, b) => a + b, 0) / xs.length; }\n');
+  return repo;
+}
+
+test('collection runs no fsmonitor command or hook that the checkout configures', async t => {
+  const repo = await staleStatRepository(); t.after(repo.cleanup);
+  const markers = await mkdtemp(join(tmpdir(), 'tracecheck-markers-')); t.after(() => rm(markers, { recursive: true, force: true }));
+  const script = (marker: string) => `#!/bin/sh\ntouch '${join(markers, marker)}'\nexit 1\n`;
+  await mkdir(join(markers, 'hooks'));
+  await writeFile(join(markers, 'fsmonitor'), script('fsmonitor-ran'), { mode: 0o755 });
+  await writeFile(join(markers, 'hooks', 'post-index-change'), script('hook-ran'), { mode: 0o755 });
+  repo.git('config', 'core.fsmonitor', join(markers, 'fsmonitor'));
+  repo.git('config', 'core.hooksPath', join(markers, 'hooks'));
+
+  await loadProjectConfig(repo.root);
+  const plan = await collect({ repo: repo.root });
+  assert.deepEqual(plan.sources.filter(source => source.role === 'changed').map(source => source.path), ['average.ts']);
+  assert.deepEqual((await readdir(markers)).filter(name => name.endsWith('-ran')), []);
+});
+
+test('every Git command collection runs turns off the fsmonitor and hooks', async t => {
+  const repo = await staleStatRepository(); t.after(repo.cleanup);
+  const bin = await mkdtemp(join(tmpdir(), 'tracecheck-git-wrapper-')); t.after(() => rm(bin, { recursive: true, force: true }));
+  const realGit = execFileSync('sh', ['-c', 'command -v git'], { encoding: 'utf8' }).trim();
+  const log = join(bin, 'calls.log');
+  await writeFile(join(bin, 'git'), `#!/bin/sh\necho "$*" >> '${log}'\nexec '${realGit}' "$@"\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  try {
+    await loadProjectConfig(repo.root);
+    await collect({ repo: repo.root });
+  } finally {
+    process.env.PATH = path;
+  }
+  const calls = (await readFile(log, 'utf8')).trim().split('\n');
+  const safe = /^(?:--literal-pathspecs )?-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null -C \S+ (?:-c \S+ )*(\S+)/;
+  for (const call of calls) assert.match(call, safe);
+  // The root lookup, change listing, change context, and baseline reads all went through the wrapper.
+  assert.deepEqual(new Set(calls.map(call => call.match(safe)![1])), new Set(['rev-parse', 'diff', 'ls-files', 'ls-tree', 'cat-file']));
 });
