@@ -12,10 +12,12 @@ export const collectionOptionsSchema = z.object({
   indexTimeoutMs: timeoutMs.optional(),
   collectionTimeoutMs: timeoutMs.optional(),
 }).strict();
+export const DEFAULT_INDEX_TIMEOUT_MS = 20_000;
+export const DEFAULT_COLLECTION_TIMEOUT_MS = 120_000;
 /** Collection options with their built-in defaults applied. */
 export const collectionSettingsSchema = collectionOptionsSchema.extend({
-  indexTimeoutMs: timeoutMs.default(20_000),
-  collectionTimeoutMs: timeoutMs.default(120_000),
+  indexTimeoutMs: timeoutMs.default(DEFAULT_INDEX_TIMEOUT_MS),
+  collectionTimeoutMs: timeoutMs.default(DEFAULT_COLLECTION_TIMEOUT_MS),
 });
 
 export type CollectionOptions = z.input<typeof collectionOptionsSchema>;
@@ -34,3 +36,6 @@ export const reviewTimeoutSchema = timeoutMs;
 export const DEFAULT_REVIEW_TIMEOUT_MS = 300_000;
 /** Overall deadline for one verification, shared by the CLI and MCP entry points. */
 export const VERIFY_TIMEOUT_MS = 90_000;
+/** Most provider requests one review may plan before it is refused; --max-requests and the MCP maxRequests argument raise it. */
+export const DEFAULT_MAX_REQUESTS = 50;
+export const maxRequestsSchema = z.number().int().positive().max(Number.MAX_SAFE_INTEGER);

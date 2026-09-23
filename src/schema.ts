@@ -20,6 +20,8 @@ export const reportSchema = z.object({
     raw: z.object({ assessment: answerSchema, impact: answerSchema }),
   })),
   limitations: z.array(z.string()),
+  /** Caveats that never affect the status, such as a task that came from the repository settings file. */
+  notes: z.array(z.string()).optional(),
   quality: qualityEvaluationSchema.optional(),
   packetQualities: z.array(z.object({ packetId: z.string(), changedPaths: z.array(z.string()), evaluation: qualityEvaluationSchema })).optional(),
   usage: z.object({ inputTokens: z.number().nonnegative(), outputTokens: z.number().nonnegative(), requests: z.number().nonnegative(), elapsedMs: z.number().nonnegative() }),

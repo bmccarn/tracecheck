@@ -187,9 +187,9 @@ const scenarios = {
     change: { 'src/lib/stats.ts': "import { round } from 'utils/round';\n\nexport function mean(values: number[]): number {\n  return round(values.reduce((a, b) => a + b, 0) / values.length);\n}\n" },
   },
   'project-config': {
-    description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets base HEAD~1, a task, and maxIndexFiles 1. With the file, preview reports src/stats.ts changed; --base HEAD reports no change.',
+    description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets a task and maxIndexFiles 1. With --base HEAD~1, preview reports src/stats.ts changed; without it, no change.',
     baseline: {
-      '.tracecheck.json': JSON.stringify({ base: 'HEAD~1', task: 'mean() must return 0 for an empty list; report.ts relies on it.', collection: { maxIndexFiles: 1 } }, null, 2) + '\n',
+      '.tracecheck.json': JSON.stringify({ task: 'mean() must return 0 for an empty list; report.ts relies on it.', collection: { maxIndexFiles: 1 } }, null, 2) + '\n',
       'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n',
       'src/report.ts': "import { mean } from './stats.js';\n\nexport function summary(values: number[]) {\n  return `mean=${mean(values)}`;\n}\n",
     },

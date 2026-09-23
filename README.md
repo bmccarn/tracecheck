@@ -284,7 +284,7 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 | --- | --- |
 | `--repo PATH` | Git repository to collect; preview and review default to the current directory. verify matches excerpts against it; mcp uses it when a tool call names no repository. |
 | `--base REF` | Git baseline; defaults to `HEAD`. |
-| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` (not in 0.3.0) turns off a configured `includeUntracked: true`. |
+| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` (not in 0.3.0) states the default explicitly. |
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
 | `--json` | Emit full JSON for preview, review, or assess. |
@@ -299,9 +299,12 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
 | `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
 | `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
+| `--max-requests N` | Most provider requests one review may make; defaults to 50. Not in 0.3.0. |
 | `-q`, `--quiet` | Do not print review progress to stderr. Not in 0.3.0. |
 
 `preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file), which is not in 0.3.0. A flag always overrides the file.
+
+Not in 0.3.0. `preview` estimates the review's cost: the human output prints `Review estimate: N provider request(s) carrying B bytes of evidence and questions`, and `preview --json` and `tracecheck_preview` return `estimate.requests` and `estimate.inputBytes`. The estimate comes from the same planner that review uses, so a completed review's `usage.requests` equals `estimate.requests`; retries after a failed request are not counted. `review` refuses a plan with more requests than the budget, exiting `2` with `Review would make N provider requests, over the budget of M` before it sends any request. Raise the budget with `--max-requests N` or the MCP `maxRequests` argument.
 
 Not in 0.3.0. While `review` runs, it prints one progress line per step to stderr: each collection phase, the number of provider requests planned, each finished request (`Tracecheck progress: Completed provider request 3 of 7`), and the final check that the repository did not change. Stdout, `--json`, `--out`, and `--sarif` output are the same as with `--quiet`.
 
@@ -323,8 +326,8 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | Tool | Input and behavior |
 | --- | --- |
 | `tracecheck_verify` | Verify an agent-selected hypothesis, contract, and source evidence; return uncertainty and a missing-evidence category. |
-| `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, and snapshot token. |
-| `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
+| `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, request estimate, and snapshot token. |
+| `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. Refuses a review over its `maxRequests` budget (default 50) before any provider request. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 
 Not in 0.3.0. When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A client that resets its request timeout on progress can wait out a long review.
@@ -395,26 +398,35 @@ Not in 0.3.0. To avoid repeating flags, commit a `.tracecheck.json` file at the 
 
 ```json
 {
-  "base": "origin/main",
-  "includeUntracked": true,
   "task": "Keep the public API backward compatible.",
   "repositoryContext": "Tests run with node:test; the CLI bundle is committed.",
-  "collection": { "maxIndexFiles": 5000, "indexTimeoutMs": 30000, "collectionTimeoutMs": 120000 },
-  "reviewTimeoutMs": 600000,
+  "collection": { "maxIndexFiles": 5000, "indexTimeoutMs": 15000, "collectionTimeoutMs": 60000 },
+  "reviewTimeoutMs": 120000,
   "model": "jev-latest",
-  "requestTimeoutMs": 60000,
-  "requestConcurrency": 4
+  "requestTimeoutMs": 30000,
+  "requestConcurrency": 2,
+  "maxRequests": 20
 }
 ```
 
-| Key | Same as |
-| --- | --- |
-| `base`, `includeUntracked`, `task`, `repositoryContext` | `--base`, `--include-untracked`, `--task`, `--context`, and the MCP arguments of the same names |
-| `collection` | `--index-max-files`, `--index-max-bytes`, `--index-timeout-ms`, `--collection-timeout-ms` as `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, `collectionTimeoutMs`, and the MCP `collection` argument |
-| `reviewTimeoutMs` | `--review-timeout-ms` and the MCP `reviewTimeoutMs` argument |
-| `model` | `JEV_MODEL` |
-| `requestTimeoutMs` | `JEV_TIMEOUT_MS` |
-| `requestConcurrency` | `JEV_CONCURRENCY` |
+| Key | Same as | Largest value the file may set |
+| --- | --- | --- |
+| `task`, `repositoryContext` | `--task`, `--context`, and the MCP arguments of the same names | Any; shown in the output as coming from the file |
+| `collection` | `--index-max-files`, `--index-max-bytes`, `--index-timeout-ms`, `--collection-timeout-ms` as `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, `collectionTimeoutMs`, and the MCP `collection` argument | `indexTimeoutMs` 20,000 and `collectionTimeoutMs` 120,000; the index budgets have no default, so any value lowers them |
+| `reviewTimeoutMs` | `--review-timeout-ms` and the MCP `reviewTimeoutMs` argument | 300,000 |
+| `model` | `JEV_MODEL` | Any |
+| `requestTimeoutMs` | `JEV_TIMEOUT_MS` | 45,000 |
+| `requestConcurrency` | `JEV_CONCURRENCY` | 4 |
+| `maxRequests` | `--max-requests` and the MCP `maxRequests` argument | 50 |
+| `base`, `includeUntracked` | `--base`, `--include-untracked`, and the MCP arguments of the same names | Only the defaults, `"HEAD"` and `false` |
+
+#### Trust model
+
+The file is repository content: anyone who can commit to the repository controls it, while your machine and your provider key pay for the review. Tracecheck therefore treats it as untrusted.
+
+- It may restate or lower a default, never go beyond one. It cannot include your untracked files, move the baseline to an older commit, or raise a timeout, the request concurrency, or the request budget. A file that tries is rejected with an error naming each such key and the flag, MCP argument, or environment variable that can raise it; Tracecheck does not silently ignore it. Those settings belong to whoever runs the review.
+- A task or repository context from the file is shown to you. Preview and review print it as `Task from the repository settings file .tracecheck.json: ...` or `Repository context from the repository settings file .tracecheck.json: ...`, in human and JSON output and over MCP, so you can see what the model was told. `--task` or `--context` replaces it.
+- It cannot hold credentials or name the provider endpoint, so it cannot redirect your key.
 
 Each setting resolves in this order:
 
@@ -423,7 +435,7 @@ Each setting resolves in this order:
 3. The configuration file.
 4. The built-in default.
 
-The file is validated with the same schemas as the flags and MCP arguments. An unknown key, an invalid value, a symlinked or oversized file, or invalid JSON stops the command with an error that names the key but never quotes its value. The file cannot hold credentials: a field whose name looks like a key, token, secret, or password is rejected, and so is a value that matches a known credential pattern. The provider endpoint is not configurable from the file either, so a repository cannot redirect your key. Set keys and `TYPESAFE_BASE_URL` in the environment.
+The file is validated with the same schemas as the flags and MCP arguments. An unknown key, an invalid value, a symlinked or oversized file, or invalid JSON stops the command with an error that names the key but never quotes its value. The file cannot hold credentials: a field whose name contains the word key, token, secret, or password is rejected, and so is a value that matches a known credential pattern. Words are matched whole or as camelCase segments, so `apiToken` is rejected as a credential field and `maxTokens` is reported as an unknown key. The provider endpoint is not configurable from the file either, so a repository cannot redirect your key. Set keys and `TYPESAFE_BASE_URL` in the environment.
 
 The preview snapshot covers the file's validated content. Editing the file between `tracecheck_preview` and `tracecheck_review` makes the review reject the snapshot, so run the preview again. Formatting-only edits keep the snapshot. The human-readable `preview` output prints `Settings: .tracecheck.json` when the file was applied.
 

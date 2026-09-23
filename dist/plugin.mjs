@@ -21090,6 +21090,8 @@ var init_schema = __esm({
         raw: external_exports.object({ assessment: answerSchema, impact: answerSchema })
       })),
       limitations: external_exports.array(external_exports.string()),
+      /** Caveats that never affect the status, such as a task that came from the repository settings file. */
+      notes: external_exports.array(external_exports.string()).optional(),
       quality: qualityEvaluationSchema.optional(),
       packetQualities: external_exports.array(external_exports.object({ packetId: external_exports.string(), changedPaths: external_exports.array(external_exports.string()), evaluation: qualityEvaluationSchema })).optional(),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
@@ -21264,6 +21266,13 @@ function planPacket(plan, evidence, broad) {
   }
   return requests;
 }
+function planReview(plan, broad) {
+  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
+  return { packets, requests: packets.filter(hasSourceEvidence).flatMap((evidence) => planPacket(plan, evidence, broad)) };
+}
+function estimateReview(plan) {
+  return estimateOf(planReview(plan, qualityQuestions()).requests);
+}
 function reportStatus(decisions, limitations) {
   return decisions.some((item) => item.status === "supported") ? "needs_attention" : limitations.length || decisions.some((item) => item.status !== "not_supported") ? "inconclusive" : "no_findings";
 }
@@ -21331,10 +21340,13 @@ function isIncomplete(report) {
 }
 async function orchestrate(plan, evaluator, broad, options) {
   const started = Date.now();
-  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress } = options;
+  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress, maxRequests } = options;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error("Review concurrency must be a positive whole number.");
-  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
-  const requests = packets.filter(hasSourceEvidence).flatMap((evidence) => planPacket(plan, evidence, broad));
+  const { packets, requests } = planReview(plan, broad);
+  if (maxRequests !== void 0 && requests.length > maxRequests) {
+    const { inputBytes } = estimateOf(requests);
+    throw new Error(`Review would make ${requests.length} provider requests, over the budget of ${maxRequests}, and send about ${inputBytes} bytes of evidence and questions. No request was sent. Narrow the change or raise the budget with --max-requests or the MCP maxRequests argument.`);
+  }
   const outcomes = await evaluateAll(evaluator, requests, concurrency, signal, onProgress);
   signal?.throwIfAborted();
   const decisions = [];
@@ -21497,10 +21509,11 @@ function render(report) {
     );
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
+  if (report.notes?.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${item}`), "");
   if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${item}`), "");
   return lines.join("\n");
 }
-var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes;
+var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes, estimateOf;
 var init_review = __esm({
   "src/review.ts"() {
     "use strict";
@@ -21516,6 +21529,7 @@ var init_review = __esm({
     plus = (left, right) => ({ bytes: left.bytes + right.bytes, count: left.count + right.count });
     member = (key, question) => ({ bytes: jsonBytes(key) + 1 + jsonBytes(question), count: 1 });
     requestBytes = (base, candidates, questions) => base + candidates.bytes + Math.max(candidates.count - 1, 0) + questions.bytes + Math.max(questions.count - 1, 0);
+    estimateOf = (requests) => ({ requests: requests.length, inputBytes: requests.reduce((total, request) => total + jsonBytes({ state: request.state, questions: request.questions }), 0) });
   }
 });
 
@@ -35992,7 +36006,7 @@ var init_checks3 = __esm({
 });
 
 // src/collection-options.ts
-var timeoutMs, collectionOptionsSchema, collectionSettingsSchema, reviewScopeFields, DEFAULT_BASE, reviewTimeoutSchema, DEFAULT_REVIEW_TIMEOUT_MS, VERIFY_TIMEOUT_MS;
+var timeoutMs, collectionOptionsSchema, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_COLLECTION_TIMEOUT_MS, collectionSettingsSchema, reviewScopeFields, DEFAULT_BASE, reviewTimeoutSchema, DEFAULT_REVIEW_TIMEOUT_MS, VERIFY_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, maxRequestsSchema;
 var init_collection_options = __esm({
   "src/collection-options.ts"() {
     "use strict";
@@ -36004,9 +36018,11 @@ var init_collection_options = __esm({
       indexTimeoutMs: timeoutMs.optional(),
       collectionTimeoutMs: timeoutMs.optional()
     }).strict();
+    DEFAULT_INDEX_TIMEOUT_MS = 2e4;
+    DEFAULT_COLLECTION_TIMEOUT_MS = 12e4;
     collectionSettingsSchema = collectionOptionsSchema.extend({
-      indexTimeoutMs: timeoutMs.default(2e4),
-      collectionTimeoutMs: timeoutMs.default(12e4)
+      indexTimeoutMs: timeoutMs.default(DEFAULT_INDEX_TIMEOUT_MS),
+      collectionTimeoutMs: timeoutMs.default(DEFAULT_COLLECTION_TIMEOUT_MS)
     });
     reviewScopeFields = {
       base: external_exports.string().min(1),
@@ -36019,6 +36035,8 @@ var init_collection_options = __esm({
     reviewTimeoutSchema = timeoutMs;
     DEFAULT_REVIEW_TIMEOUT_MS = 3e5;
     VERIFY_TIMEOUT_MS = 9e4;
+    DEFAULT_MAX_REQUESTS = 50;
+    maxRequestsSchema = external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER);
   }
 });
 
@@ -37233,6 +37251,13 @@ import { execFile as execFile2 } from "node:child_process";
 import { realpath as realpath5 } from "node:fs/promises";
 import { resolve as resolve4 } from "node:path";
 import { promisify as promisify2 } from "node:util";
+function beyondDefaults(config2) {
+  return FILE_LIMITS.flatMap(({ path, limit, raise }) => {
+    const value = path.reduce((item, key) => item?.[key], config2);
+    if (value === void 0 || (typeof limit === "number" ? value <= limit : value === limit)) return [];
+    return [typeof limit === "number" ? `${where(path)} may not exceed the default of ${limit}; use ${raise} to raise it` : `${where(path)} may only be the default ${JSON.stringify(limit)}; use ${raise} to change it`];
+  });
+}
 function parseProjectConfig(text) {
   let value;
   try {
@@ -37246,7 +37271,7 @@ function parseProjectConfig(text) {
     }
     if (!item || typeof item !== "object") return;
     for (const [key, child] of Object.entries(item)) {
-      if (CREDENTIAL_KEY.test(key)) {
+      if (isCredentialKey(key)) {
         throw new Error(`${CONFIG_FILE}: ${where([...path, key])} looks like a credential field. Provider keys belong in the environment only.`);
       }
       visit2(child, [...path, key]);
@@ -37254,8 +37279,8 @@ function parseProjectConfig(text) {
   };
   visit2(value, []);
   const parsed = projectConfigSchema.safeParse(value);
-  if (parsed.success) return parsed.data;
-  const problems = parsed.error.issues.flatMap((issue2) => issue2.code === "unrecognized_keys" ? issue2.keys.map((key) => `unknown key ${where([...issue2.path, key])}`) : [`${where(issue2.path)}: ${issue2.message}`]);
+  const problems = parsed.success ? beyondDefaults(parsed.data) : parsed.error.issues.flatMap((issue2) => issue2.code === "unrecognized_keys" ? issue2.keys.map((key) => `unknown key ${where([...issue2.path, key])}`) : [`${where(issue2.path)}: ${issue2.message}`]);
+  if (parsed.success && !problems.length) return parsed.data;
   throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
 }
 async function loadProjectConfig(repo, signal) {
@@ -37274,6 +37299,7 @@ async function loadProjectConfig(repo, signal) {
 async function resolveSettings(repo, explicit, signal) {
   const { root, config: config2 } = await loadProjectConfig(repo, signal);
   const file2 = config2 ?? {};
+  const fromFile = (label, explicitValue, fileValue) => explicitValue === void 0 && fileValue !== void 0 ? [`${label} from the repository settings file ${CONFIG_FILE}: ${fileValue}`] : [];
   return {
     root,
     request: {
@@ -37285,10 +37311,12 @@ async function resolveSettings(repo, explicit, signal) {
       ...config2 ? { projectConfig: config2 } : {}
     },
     reviewTimeoutMs: explicit.reviewTimeoutMs ?? file2.reviewTimeoutMs ?? DEFAULT_REVIEW_TIMEOUT_MS,
+    maxRequests: explicit.maxRequests ?? file2.maxRequests ?? DEFAULT_MAX_REQUESTS,
+    settingsFileNotes: [...fromFile("Task", explicit.task, file2.task), ...fromFile("Repository context", explicit.repositoryContext, file2.repositoryContext)],
     provider: { model: file2.model, timeoutMs: file2.requestTimeoutMs, concurrency: file2.requestConcurrency }
   };
 }
-var exec2, CONFIG_FILE, MAX_CONFIG_BYTES2, CREDENTIAL_KEY, projectConfigSchema, where, defined;
+var exec2, CONFIG_FILE, MAX_CONFIG_BYTES2, CREDENTIAL_WORDS, words, isCredentialKey, projectConfigSchema, FILE_LIMITS, where, defined;
 var init_project_config = __esm({
   "src/project-config.ts"() {
     "use strict";
@@ -37300,14 +37328,27 @@ var init_project_config = __esm({
     exec2 = promisify2(execFile2);
     CONFIG_FILE = ".tracecheck.json";
     MAX_CONFIG_BYTES2 = 64e3;
-    CREDENTIAL_KEY = /key|token|secret|password|passphrase|credential|bearer|^auth/i;
+    CREDENTIAL_WORDS = /* @__PURE__ */ new Set(["key", "apikey", "token", "secret", "password", "passwd", "passphrase", "credential", "credentials", "bearer", "auth", "authorization"]);
+    words = (name) => name.replace(/([a-z\d])([A-Z])/g, "$1 $2").replace(/([A-Z]+)([A-Z][a-z])/g, "$1 $2").toLowerCase().split(/[^a-z\d]+/);
+    isCredentialKey = (name) => words(name).some((word) => CREDENTIAL_WORDS.has(word));
     projectConfigSchema = external_exports.object({
       ...reviewScopeFields,
       reviewTimeoutMs: reviewTimeoutSchema,
       model: modelSchema,
       requestTimeoutMs: requestTimeoutSchema,
-      requestConcurrency: requestConcurrencySchema
+      requestConcurrency: requestConcurrencySchema,
+      maxRequests: maxRequestsSchema
     }).partial().strict();
+    FILE_LIMITS = [
+      { path: ["base"], limit: DEFAULT_BASE, raise: "--base or the MCP base argument" },
+      { path: ["includeUntracked"], limit: false, raise: "--include-untracked or the MCP includeUntracked argument" },
+      { path: ["collection", "indexTimeoutMs"], limit: DEFAULT_INDEX_TIMEOUT_MS, raise: "--index-timeout-ms or the MCP collection argument" },
+      { path: ["collection", "collectionTimeoutMs"], limit: DEFAULT_COLLECTION_TIMEOUT_MS, raise: "--collection-timeout-ms or the MCP collection argument" },
+      { path: ["reviewTimeoutMs"], limit: DEFAULT_REVIEW_TIMEOUT_MS, raise: "--review-timeout-ms or the MCP reviewTimeoutMs argument" },
+      { path: ["requestTimeoutMs"], limit: DEFAULT_TIMEOUT_MS, raise: "JEV_TIMEOUT_MS" },
+      { path: ["requestConcurrency"], limit: DEFAULT_CONCURRENCY, raise: "JEV_CONCURRENCY" },
+      { path: ["maxRequests"], limit: DEFAULT_MAX_REQUESTS, raise: "--max-requests or the MCP maxRequests argument" }
+    ];
     where = (path) => path.length ? `"${path.map(String).join(".")}"` : "the top level";
     defined = (value) => Object.fromEntries(Object.entries(value ?? {}).filter(([, item]) => item !== void 0));
   }
@@ -51453,10 +51494,10 @@ function createServer(repo, evaluatorFactory) {
   const previewScopes = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = {
     repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
-    base: reviewScopeFields.base.optional().describe(`Git baseline; the working tree is compared against this commit. Defaults to base in the repository's ${CONFIG_FILE}, then HEAD.`),
-    includeUntracked: reviewScopeFields.includeUntracked.optional().describe(`Include untracked files. Defaults to ${CONFIG_FILE}, then false.`),
-    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to ${CONFIG_FILE}.`),
-    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to ${CONFIG_FILE}.`),
+    base: reviewScopeFields.base.optional().describe("Git baseline; the working tree is compared against this commit. Defaults to HEAD."),
+    includeUntracked: reviewScopeFields.includeUntracked.optional().describe("Include untracked files. Defaults to false."),
+    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
+    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`)
   };
   const target = async (requested) => {
@@ -51486,14 +51527,16 @@ function createServer(repo, evaluatorFactory) {
     return toolResult(output2);
   });
   server.registerTool("tracecheck_preview", {
-    description: "Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.",
+    description: "Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review and the number of provider requests that review would make.",
     inputSchema: external_exports.object(scope),
     outputSchema: external_exports.object({
       snapshot: external_exports.string(),
       packets: external_exports.array(external_exports.object({ id: external_exports.string(), changedPaths: external_exports.array(external_exports.string()) })),
       files: external_exports.array(external_exports.object({ path: external_exports.string(), previousPath: external_exports.string().optional(), role: external_exports.string(), characters: external_exports.number() })),
       candidates: external_exports.number(),
-      limitations: external_exports.array(external_exports.string())
+      limitations: external_exports.array(external_exports.string()),
+      notes: external_exports.array(external_exports.string()).describe(`Caveats, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
+      estimate: external_exports.object({ requests: external_exports.number(), inputBytes: external_exports.number() }).describe("Provider requests tracecheck_review would make and their serialized evidence and question bytes.")
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async (args, ctx) => {
@@ -51506,19 +51549,27 @@ function createServer(repo, evaluatorFactory) {
       packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map((source) => ({ path: source.path, ...source.previousPath ? { previousPath: source.previousPath } : {}, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length,
-      limitations: plan.limitations
+      limitations: plan.limitations,
+      notes: settings.settingsFileNotes,
+      estimate: estimateReview(plan)
     };
     return toolResult(output2);
   });
   server.registerTool("tracecheck_review", {
     description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
-    inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
+    inputSchema: external_exports.object({
+      ...scope,
+      reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
+      maxRequests: maxRequestsSchema.optional().describe(`Most provider requests this review may make; a larger review is refused before any request. Defaults to ${CONFIG_FILE}, which may only lower it, then ${DEFAULT_MAX_REQUESTS}. Compare with the preview estimate.`),
+      previousEvaluation: previousEvaluationSchema.optional(),
+      snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.")
+    }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
     const progress = progressFor(ctx);
     const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
-    const { reviewTimeoutMs, request: collectionRequest } = effective;
+    const { reviewTimeoutMs, maxRequests, request: collectionRequest } = effective;
     const signal = AbortSignal.any([
       ctx.mcpReq.signal,
       deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)
@@ -51535,7 +51586,7 @@ function createServer(repo, evaluatorFactory) {
       report = await reviewAll(
         plan,
         evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }),
-        { signal, concurrency: settings.concurrency, onProgress: progress?.review.requests }
+        { signal, concurrency: settings.concurrency, maxRequests, onProgress: progress?.review.requests }
       );
       signal.throwIfAborted();
       progress?.review.checking();
@@ -51546,6 +51597,7 @@ function createServer(repo, evaluatorFactory) {
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
+    if (effective.settingsFileNotes.length) compared.notes = [...compared.notes ?? [], ...effective.settingsFileNotes];
     const output2 = { cached: cached2, report: compared };
     await progress?.sent();
     return toolResult(output2);
@@ -51765,6 +51817,7 @@ async function main() {
     "index-timeout-ms": { type: "string" },
     "collection-timeout-ms": { type: "string" },
     "review-timeout-ms": { type: "string" },
+    "max-requests": { type: "string" },
     sarif: { type: "string" },
     "fail-on-priorities": { type: "boolean", default: false },
     quiet: { type: "boolean", short: "q", default: false }
@@ -51775,10 +51828,11 @@ async function main() {
 
 Usage:
   tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--json]
+                     [--context TEXT] [collection limits] [--max-requests N] [--json]
   tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
                      [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--previous FILE] [--json] [--out FILE] [--sarif FILE] [--quiet]
+                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
+                     [--sarif FILE] [--quiet]
   tracecheck verify  --input FILE [--repo PATH] [--out FILE]
   tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
   tracecheck compare --previous FILE --current FILE
@@ -51789,10 +51843,13 @@ Options:
                               matches excerpts against it; mcp uses it when a call names none.
   --base REF                  Git baseline (default: HEAD).
   --include-untracked         Include supported, non-ignored untracked files.
-  --no-include-untracked      Exclude untracked files even when the config file includes them.
+  --no-include-untracked      Exclude untracked files (the default).
   --task TEXT                 Requested behavior or acceptance criteria.
   --context TEXT              Repository facts, contracts, or observed test results.
   --review-timeout-ms N       Review deadline (default: 300000).
+  --max-requests N            Most provider requests a review may make (default: ${DEFAULT_MAX_REQUESTS}).
+                              A larger review is refused before any request; preview shows
+                              the estimate.
   --input FILE                verify: evidence JSON. assess: context JSON.
   --previous FILE             review and assess: a report saved by review --out or an evaluation
                               saved by assess --out; its quality evaluation is compared with this
@@ -51828,11 +51885,14 @@ source-anchored checks cover three JS/TS patterns; no code or tests are executed
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
 Use --task and --context to supply requirements and repository facts.
 
-Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: base,
-includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model,
-requestTimeoutMs, and requestConcurrency. Flags override the file, and JEV_MODEL,
-JEV_TIMEOUT_MS, and JEV_CONCURRENCY override its model, requestTimeoutMs, and
-requestConcurrency. The file cannot hold credentials or the endpoint.`);
+Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: task,
+repositoryContext, collection, reviewTimeoutMs, model, requestTimeoutMs, requestConcurrency,
+and maxRequests. Anyone who can commit to the repository controls the file, so it may only
+lower limits: a timeout, requestConcurrency, or maxRequests above its default, base other
+than HEAD, or includeUntracked true is an error. Preview and review print any task or
+context the file supplied. Flags override the file, and JEV_MODEL, JEV_TIMEOUT_MS, and
+JEV_CONCURRENCY override its model, requestTimeoutMs, and requestConcurrency. The file
+cannot hold credentials or the endpoint.`);
     return;
   }
   if (command === "mcp") {
@@ -51881,20 +51941,24 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     task: values.task,
     repositoryContext: values.context,
     collection: collectionOptions(values),
-    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms"))
+    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms")),
+    maxRequests: positiveSafeInteger(values["max-requests"], "--max-requests")
   }, controller.signal);
-  const { reviewTimeoutMs, request: collectionRequest } = settings;
+  const { reviewTimeoutMs, maxRequests, settingsFileNotes: notes, request: collectionRequest } = settings;
   const progress = command === "review" && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${update.message}`)) : void 0;
   const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === "preview") {
     const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
-    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)
+    const estimate = estimateReview(plan);
+    const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : "";
+    console.log(values.json ? JSON.stringify({ ...plan, notes, estimate }, null, 2) : `Tracecheck preview (local only)
 ${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}
 ` : ""}Snapshot: ${plan.snapshot}
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
-Review implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.
+Review estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.
 ${packets}
 ${plan.sources.map((source) => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ""}`).join("\n")}
+${notes.map((item) => `Note: ${item}`).join("\n")}
 ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     return;
   }
@@ -51907,9 +51971,10 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   const report = await reviewAll(
     plan,
     new Jev({ ...provider, signal: reviewSignal }),
-    { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous, onProgress: progress?.requests }
+    { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests }
   );
   reviewSignal.throwIfAborted();
+  if (notes.length) report.notes = [...report.notes ?? [], ...notes];
   progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
