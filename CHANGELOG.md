@@ -37,6 +37,7 @@
 - `tracecheck_review` sends progress notifications when the client supplies a progress token, and CLI `review` prints progress to stderr; `--quiet` silences it.
 - Remove dead code, share duplicated helpers, derive report types from the report schema, and stop quoting system error text (which can contain absolute paths) in coverage limitations.
 - Add `npm run journey`, a scripted end-user journey that installs the packed package and drives every CLI command and MCP tool through a realistic project. CI runs it with a stand-in provider; `--provider live` runs it against the configured provider.
+- A changed file whose committed version held a potential credential is now reviewed without its baseline, with a limitation naming it, instead of being omitted. The `tracecheck_review` description names the configured provider.
 
 ## 0.3.0 — 2026-09-18
 
