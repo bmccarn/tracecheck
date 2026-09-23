@@ -46,7 +46,7 @@ export function toSarif(report: Report) {
    results,
    properties: {
     reportId: report.id, status: report.status, snapshot: report.snapshot, base: report.base, head: report.head,
-    models: report.models, limitations: report.limitations,
+    models: report.models, limitations: report.limitations, notes: report.notes,
     omittedDecisions: { uncertain: omitted('uncertain'), needsContext: omitted('needs_context'), notSupported: omitted('not_supported') }
    },
   }],

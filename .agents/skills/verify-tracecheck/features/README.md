@@ -14,7 +14,7 @@ This directory is the maintained source for verifying Tracecheck's user-facing b
 - Run CLI commands through `$S/capture.sh "$RUN" <name> -- node dist/plugin.mjs ...`.
 - Run MCP tools through `node $S/mcp-call.mjs --out "$RUN/mcp" [--repo "$ROOT"] --calls "$RUN/calls.json"`.
 - Use `--json` on CLI commands whose assertions read fields. The default output is human-readable Markdown.
-- CLI exit codes are part of the contract: `0` no findings or success, `1` needs attention (review findings or quality priorities, a supported verify hypothesis, or assess priorities with `--fail-on-priorities`), `2` error, `3` inconclusive. `node dist/plugin.mjs --help` lists every flag per command.
+- CLI exit codes are part of the contract: `0` no findings or success, `1` needs attention (review findings or quality priorities, a supported verify hypothesis, or assess priorities with `--fail-on-priorities`), `2` error, `3` inconclusive, `4` review report is stale because reviewed files changed during the review. `node dist/plugin.mjs --help` lists every flag per command.
 - Start each recipe from a fresh fixture. Fixtures are disposable; the evidence in `$RUN` is kept.
 
 ## Proof and skip reporting
@@ -39,5 +39,5 @@ Each feature file starts with an H1 title and one paragraph describing the user-
 - [Verify](./verify.md): verification of one agent-supplied defect hypothesis against quoted evidence. Live.
 - [Assess](./assess.md): quality assessment of caller-supplied task and files, with previous-evaluation comparison. Live.
 - [Provider configuration](./provider-configuration.md): key, endpoint, model, timeout, and request concurrency for TypeSafe and OpenRouter. Live and offline, including a loopback stand-in provider.
-- [Project configuration](./project-configuration.md): `.tracecheck.json` defaults for preview and review, their precedence, validation, and snapshot effect. Offline, plus one live review.
+- [Project configuration](./project-configuration.md): `.tracecheck.json` defaults for preview and review, their precedence, validation, the limits the file may not raise, labeled file-supplied task and context, and snapshot effect. Offline, plus one live review.
 - [Marketplace catalogs](./marketplace-catalogs.md): in-repo catalog refs kept on the stable release tag by release preparation and the release gates, and installation from them. Offline, except that installation clones from GitHub.

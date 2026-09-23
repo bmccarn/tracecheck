@@ -66,7 +66,7 @@ export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, 
   const candidateId = hash(input.hypothesis).slice(0, 16);
   let missing: Answer | undefined;
   const report = await review({ schemaVersion: 1, root: root ?? '/caller-supplied', base: 'supplied', head: 'supplied', snapshot,
-    task: input.contract, limitations: input.missingContext,
+    task: input.contract, limitations: input.missingContext, notes: [],
     sources: [...excerpts].map(([path, parts]) => ({ path, role: 'changed', content: parts.join('\n\n') })),
     packets: [{ id: hash([sourcePaths, candidateId]), changedPaths: sourcePaths, sourcePaths,
       candidateIds: [candidateId], limitations: input.missingContext }],

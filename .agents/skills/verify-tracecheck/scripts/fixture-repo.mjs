@@ -141,8 +141,8 @@ const scenarios = {
     indexOnly: Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`),
     change: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
   },
-  'multi-packet': {
-    description: 'Nine small modules change their exported constant. Expect two change packets (eight changed paths, then one) with no candidates.',
+  'multi-packet-constants': {
+    description: 'Nine small modules change their exported constant. Expect two change packets (eight changed paths, then one) with no candidates, so a review returns packetQualities and no decisions.',
     baseline: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index};\n`])),
     change: Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`changes/change-${index}.ts`, `export const value${index} = ${index + 1};\n`])),
   },
@@ -158,6 +158,11 @@ const scenarios = {
       'deploy/env.sh': `export APP_ENV=production\nexport API_TOKEN=${fakeCredential}\n`,
       'config/app.yml': `database:\n  host: db.internal\n  password: ${fakeCredential}\n`,
     },
+  },
+  'baseline-credential': {
+    description: 'The committed src/client.ts holds a credential; the change reads it from the environment instead and drops the zero-divisor guard in rate(). Expect src/client.ts as changed without before, one zero-divisor candidate, and a limitation naming it as reviewed without a baseline. The credential value never appears in the output.',
+    baseline: { 'src/client.ts': `const apiKey = "${fakeCredential}";\n\nexport function rate(total: number, count: number): number {\n  if (count === 0) return 0;\n  return total / count;\n}\n\nexport const auth = () => apiKey;\n` },
+    change: { 'src/client.ts': 'const apiKey = process.env.CLIENT_API_KEY;\n\nexport function rate(total: number, count: number): number {\n  return total / count;\n}\n\nexport const auth = () => apiKey;\n' },
   },
   'multi-packet': {
     description: 'Nine TS modules each lose a zero-divisor guard, and src/app.ts calls all nine. Expect two packets (eight changed files and one), nine zero-divisor candidates, and src/app.ts as caller context in both packets.',
@@ -187,9 +192,9 @@ const scenarios = {
     change: { 'src/lib/stats.ts': "import { round } from 'utils/round';\n\nexport function mean(values: number[]): number {\n  return round(values.reduce((a, b) => a + b, 0) / values.length);\n}\n" },
   },
   'project-config': {
-    description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets base HEAD~1, a task, and maxIndexFiles 1. With the file, preview reports src/stats.ts changed; --base HEAD reports no change.',
+    description: 'A committed change removes the empty-input guard from mean(); the working tree is clean. .tracecheck.json sets a task and maxIndexFiles 1. With --base HEAD~1, preview reports src/stats.ts changed; without it, no change.',
     baseline: {
-      '.tracecheck.json': JSON.stringify({ base: 'HEAD~1', task: 'mean() must return 0 for an empty list; report.ts relies on it.', collection: { maxIndexFiles: 1 } }, null, 2) + '\n',
+      '.tracecheck.json': JSON.stringify({ task: 'mean() must return 0 for an empty list; report.ts relies on it.', collection: { maxIndexFiles: 1 } }, null, 2) + '\n',
       'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n',
       'src/report.ts': "import { mean } from './stats.js';\n\nexport function summary(values: number[]) {\n  return `mean=${mean(values)}`;\n}\n",
     },
