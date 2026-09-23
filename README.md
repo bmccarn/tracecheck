@@ -322,6 +322,8 @@ Not in 0.3.0. `preview` estimates the review's cost: the human output prints `Re
 
 Not in 0.3.0. While `review` runs, it prints one progress line per step to stderr: each collection phase, the number of provider requests planned, each finished request (`Tracecheck progress: Completed provider request 3 of 7`), and the final check that the repository did not change. Stdout, `--json`, `--out`, and `--sarif` output are the same as with `--quiet`.
 
+Not in 0.3.0. Commands take no positional arguments after the command name, so `review src/foo.ts` exits `2` with the command's usage instead of reviewing every change. Before `review`, `verify`, or `assess` collects from the repository or calls the provider, it checks that the `--out` and `--sarif` destinations can be written, reads and validates its input files, and checks for a provider key. It prints the result before it writes those files, so if a write still fails, the result is on stdout and the command exits `2`. An input file error names the flag, the file as you typed it, and each invalid field, for example `--input evidence.json is not valid verify evidence:` followed by `evidence[0].startLine: Invalid input: expected number, received string`.
+
 Exit codes:
 
 | Code | Meaning |
@@ -331,6 +333,7 @@ Exit codes:
 | `2` | Execution or input error. |
 | `3` | `review` or `verify` is inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
 | `4` | `review`: the reviewed files changed while the review ran. The report is still printed and saved, with a `Stale report: ...` limitation; run the review again. Not in 0.3.0. |
+| `130` | Interrupted with Ctrl-C (SIGINT). The command stops its collection and provider requests and prints `Tracecheck: interrupted.` Not in 0.3.0. |
 
 A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes` (not in 0.3.0), caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**.
 
@@ -527,7 +530,7 @@ GitHub Actions runs CI on every pull request and on every push to `main`. The wo
 
 | Symptom | What to check |
 | --- | --- |
-| Missing API key | Export a supported variable in the launching process. For GUI clients, configure its environment explicitly. |
+| Missing API key | Export a supported variable in the launching process. For GUI clients, configure its environment explicitly. `preview` and `compare` work without a key. |
 | No changed files | The default baseline is `HEAD`. Select an earlier commit for committed changes; opt in to untracked files when needed. |
 | `Base ... was not found` or `this is a shallow clone` | The ref is misspelled or was never fetched, or the clone's history stops before the merge base. Fetch the ref, for example `git fetch origin main`, or fetch the full history with `git fetch --unshallow` or `fetch-depth: 0` on `actions/checkout`. |
 | Snapshot mismatch | Preview again and use the same repository, baseline, task, and context for review. |

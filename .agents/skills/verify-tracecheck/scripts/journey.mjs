@@ -182,7 +182,7 @@ function execute(name, command, args, { env = userEnv(), cwd = project, shown = 
   return record(name, shown, spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 600_000 }));
 }
 const cli = (name, args, options = {}) => execute(name, process.execPath, [bundle, ...args], { shown: `tracecheck ${args.join(' ')}`, ...options });
-/** Runs a CLI review and calls `during` once, when its progress says it is sending provider requests. */
+/** Runs a CLI review and calls `during` with the child process once, when its progress says it is sending provider requests. */
 async function reviewWhile(name, args, { env = userEnv(), cwd = project, during }) {
   let acted = false;
   let failure;
@@ -196,7 +196,7 @@ async function reviewWhile(name, args, { env = userEnv(), cwd = project, during 
       stderr += chunk;
       if (acted || !stderr.includes('Tracecheck progress: Sending')) return;
       acted = true;
-      try { during(); } catch (error) { failure = error; }
+      try { during(child); } catch (error) { failure = error; }
     });
     child.once('error', error => { clearTimeout(timer); fail(error); });
     child.once('close', status => { clearTimeout(timer); done({ status, stdout, stderr }); });
@@ -427,6 +427,28 @@ try {
     return 'exit 2 with actionable messages';
   });
 
+  await step(OUTCOME, 'argument, input-file, and missing-key errors name the input and stop before collection', async () => {
+    const extra = cli('review-extra-argument', ['review', 'src/lib/money.ts', '--quiet']);
+    expect(extra.code === 2 && extra.stderr.startsWith('Tracecheck: Unexpected argument: src/lib/money.ts.') && extra.stderr.includes('Usage:\n  tracecheck review'),
+      `review with a path exited ${extra.code}: ${lastLine(extra.stderr)}`);
+    // Input files are named as the user typed them, relative to where the command runs.
+    writeFileSync(join(evidence, 'broken-input.json'), '{"task": ');
+    const broken = cli('assess-broken-json', ['assess', '--input', 'broken-input.json'], { cwd: evidence });
+    expect(broken.code === 2 && broken.stderr.startsWith('Tracecheck: --input broken-input.json is not valid JSON: '), `broken JSON exited ${broken.code}: ${lastLine(broken.stderr)}`);
+    writeFileSync(join(evidence, 'verify-wrong-field.json'), JSON.stringify({ ...evidenceInput, evidence: [{ ...evidenceInput.evidence[0], startLine: 'one' }] }));
+    const invalid = cli('verify-invalid-field', ['verify', '--input', 'verify-wrong-field.json'], { cwd: evidence });
+    expect(invalid.code === 2 && invalid.stderr === 'Tracecheck: --input verify-wrong-field.json is not valid verify evidence:\n  evidence[0].startLine: Invalid input: expected number, received string\n',
+      `invalid verify evidence exited ${invalid.code}: ${invalid.stderr.slice(0, 300)}`);
+    const compared = cli('compare-not-a-report', ['compare', '--previous', 'assess-input.json', '--current', 'assess-input.json'], { cwd: evidence });
+    expect(compared.code === 2 && compared.stderr.startsWith('Tracecheck: --previous assess-input.json is not a report saved by review --out:\n  ') && !compared.stderr.includes('"code"'),
+      `compare of a non-report exited ${compared.code}: ${compared.stderr.slice(0, 300)}`);
+    // A bogus base fails in collection, so its absence shows the key was checked first.
+    const noKey = cli('review-no-key', ['review', '--base', 'no-such-ref'], { env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' } });
+    expect(noKey.code === 2 && noKey.stderr.includes('Preview works without a key') && !/demo|no-such-ref/.test(noKey.stderr),
+      `review without a key exited ${noKey.code}: ${lastLine(noKey.stderr)}`);
+    return 'exit 2 for an extra argument, broken JSON, an invalid field, a non-report, and a missing key';
+  }, 61);
+
   // ---- outcomes a user relies on beyond the main path --------------------------------------------------------
   const CLEAN_CHANGE = 'a change the provider judges clean exits 0 with no findings through the CLI and MCP';
   if (live) skip(OUTCOME, CLEAN_CHANGE, 'needs the stand-in verdicts; a live model judges the change itself', 52);
@@ -488,6 +510,32 @@ try {
       writeFileSync(path, original);
     }
   }, 53);
+
+  await step(OUTCOME, 'review refuses an unwritable --out before collection, and a failed write keeps the printed report', async () => {
+    const before = await providerRequests();
+    const refused = cli('review-out-directory', ['review', '--quiet', '--out', 'src']);
+    expect(refused.code === 2 && refused.stderr === 'Tracecheck: --out src cannot be written: it is a directory.\n' && !refused.stdout,
+      `review --out src exited ${refused.code}: ${lastLine(refused.stderr)}`);
+    const after = await providerRequests();
+    expect(before === after, `the refused review made ${after - before} provider request(s)`);
+    // The destination becomes a directory while the review waits on the provider, so only the final write fails.
+    const out = join(scratch, 'late-report.json');
+    try {
+      const run = await reviewWhile('review-out-fails-late', ['review', '--json', '--out', out], { env: slowEnv(), during: () => mkdirSync(out) });
+      expect(run.code === 2 && /could not be written: it is a directory\.\nThe result printed above is complete\.\n$/.test(run.stderr),
+        `review exited ${run.code}: ${lastLine(run.stderr)}`);
+      const report = json(run.stdout);
+      return `refused with exit 2 and no provider request; after a failed write, exit 2 with the ${report.status} report printed`;
+    } finally {
+      rmSync(out, { recursive: true, force: true });
+    }
+  }, 61);
+
+  await step(OUTCOME, 'Ctrl-C during a review exits 130 with a short message', async () => {
+    const run = await reviewWhile('review-interrupted', ['review', '--json'], { env: slowEnv(), during: child => child.kill('SIGINT') });
+    expect(run.code === 130 && run.stderr.endsWith('Tracecheck: interrupted.\n') && !run.stdout.trim(), `review exited ${run.code}: ${lastLine(run.stderr)}`);
+    return 'exit 130: Tracecheck: interrupted.';
+  }, 61);
 
   await step(OUTCOME, 'a file name and source with terminal control sequences print no control characters', async () => {
     const hostile = 'src/\u001b]0;owned\u0007\u001b[2Jratio.ts';

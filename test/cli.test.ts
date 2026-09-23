@@ -1,11 +1,12 @@
 import { test, type TestContext } from 'node:test';
 import assert from 'node:assert/strict';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { writeFileSync } from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
@@ -15,12 +16,14 @@ import { qualityEvaluationSchema } from '../src/quality.js';
 import { judgeNotSupported, repository, typedFixture } from './helpers.js';
 
 const checkout = fileURLToPath(new URL('..', import.meta.url));
+// Resolved here so the CLI can run from any working directory.
+const tsx = import.meta.resolve('tsx');
 
-/** Runs the CLI from source in a child process with only the given provider environment. */
-async function cli(args: string[], env: Record<string, string> = {}) {
+/** Runs the CLI from source in a child process in `cwd` with only the given provider environment. */
+async function cli(args: string[], env: Record<string, string> = {}, cwd = checkout) {
   try {
-    const { stdout, stderr } = await promisify(execFile)(process.execPath, ['--import', 'tsx', join(checkout, 'src/cli.ts'), ...args],
-      { cwd: checkout, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env } });
+    const { stdout, stderr } = await promisify(execFile)(process.execPath, ['--import', tsx, join(checkout, 'src/cli.ts'), ...args],
+      { cwd, encoding: 'utf8', env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...env } });
     return { code: 0, stdout, stderr };
   } catch (error) {
     const { code, stdout, stderr } = error as { code: unknown; stdout: string; stderr: string };
@@ -341,4 +344,94 @@ test('an untracked file created during review keeps the report; a reviewed edit 
   assert.equal(stale.status, 'inconclusive');
   assert.ok(stale.limitations.some(value => value.startsWith('Stale report:')), stale.limitations.join('\n'));
   assert.deepEqual(reportSchema.parse(JSON.parse(await readFile(reportPath, 'utf8'))), stale);
+});
+
+test('review checks --out and --sarif before collection, and prints the report before writing them', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), RATIO);
+  const blocked = join(repo.root, 'blocked');
+  await mkdir(blocked);
+  const jev = await jevServer(t);
+  for (const flags of [['--out', blocked], ['--sarif', join(repo.root, 'average.ts', 'findings.sarif')]]) {
+    const refused = await cli(['review', '--repo', repo.root, '--json', ...flags], jev.env);
+    assert.equal(refused.code, 2, refused.stderr);
+    assert.match(refused.stderr, new RegExp(`^Tracecheck: ${flags[0]} \\S+ cannot be written: (it is a directory|a parent path is not a directory)\\.\\n$`));
+    assert.equal(refused.stdout, '');
+  }
+  assert.equal(jev.requests(), 0);
+
+  // The destination becomes a directory while the provider answers, so the checked path fails only at the write.
+  const out = join(repo.root, 'reports', 'report.json');
+  const late = await jevServer(t, () => { mkdirSync(out, { recursive: true }); });
+  const result = await cli(['review', '--repo', repo.root, '--json', '--quiet', '--out', out], late.env);
+  assert.equal(result.code, 2, result.stderr);
+  assert.equal(reportSchema.parse(JSON.parse(result.stdout)).status, 'needs_attention');
+  assert.match(result.stderr, /--out \S+report\.json could not be written: it is a directory\.\nThe result printed above is complete\./);
+});
+
+test('extra positional arguments are rejected with the command usage', async () => {
+  const result = await cli(['review', 'src/foo.ts', '--repo', '/nonexistent-tracecheck-repo']);
+  assert.equal(result.code, 2);
+  assert.match(result.stderr, /Unexpected argument: src\/foo\.ts\. tracecheck review takes no positional arguments\. It has no path filter/);
+  assert.match(result.stderr, /Usage:\n {2}tracecheck review {2}\[--repo PATH\]/);
+});
+
+test('input file errors name the file and list validation issues by field', async t => {
+  const dir = await mkdtemp(join(tmpdir(), 'tracecheck-inputs-'));
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  await writeFile(join(dir, 'broken.json'), '{"task": ');
+  await writeFile(join(dir, 'context.json'), JSON.stringify({ task: 7, extra: true }));
+  await writeFile(join(dir, 'evidence.json'), JSON.stringify({ hypothesis: 'h', contract: 'c', target: { evidenceId: 'e', start: 1, end: 1, quote: 'q' },
+    evidence: [{ id: 'e', path: 'a.ts', startLine: 'one', content: 'q', role: 'implementation' }] }));
+  await writeFile(join(dir, 'report.json'), JSON.stringify({ schemaVersion: 1 }));
+  const cases: Array<[string[], RegExp]> = [
+    [['assess', '--input', 'broken.json'], /^Tracecheck: --input broken\.json is not valid JSON: /],
+    [['verify', '--input', 'missing.json'], /^Tracecheck: --input missing\.json cannot be read: no such file or directory\.\n$/],
+    [['assess', '--input', 'context.json'], /^Tracecheck: --input context\.json is not valid assess context:\n {2}task: Invalid input: expected string, received number\n {2}Unrecognized key: "extra"\n/],
+    [['verify', '--input', 'evidence.json'], /^Tracecheck: --input evidence\.json is not valid verify evidence:\n {2}evidence\[0\]\.startLine: Invalid input: expected number, received string\n$/],
+    [['compare', '--previous', 'report.json', '--current', 'report.json'], /^Tracecheck: --previous report\.json is not a report saved by review --out:\n {2}id: /],
+    [['review', '--review-timeout-ms', '3600001'], /^Tracecheck: --review-timeout-ms is out of range:\n {2}Too big/],
+  ];
+  for (const [args, expected] of cases) {
+    const result = await cli(args, {}, dir);
+    assert.equal(result.code, 2, args.join(' '));
+    assert.match(result.stderr, expected, args.join(' '));
+    assert.doesNotMatch(result.stderr, /"code"|\[\s*\{|tracecheck-inputs-/, args.join(' '));
+  }
+});
+
+test('review checks for a provider key before collection, with a message that names only real commands', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), RATIO);
+  // Collection resolves --base, so a bogus base shows whether collection ran before the key check.
+  const result = await cli(['review', '--repo', repo.root, '--base', 'no-such-ref']);
+  assert.equal(result.code, 2);
+  assert.equal(result.stderr, 'Tracecheck: Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY to run review, verify, or assess. Preview works without a key.\n');
+});
+
+test('SIGINT stops a review with exit code 130', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), RATIO);
+  // A provider that never answers keeps the review waiting until the interrupt.
+  const server = createServer(() => { });
+  server.listen(0, '127.0.0.1');
+  await once(server, 'listening');
+  t.after(async () => { server.closeAllConnections(); server.close(); await once(server, 'close'); });
+  const { port } = server.address() as AddressInfo;
+  const child = spawn(process.execPath, ['--import', tsx, join(checkout, 'src/cli.ts'), 'review', '--repo', repo.root], { cwd: checkout,
+    env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', JEV_API_KEY: 'fixture-key', TYPESAFE_BASE_URL: `http://127.0.0.1:${port}` } });
+  let stderr = '';
+  let interrupted = false;
+  child.stderr.setEncoding('utf8').on('data', chunk => {
+    stderr += chunk;
+    if (interrupted || !stderr.includes('Tracecheck progress: Sending')) return;
+    interrupted = true;
+    child.kill('SIGINT');
+  });
+  const [code] = await once(child, 'close');
+  assert.equal(code, 130, stderr);
+  assert.match(stderr, /Tracecheck: interrupted\.\n$/);
 });
