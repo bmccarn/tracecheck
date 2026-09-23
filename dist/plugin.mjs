@@ -20386,10 +20386,329 @@ var init_domain = __esm({
   }
 });
 
+// src/git-context.ts
+import { execFile, spawn } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
+import { StringDecoder } from "node:string_decoder";
+import { promisify } from "node:util";
+function patchRange(start, count) {
+  const first = Math.max(1, Number(start));
+  return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
+}
+function pathBatches(groups) {
+  const batches = [];
+  let batch = [];
+  let argumentBytes = 0;
+  for (const group of groups) {
+    const groupBytes = group.reduce((total, path) => total + Buffer.byteLength(path) + 1, 0);
+    if (batch.length && (batch.length + group.length > 512 || argumentBytes + groupBytes > 6e4)) {
+      batches.push(batch);
+      batch = [];
+      argumentBytes = 0;
+    }
+    batch.push(...group);
+    argumentBytes += groupBytes;
+  }
+  if (batch.length) batches.push(batch);
+  return batches;
+}
+function gitEnvironment() {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
+}
+async function gitOutput(root, args, options = {}) {
+  return (await execGit("git", [...SAFE_CONFIGURATION, "-C", root, ...args], { ...options, env: gitEnvironment() })).stdout;
+}
+async function gitRoot(repo, options = {}) {
+  let output2;
+  try {
+    output2 = await gitOutput(resolve(repo), ["rev-parse", "--show-toplevel"], options);
+  } catch (error62) {
+    options.signal?.throwIfAborted();
+    const reason = error62 instanceof Error && "stderr" in error62 && typeof error62.stderr === "string" ? error62.stderr.match(/^fatal: (.+)$/m)?.[1] : void 0;
+    if (!reason) throw error62;
+    throw new Error(`Cannot open ${repo} as a Git working tree: ${reason.replace(/\.$/, "")}.`);
+  }
+  return realpath(output2.trim());
+}
+async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
+  signal.throwIfAborted();
+  await new Promise((resolve6, reject) => {
+    const child = spawn("git", ["--literal-pathspecs", ...SAFE_CONFIGURATION, "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
+    let settled = false;
+    let output2 = Promise.resolve();
+    const finish = (error62) => {
+      if (settled) return;
+      settled = true;
+      signal.removeEventListener("abort", abort);
+      if (error62) {
+        child.kill();
+        reject(error62);
+      } else resolve6();
+    };
+    const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
+    signal.addEventListener("abort", abort, { once: true });
+    child.once("error", () => finish(new Error(failure2)));
+    child.stdout.once("error", () => finish(new Error(failure2)));
+    child.stderr.once("error", () => finish(new Error(failure2)));
+    child.stdout.on("data", (chunk) => {
+      child.stdout.pause();
+      output2 = output2.then(() => onData(chunk)).then(() => {
+        child.stdout.resume();
+      }).catch((error62) => {
+        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : error62 instanceof Error ? error62 : new Error(failure2));
+      });
+    });
+    child.stderr.resume();
+    child.once("close", (code2) => {
+      void output2.then(() => finish(code2 === 0 ? void 0 : new Error(failure2))).catch(() => finish(new Error(failure2)));
+    });
+    child.stdin.once("error", () => finish(new Error(failure2)));
+    child.stdin.end(input2);
+  });
+}
+async function readGitRecords(root, args, signal, failure2) {
+  const records = [];
+  let pending = Buffer.alloc(0);
+  await streamGit(root, args, signal, (chunk) => {
+    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
+    let start = 0;
+    for (let end = pending.indexOf(0); end >= 0; end = pending.indexOf(0, start)) {
+      records.push(pending.toString("utf8", start, end));
+      start = end + 1;
+    }
+    pending = pending.subarray(start);
+  }, void 0, failure2);
+  if (pending.length) throw new Error(failure2);
+  return records;
+}
+async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ */ new Map(), signal, onBaseline }) {
+  const context = new Map([...new Set(paths)].map((path) => [path, { ranges: [], beforeRanges: [] }]));
+  const requested = new Set(context.keys());
+  if (!requested.size) return context;
+  const requestedByBase = /* @__PURE__ */ new Map();
+  for (const path of requested) {
+    const basePath = renames.get(path) ?? path;
+    requestedByBase.set(basePath, [...requestedByBase.get(basePath) ?? [], path]);
+  }
+  const renameSources = new Set([...requested].flatMap((path) => renames.has(path) ? [renames.get(path)] : []));
+  const pathsByBlob = /* @__PURE__ */ new Map();
+  let treeBuffer = Buffer.alloc(0);
+  for (const batch of pathBatches([...requestedByBase.keys()].map((path) => [path]))) await streamGit(root, ["ls-tree", "-rlz", base, "--", ...batch], signal, (chunk) => {
+    treeBuffer = Buffer.concat([treeBuffer, chunk]);
+    for (; ; ) {
+      const end = treeBuffer.indexOf(0);
+      if (end < 0) break;
+      const record3 = treeBuffer.subarray(0, end);
+      treeBuffer = treeBuffer.subarray(end + 1);
+      const tab = record3.indexOf(9);
+      if (tab < 0) continue;
+      const fields = record3.subarray(0, tab).toString("ascii").trim().split(/\s+/);
+      const type = fields[1];
+      const blob = fields[2];
+      const size = Number(fields[3]);
+      const targets = requestedByBase.get(record3.subarray(tab + 1).toString("utf8"));
+      if (type !== "blob" || !blob || !targets) continue;
+      if (!Number.isSafeInteger(size) || size < 0) {
+        for (const path of targets) context.get(path).error = "Base version unavailable";
+        continue;
+      }
+      if (size > MAX_BASELINE_BYTES) {
+        for (const path of targets) context.get(path).error = "Oversized base version";
+        continue;
+      }
+      const entries = pathsByBlob.get(blob) ?? [];
+      entries.push(...targets);
+      pathsByBlob.set(blob, entries);
+    }
+  });
+  if (treeBuffer.length) throw new Error("Git context command failed");
+  const pathsForDiff = [...requested].filter((path) => !context.get(path)?.error);
+  const diffBatch = async (batch, renameMode) => {
+    const rawChanges = [];
+    let rawBuffer = Buffer.alloc(0);
+    let rawRecord;
+    const attribute = (status, recordPaths) => {
+      const path = recordPaths.at(-1);
+      if (recordPaths.length === 2) {
+        if (!requested.has(path)) throw new Error("Git context command failed");
+        if (!status.startsWith("R") || renames.get(path) !== recordPaths[0]) context.get(path).error = "Rename pairing changed during collection";
+        rawChanges.push({ path, status });
+      } else if (requested.has(path)) {
+        if (renames.has(path)) context.get(path).error = "Rename pairing changed during collection";
+        rawChanges.push({ path, status });
+      } else if (renameSources.has(path)) rawChanges.push({ status });
+      else throw new Error("Git context command failed");
+    };
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--raw", "-z", renameMode, base, "--", ...batch], signal, (chunk) => {
+      rawBuffer = Buffer.concat([rawBuffer, chunk]);
+      for (; ; ) {
+        const end = rawBuffer.indexOf(0);
+        if (end < 0) break;
+        const record3 = rawBuffer.subarray(0, end);
+        rawBuffer = rawBuffer.subarray(end + 1);
+        if (!rawRecord) {
+          if (record3[0] !== 58) throw new Error("Git context command failed");
+          rawRecord = { status: record3.toString("ascii").trim().split(/\s+/).at(-1) ?? "", paths: [] };
+          continue;
+        }
+        rawRecord.paths.push(record3.toString("utf8"));
+        if (rawRecord.paths.length < (/^[RC]/.test(rawRecord.status) ? 2 : 1)) continue;
+        attribute(rawRecord.status, rawRecord.paths);
+        rawRecord = void 0;
+      }
+    });
+    if (rawBuffer.length || rawRecord) throw new Error("Git context command failed");
+    let diffBuffer = "";
+    const decoder = new StringDecoder("utf8");
+    let rawOffset = 0;
+    let lastRaw;
+    let reusedTypeChange = false;
+    let activePath;
+    let inHunk = false;
+    const noHunkReasons = /* @__PURE__ */ new Map();
+    const processDiffLine = (line) => {
+      if (line.startsWith("diff --git ")) {
+        let raw = rawChanges[rawOffset];
+        if (raw) {
+          rawOffset++;
+          lastRaw = raw;
+          reusedTypeChange = false;
+        } else if (lastRaw?.status.startsWith("T") && !reusedTypeChange) {
+          raw = lastRaw;
+          reusedTypeChange = true;
+        } else throw new Error(WORKING_TREE_CHANGED);
+        activePath = raw.path;
+        inHunk = false;
+        return;
+      }
+      if (inHunk && (!activePath || !line.startsWith("@@ "))) return;
+      if (!inHunk && activePath) {
+        if (/^Binary files .* differ$/.test(line)) noHunkReasons.set(activePath, "diff-suppressed");
+        else if (/^(?:old|new) mode /.test(line) && !noHunkReasons.has(activePath)) noHunkReasons.set(activePath, "mode-only");
+      }
+      const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
+      if (!hunk) return;
+      inHunk = true;
+      if (!activePath) return;
+      const entry = context.get(activePath);
+      entry.beforeRanges.push(patchRange(hunk[1], hunk[2]));
+      entry.ranges.push(patchRange(hunk[3], hunk[4]));
+    };
+    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--no-color", renameMode, "--unified=0", "--src-prefix=a/", "--dst-prefix=b/", base, "--", ...batch], signal, (chunk) => {
+      diffBuffer += decoder.write(chunk);
+      for (; ; ) {
+        const newline = diffBuffer.indexOf("\n");
+        if (newline < 0) break;
+        processDiffLine(diffBuffer.slice(0, newline));
+        diffBuffer = diffBuffer.slice(newline + 1);
+      }
+    });
+    diffBuffer += decoder.end();
+    if (diffBuffer) processDiffLine(diffBuffer);
+    if (rawOffset !== rawChanges.length) throw new Error(WORKING_TREE_CHANGED);
+    for (const [path, reason] of noHunkReasons) {
+      const entry = context.get(path);
+      if (!entry.ranges.length) entry.noHunks = reason;
+    }
+  };
+  for (const batch of pathBatches(pathsForDiff.filter((path) => !renames.has(path)).map((path) => [path]))) await diffBatch(batch, "--no-renames");
+  for (const batch of pathBatches(pathsForDiff.filter((path) => renames.has(path)).map((path) => [path, renames.get(path)]))) await diffBatch(batch, "--find-renames");
+  const delivered = /* @__PURE__ */ new Set();
+  const deliver = async (path, before) => {
+    delivered.add(path);
+    if (onBaseline) await onBaseline(path, context.get(path), before);
+  };
+  if (pathsByBlob.size) {
+    let blobBuffer = Buffer.alloc(0);
+    let pending;
+    const finishBlob = async (item) => {
+      const blobPaths = pathsByBlob.get(item.blob) ?? [];
+      if (item.oversized) {
+        for (const path of blobPaths) context.get(path).error = "Oversized base version";
+        for (const path of blobPaths) await deliver(path);
+        return;
+      }
+      const before = Buffer.concat(item.chunks, item.size).toString("utf8");
+      if (before.includes("\0")) for (const path of blobPaths) context.get(path).error = "Binary base version";
+      for (const path of blobPaths) await deliver(path, before.includes("\0") ? void 0 : before);
+    };
+    const consumeBlobs = async () => {
+      for (; ; ) {
+        if (!pending) {
+          const newline = blobBuffer.indexOf(10);
+          if (newline < 0) return;
+          const headerText = blobBuffer.subarray(0, newline).toString("ascii");
+          blobBuffer = blobBuffer.subarray(newline + 1);
+          const header = headerText.match(/^([0-9a-f]+) blob (\d+)$/);
+          if (!header) {
+            const missing = headerText.match(/^([0-9a-f]+) missing$/);
+            if (!missing) throw new Error("Git context command failed");
+            const missingPaths = pathsByBlob.get(missing[1]) ?? [];
+            for (const path of missingPaths) context.get(path).error = "Base version unavailable";
+            for (const path of missingPaths) await deliver(path);
+            continue;
+          }
+          const size = Number(header[2]);
+          if (!Number.isSafeInteger(size) || size < 0) throw new Error("Git context command failed");
+          pending = { blob: header[1], size, remaining: size, chunks: [], oversized: size > MAX_BASELINE_BYTES };
+        }
+        if (pending.remaining) {
+          const available = Math.min(pending.remaining, blobBuffer.length);
+          if (!available) return;
+          if (!pending.oversized) pending.chunks.push(blobBuffer.subarray(0, available));
+          pending.remaining -= available;
+          blobBuffer = blobBuffer.subarray(available);
+          if (pending.remaining) return;
+        }
+        if (!blobBuffer.length) return;
+        if (blobBuffer[0] !== 10) throw new Error("Git context command failed");
+        blobBuffer = blobBuffer.subarray(1);
+        await finishBlob(pending);
+        pending = void 0;
+      }
+    };
+    const input2 = Buffer.from([...pathsByBlob.keys()].map((blob) => `${blob}
+`).join(""));
+    await streamGit(root, ["cat-file", "--batch"], signal, async (chunk) => {
+      blobBuffer = blobBuffer.length ? Buffer.concat([blobBuffer, chunk]) : Buffer.from(chunk);
+      await consumeBlobs();
+    }, input2);
+    await consumeBlobs();
+    if (pending || blobBuffer.length) throw new Error("Git context command failed");
+  }
+  for (const path of context.keys()) if (!delivered.has(path)) await deliver(path);
+  return context;
+}
+var MAX_BASELINE_BYTES, REPOSITORY_ENVIRONMENT, WORKING_TREE_CHANGED, SAFE_CONFIGURATION, execGit;
+var init_git_context = __esm({
+  "src/git-context.ts"() {
+    "use strict";
+    MAX_BASELINE_BYTES = 8 * 1024 * 1024;
+    REPOSITORY_ENVIRONMENT = /* @__PURE__ */ new Set([
+      "GIT_DIR",
+      "GIT_WORK_TREE",
+      "GIT_IMPLICIT_WORK_TREE",
+      "GIT_INDEX_FILE",
+      "GIT_OBJECT_DIRECTORY",
+      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+      "GIT_COMMON_DIR",
+      "GIT_GRAFT_FILE",
+      "GIT_NO_REPLACE_OBJECTS",
+      "GIT_REPLACE_REF_BASE",
+      "GIT_PREFIX",
+      "GIT_SHALLOW_FILE"
+    ]);
+    WORKING_TREE_CHANGED = "Working tree changed during collection; retry the preview.";
+    SAFE_CONFIGURATION = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
+    execGit = promisify(execFile);
+  }
+});
+
 // src/safety.ts
-import { open as open2, lstat, realpath } from "node:fs/promises";
+import { open as open2, lstat, realpath as realpath2 } from "node:fs/promises";
 import { constants } from "node:fs";
-import { relative, isAbsolute, resolve } from "node:path";
+import { relative, isAbsolute, resolve as resolve2 } from "node:path";
 function identifierShaped(value) {
   if (!/^[\w$.\-/:@=+;,~?!#]+$/.test(value)) return false;
   const parts = value.split(/[^A-Za-z0-9]+/).filter(Boolean);
@@ -20451,8 +20770,8 @@ async function readSource(root, path, signal, maxBytes = MAX_SOURCE_BYTES) {
 }
 async function readSourceFile(root, path, signal, maxBytes = MAX_SOURCE_BYTES) {
   signal?.throwIfAborted();
-  const absolute = resolve(root, path);
-  const physical = await realpath(absolute);
+  const absolute = resolve2(root, path);
+  const physical = await realpath2(absolute);
   if (!isInside(root, physical) || (await lstat(absolute)).isSymbolicLink()) throw new Error("Symlink or external path");
   const file2 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
@@ -20468,7 +20787,7 @@ async function readSourceFile(root, path, signal, maxBytes = MAX_SOURCE_BYTES) {
       size += read.bytesRead;
     }
     const after = await file2.stat();
-    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath(absolute) !== physical) throw new Error("File changed during collection");
+    if (size !== before.size || before.size !== after.size || before.mtimeMs !== after.mtimeMs || before.ctimeMs !== after.ctimeMs || await realpath2(absolute) !== physical) throw new Error("File changed during collection");
     const current = await lstat(physical);
     if (current.ino !== after.ino || current.dev !== after.dev || current.size !== after.size || current.mtimeMs !== after.mtimeMs || current.ctimeMs !== after.ctimeMs) throw new Error("File changed during collection");
     return {
@@ -21108,6 +21427,8 @@ var init_schema = __esm({
       models: external_exports.array(external_exports.string()),
       status: external_exports.enum(["needs_attention", "inconclusive", "no_findings"]),
       decisions: external_exports.array(candidateSchema.extend({
+        // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
+        previousPath: external_exports.string().optional(),
         status: external_exports.enum(["supported", "uncertain", "needs_context", "not_supported"]),
         confidence: external_exports.number().min(0).max(1),
         probability: external_exports.number().min(0).max(1),
@@ -21303,7 +21624,7 @@ function estimateReview(plan) {
 function reportStatus(decisions, limitations) {
   return decisions.some((item) => item.status === "supported") ? "needs_attention" : limitations.length || decisions.some((item) => item.status !== "not_supported") ? "inconclusive" : "no_findings";
 }
-function decisionsFrom(answers, candidates) {
+function decisionsFrom(answers, candidates, sources) {
   return candidates.map((candidate) => {
     const assessment = answers[`${candidate.id}_assessment`];
     const impact = answers[`${candidate.id}_impact`];
@@ -21311,8 +21632,10 @@ function decisionsFrom(answers, candidates) {
     const probability = assessment.probabilities[assessment.choice] ?? 0;
     const certain = assessment.confidence >= 0.6 && probability >= 0.8;
     const status = assessment.choice === "needs_context" ? "needs_context" : !certain ? "uncertain" : assessment.choice === "supported" ? "supported" : "not_supported";
+    const previousPath = sources.find((source) => source.path === candidate.path)?.previousPath;
     return {
       ...candidate,
+      ...previousPath ? { previousPath } : {},
       status,
       confidence: assessment.confidence,
       probability,
@@ -21415,7 +21738,7 @@ async function orchestrate(plan, evaluator, broad, options) {
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
       usage.requests++;
-      decided = decisionsFrom(response.answers, request.candidates);
+      decided = decisionsFrom(response.answers, request.candidates, request.evidence.sources);
       for (const key of request.broadKeys) {
         const answer = response.answers[key];
         if (!answer) throw new Error(`Missing typed quality decision: ${key}`);
@@ -21575,8 +21898,8 @@ var init_review = __esm({
 });
 
 // src/verify.ts
-import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
-import { isAbsolute as isAbsolute2, resolve as resolve2 } from "node:path";
+import { lstat as lstat2, realpath as realpath3 } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, resolve as resolve3 } from "node:path";
 async function readEvidence(root, item, signal) {
   try {
     return await readSource(root, item.path, signal);
@@ -21584,10 +21907,14 @@ async function readEvidence(root, item, signal) {
     signal?.throwIfAborted();
     const code2 = error62.code;
     const reason = error62 instanceof Error && !code2 ? error62.message : void 0;
-    const dangling = code2 === "ENOENT" && await lstat2(resolve2(root, item.path)).then((stat2) => stat2.isSymbolicLink(), () => false);
+    const dangling = code2 === "ENOENT" && await lstat2(resolve3(root, item.path)).then((stat2) => stat2.isSymbolicLink(), () => false);
     const problem = dangling || reason === "Symlink or external path" ? `is a symlink or resolves outside the repository. Cite the file by its own path inside the repository, ${UNBIND}` : code2 === "ENOENT" || code2 === "ENOTDIR" ? `was not found in the repository. Correct the path, ${UNBIND}` : reason === "Nonregular file" ? `is a directory or other non-regular file. Cite a file, ${UNBIND}` : reason === "Oversized file" ? `is larger than the ${MAX_SOURCE_BYTES}-byte limit for a local file. Omit the repository binding to verify caller-supplied evidence` : reason === "File changed during collection" ? "changed while it was read. Re-read the referenced lines and verify again" : `is an unreadable file. Check its permissions, ${UNBIND}`;
     throw new Error(`Evidence ${item.id} (${item.path}) ${problem}.`);
   }
+}
+async function localRoot(repo, signal) {
+  await gitRoot(repo, { signal });
+  return realpath3(repo);
 }
 async function verify(raw, evaluator, signal) {
   const input2 = verificationInputSchema.parse(raw);
@@ -21602,7 +21929,7 @@ async function verify(raw, evaluator, signal) {
   const start = input2.target.start - target.startLine;
   const end = input2.target.end - target.startLine + 1;
   if (start < 0 || end <= start || end > target.content.split("\n").length || target.content.split("\n").slice(start, end).join("\n") !== input2.target.quote) throw new Error("Target quote does not match the supplied original line range.");
-  const root = input2.repo ? await realpath2(input2.repo) : void 0;
+  const root = input2.repo ? await localRoot(input2.repo, signal) : void 0;
   const captured = /* @__PURE__ */ new Map();
   for (const item of input2.evidence) {
     signal?.throwIfAborted();
@@ -21686,6 +22013,7 @@ var init_verify = __esm({
     "use strict";
     init_zod();
     init_domain();
+    init_git_context();
     init_schema();
     init_review();
     init_safety();
@@ -36097,325 +36425,6 @@ var init_collection_options = __esm({
   }
 });
 
-// src/git-context.ts
-import { execFile, spawn } from "node:child_process";
-import { realpath as realpath3 } from "node:fs/promises";
-import { resolve as resolve3 } from "node:path";
-import { StringDecoder } from "node:string_decoder";
-import { promisify } from "node:util";
-function patchRange(start, count) {
-  const first = Math.max(1, Number(start));
-  return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
-}
-function pathBatches(groups) {
-  const batches = [];
-  let batch = [];
-  let argumentBytes = 0;
-  for (const group of groups) {
-    const groupBytes = group.reduce((total, path) => total + Buffer.byteLength(path) + 1, 0);
-    if (batch.length && (batch.length + group.length > 512 || argumentBytes + groupBytes > 6e4)) {
-      batches.push(batch);
-      batch = [];
-      argumentBytes = 0;
-    }
-    batch.push(...group);
-    argumentBytes += groupBytes;
-  }
-  if (batch.length) batches.push(batch);
-  return batches;
-}
-function gitEnvironment() {
-  return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
-}
-async function gitOutput(root, args, options = {}) {
-  return (await execGit("git", [...SAFE_CONFIGURATION, "-C", root, ...args], { ...options, env: gitEnvironment() })).stdout;
-}
-async function gitRoot(repo, options = {}) {
-  let output2;
-  try {
-    output2 = await gitOutput(resolve3(repo), ["rev-parse", "--show-toplevel"], options);
-  } catch (error62) {
-    options.signal?.throwIfAborted();
-    const reason = error62 instanceof Error && "stderr" in error62 && typeof error62.stderr === "string" ? error62.stderr.match(/^fatal: (.+)$/m)?.[1] : void 0;
-    if (!reason) throw error62;
-    throw new Error(`Cannot open ${repo} as a Git working tree: ${reason.replace(/\.$/, "")}.`);
-  }
-  return realpath3(output2.trim());
-}
-async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
-  signal.throwIfAborted();
-  await new Promise((resolve6, reject) => {
-    const child = spawn("git", ["--literal-pathspecs", ...SAFE_CONFIGURATION, "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
-    let settled = false;
-    let output2 = Promise.resolve();
-    const finish = (error62) => {
-      if (settled) return;
-      settled = true;
-      signal.removeEventListener("abort", abort);
-      if (error62) {
-        child.kill();
-        reject(error62);
-      } else resolve6();
-    };
-    const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
-    signal.addEventListener("abort", abort, { once: true });
-    child.once("error", () => finish(new Error(failure2)));
-    child.stdout.once("error", () => finish(new Error(failure2)));
-    child.stderr.once("error", () => finish(new Error(failure2)));
-    child.stdout.on("data", (chunk) => {
-      child.stdout.pause();
-      output2 = output2.then(() => onData(chunk)).then(() => {
-        child.stdout.resume();
-      }).catch((error62) => {
-        finish(signal.aborted && signal.reason instanceof Error ? signal.reason : error62 instanceof Error ? error62 : new Error(failure2));
-      });
-    });
-    child.stderr.resume();
-    child.once("close", (code2) => {
-      void output2.then(() => finish(code2 === 0 ? void 0 : new Error(failure2))).catch(() => finish(new Error(failure2)));
-    });
-    child.stdin.once("error", () => finish(new Error(failure2)));
-    child.stdin.end(input2);
-  });
-}
-async function readGitRecords(root, args, signal, failure2) {
-  const records = [];
-  let pending = Buffer.alloc(0);
-  await streamGit(root, args, signal, (chunk) => {
-    pending = pending.length ? Buffer.concat([pending, chunk]) : chunk;
-    let start = 0;
-    for (let end = pending.indexOf(0); end >= 0; end = pending.indexOf(0, start)) {
-      records.push(pending.toString("utf8", start, end));
-      start = end + 1;
-    }
-    pending = pending.subarray(start);
-  }, void 0, failure2);
-  if (pending.length) throw new Error(failure2);
-  return records;
-}
-async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ */ new Map(), signal, onBaseline }) {
-  const context = new Map([...new Set(paths)].map((path) => [path, { ranges: [], beforeRanges: [] }]));
-  const requested = new Set(context.keys());
-  if (!requested.size) return context;
-  const requestedByBase = /* @__PURE__ */ new Map();
-  for (const path of requested) {
-    const basePath = renames.get(path) ?? path;
-    requestedByBase.set(basePath, [...requestedByBase.get(basePath) ?? [], path]);
-  }
-  const renameSources = new Set([...requested].flatMap((path) => renames.has(path) ? [renames.get(path)] : []));
-  const pathsByBlob = /* @__PURE__ */ new Map();
-  let treeBuffer = Buffer.alloc(0);
-  for (const batch of pathBatches([...requestedByBase.keys()].map((path) => [path]))) await streamGit(root, ["ls-tree", "-rlz", base, "--", ...batch], signal, (chunk) => {
-    treeBuffer = Buffer.concat([treeBuffer, chunk]);
-    for (; ; ) {
-      const end = treeBuffer.indexOf(0);
-      if (end < 0) break;
-      const record3 = treeBuffer.subarray(0, end);
-      treeBuffer = treeBuffer.subarray(end + 1);
-      const tab = record3.indexOf(9);
-      if (tab < 0) continue;
-      const fields = record3.subarray(0, tab).toString("ascii").trim().split(/\s+/);
-      const type = fields[1];
-      const blob = fields[2];
-      const size = Number(fields[3]);
-      const targets = requestedByBase.get(record3.subarray(tab + 1).toString("utf8"));
-      if (type !== "blob" || !blob || !targets) continue;
-      if (!Number.isSafeInteger(size) || size < 0) {
-        for (const path of targets) context.get(path).error = "Base version unavailable";
-        continue;
-      }
-      if (size > MAX_BASELINE_BYTES) {
-        for (const path of targets) context.get(path).error = "Oversized base version";
-        continue;
-      }
-      const entries = pathsByBlob.get(blob) ?? [];
-      entries.push(...targets);
-      pathsByBlob.set(blob, entries);
-    }
-  });
-  if (treeBuffer.length) throw new Error("Git context command failed");
-  const pathsForDiff = [...requested].filter((path) => !context.get(path)?.error);
-  const diffBatch = async (batch, renameMode) => {
-    const rawChanges = [];
-    let rawBuffer = Buffer.alloc(0);
-    let rawRecord;
-    const attribute = (status, recordPaths) => {
-      const path = recordPaths.at(-1);
-      if (recordPaths.length === 2) {
-        if (!requested.has(path)) throw new Error("Git context command failed");
-        if (!status.startsWith("R") || renames.get(path) !== recordPaths[0]) context.get(path).error = "Rename pairing changed during collection";
-        rawChanges.push({ path, status });
-      } else if (requested.has(path)) {
-        if (renames.has(path)) context.get(path).error = "Rename pairing changed during collection";
-        rawChanges.push({ path, status });
-      } else if (renameSources.has(path)) rawChanges.push({ status });
-      else throw new Error("Git context command failed");
-    };
-    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--raw", "-z", renameMode, base, "--", ...batch], signal, (chunk) => {
-      rawBuffer = Buffer.concat([rawBuffer, chunk]);
-      for (; ; ) {
-        const end = rawBuffer.indexOf(0);
-        if (end < 0) break;
-        const record3 = rawBuffer.subarray(0, end);
-        rawBuffer = rawBuffer.subarray(end + 1);
-        if (!rawRecord) {
-          if (record3[0] !== 58) throw new Error("Git context command failed");
-          rawRecord = { status: record3.toString("ascii").trim().split(/\s+/).at(-1) ?? "", paths: [] };
-          continue;
-        }
-        rawRecord.paths.push(record3.toString("utf8"));
-        if (rawRecord.paths.length < (/^[RC]/.test(rawRecord.status) ? 2 : 1)) continue;
-        attribute(rawRecord.status, rawRecord.paths);
-        rawRecord = void 0;
-      }
-    });
-    if (rawBuffer.length || rawRecord) throw new Error("Git context command failed");
-    let diffBuffer = "";
-    const decoder = new StringDecoder("utf8");
-    let rawOffset = 0;
-    let lastRaw;
-    let reusedTypeChange = false;
-    let activePath;
-    let inHunk = false;
-    const noHunkReasons = /* @__PURE__ */ new Map();
-    const processDiffLine = (line) => {
-      if (line.startsWith("diff --git ")) {
-        let raw = rawChanges[rawOffset];
-        if (raw) {
-          rawOffset++;
-          lastRaw = raw;
-          reusedTypeChange = false;
-        } else if (lastRaw?.status.startsWith("T") && !reusedTypeChange) {
-          raw = lastRaw;
-          reusedTypeChange = true;
-        } else throw new Error(WORKING_TREE_CHANGED);
-        activePath = raw.path;
-        inHunk = false;
-        return;
-      }
-      if (inHunk && (!activePath || !line.startsWith("@@ "))) return;
-      if (!inHunk && activePath) {
-        if (/^Binary files .* differ$/.test(line)) noHunkReasons.set(activePath, "diff-suppressed");
-        else if (/^(?:old|new) mode /.test(line) && !noHunkReasons.has(activePath)) noHunkReasons.set(activePath, "mode-only");
-      }
-      const hunk = line.match(/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/);
-      if (!hunk) return;
-      inHunk = true;
-      if (!activePath) return;
-      const entry = context.get(activePath);
-      entry.beforeRanges.push(patchRange(hunk[1], hunk[2]));
-      entry.ranges.push(patchRange(hunk[3], hunk[4]));
-    };
-    await streamGit(root, ["-c", "core.quotePath=true", "diff", "--no-ext-diff", "--no-textconv", "--no-color", renameMode, "--unified=0", "--src-prefix=a/", "--dst-prefix=b/", base, "--", ...batch], signal, (chunk) => {
-      diffBuffer += decoder.write(chunk);
-      for (; ; ) {
-        const newline = diffBuffer.indexOf("\n");
-        if (newline < 0) break;
-        processDiffLine(diffBuffer.slice(0, newline));
-        diffBuffer = diffBuffer.slice(newline + 1);
-      }
-    });
-    diffBuffer += decoder.end();
-    if (diffBuffer) processDiffLine(diffBuffer);
-    if (rawOffset !== rawChanges.length) throw new Error(WORKING_TREE_CHANGED);
-    for (const [path, reason] of noHunkReasons) {
-      const entry = context.get(path);
-      if (!entry.ranges.length) entry.noHunks = reason;
-    }
-  };
-  for (const batch of pathBatches(pathsForDiff.filter((path) => !renames.has(path)).map((path) => [path]))) await diffBatch(batch, "--no-renames");
-  for (const batch of pathBatches(pathsForDiff.filter((path) => renames.has(path)).map((path) => [path, renames.get(path)]))) await diffBatch(batch, "--find-renames");
-  const delivered = /* @__PURE__ */ new Set();
-  const deliver = async (path, before) => {
-    delivered.add(path);
-    if (onBaseline) await onBaseline(path, context.get(path), before);
-  };
-  if (pathsByBlob.size) {
-    let blobBuffer = Buffer.alloc(0);
-    let pending;
-    const finishBlob = async (item) => {
-      const blobPaths = pathsByBlob.get(item.blob) ?? [];
-      if (item.oversized) {
-        for (const path of blobPaths) context.get(path).error = "Oversized base version";
-        for (const path of blobPaths) await deliver(path);
-        return;
-      }
-      const before = Buffer.concat(item.chunks, item.size).toString("utf8");
-      if (before.includes("\0")) for (const path of blobPaths) context.get(path).error = "Binary base version";
-      for (const path of blobPaths) await deliver(path, before.includes("\0") ? void 0 : before);
-    };
-    const consumeBlobs = async () => {
-      for (; ; ) {
-        if (!pending) {
-          const newline = blobBuffer.indexOf(10);
-          if (newline < 0) return;
-          const headerText = blobBuffer.subarray(0, newline).toString("ascii");
-          blobBuffer = blobBuffer.subarray(newline + 1);
-          const header = headerText.match(/^([0-9a-f]+) blob (\d+)$/);
-          if (!header) {
-            const missing = headerText.match(/^([0-9a-f]+) missing$/);
-            if (!missing) throw new Error("Git context command failed");
-            const missingPaths = pathsByBlob.get(missing[1]) ?? [];
-            for (const path of missingPaths) context.get(path).error = "Base version unavailable";
-            for (const path of missingPaths) await deliver(path);
-            continue;
-          }
-          const size = Number(header[2]);
-          if (!Number.isSafeInteger(size) || size < 0) throw new Error("Git context command failed");
-          pending = { blob: header[1], size, remaining: size, chunks: [], oversized: size > MAX_BASELINE_BYTES };
-        }
-        if (pending.remaining) {
-          const available = Math.min(pending.remaining, blobBuffer.length);
-          if (!available) return;
-          if (!pending.oversized) pending.chunks.push(blobBuffer.subarray(0, available));
-          pending.remaining -= available;
-          blobBuffer = blobBuffer.subarray(available);
-          if (pending.remaining) return;
-        }
-        if (!blobBuffer.length) return;
-        if (blobBuffer[0] !== 10) throw new Error("Git context command failed");
-        blobBuffer = blobBuffer.subarray(1);
-        await finishBlob(pending);
-        pending = void 0;
-      }
-    };
-    const input2 = Buffer.from([...pathsByBlob.keys()].map((blob) => `${blob}
-`).join(""));
-    await streamGit(root, ["cat-file", "--batch"], signal, async (chunk) => {
-      blobBuffer = blobBuffer.length ? Buffer.concat([blobBuffer, chunk]) : Buffer.from(chunk);
-      await consumeBlobs();
-    }, input2);
-    await consumeBlobs();
-    if (pending || blobBuffer.length) throw new Error("Git context command failed");
-  }
-  for (const path of context.keys()) if (!delivered.has(path)) await deliver(path);
-  return context;
-}
-var MAX_BASELINE_BYTES, REPOSITORY_ENVIRONMENT, WORKING_TREE_CHANGED, SAFE_CONFIGURATION, execGit;
-var init_git_context = __esm({
-  "src/git-context.ts"() {
-    "use strict";
-    MAX_BASELINE_BYTES = 8 * 1024 * 1024;
-    REPOSITORY_ENVIRONMENT = /* @__PURE__ */ new Set([
-      "GIT_DIR",
-      "GIT_WORK_TREE",
-      "GIT_IMPLICIT_WORK_TREE",
-      "GIT_INDEX_FILE",
-      "GIT_OBJECT_DIRECTORY",
-      "GIT_ALTERNATE_OBJECT_DIRECTORIES",
-      "GIT_COMMON_DIR",
-      "GIT_GRAFT_FILE",
-      "GIT_NO_REPLACE_OBJECTS",
-      "GIT_REPLACE_REF_BASE",
-      "GIT_PREFIX",
-      "GIT_SHALLOW_FILE"
-    ]);
-    WORKING_TREE_CHANGED = "Working tree changed during collection; retry the preview.";
-    SAFE_CONFIGURATION = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
-    execGit = promisify(execFile);
-  }
-});
-
 // src/evidence.ts
 import { posix } from "node:path";
 function focusSource(content, targets, maxCharacters = 12e3) {
@@ -36966,6 +36975,18 @@ async function lookup(git, root, args) {
     throw error62;
   }
 }
+async function readNameStatus(root, args, signal, failure2) {
+  const fields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", ...args, "--"], signal, failure2);
+  const records = [];
+  for (let index = 0; index < fields.length; ) {
+    const status = fields[index++];
+    const count = /^[RC]/.test(status) ? 2 : 1;
+    const paths = fields.slice(index, index += count);
+    if (!status || paths.length !== count || paths.some((path) => !path)) throw new Error(failure2);
+    records.push({ status, paths });
+  }
+  return records;
+}
 async function resolveBase(git, root, ref) {
   const revParse = (name) => lookup(git, root, ["rev-parse", "--verify", "--quiet", "--end-of-options", name]);
   const head = await revParse("HEAD^{commit}");
@@ -37004,14 +37025,19 @@ async function collect(options) {
   const changed = [];
   const renames = /* @__PURE__ */ new Map();
   options.onPhase?.("Listing changed files");
-  const statusFields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"], signal, "Git change listing failed");
-  for (let index2 = 0; index2 < statusFields.length; ) {
-    const status = statusFields[index2++];
-    const recordPaths = statusFields.slice(index2, index2 += /^[RC]/.test(status) ? 2 : 1);
-    if (!status || recordPaths.length !== (/^[RC]/.test(status) ? 2 : 1) || recordPaths.some((path2) => !path2)) throw new Error("Git change listing failed");
-    const path = recordPaths.at(-1);
+  for (const { status, paths } of await readNameStatus(root, [base], signal, "Git change listing failed")) {
+    const path = paths.at(-1);
     changed.push(path);
-    if (status.startsWith("R")) renames.set(path, recordPaths[0]);
+    if (status.startsWith("R")) renames.set(path, paths[0]);
+  }
+  const listed = new Set(changed);
+  const inWorkingTree = /* @__PURE__ */ new Set([...listed, ...renames.values()]);
+  const stagedReverted = [];
+  const stagedRenamesUnpaired = [];
+  for (const { status, paths } of await readNameStatus(root, ["--cached", head], signal, "Git staged-change listing failed")) {
+    const [from, to] = paths;
+    if (paths.every((path) => !inWorkingTree.has(path))) stagedReverted.push(paths.join(" -> "));
+    else if (status.startsWith("R") && to !== void 0 && listed.has(to) && !renames.has(to)) stagedRenamesUnpaired.push(`${from} -> ${to}`);
   }
   const untracked = (await readGitRecords(root, ["ls-files", "--others", "--exclude-standard", "-z"], signal, "Git untracked-file listing failed")).filter(Boolean);
   const tracked = (await readGitRecords(root, ["ls-files", "-z"], signal, "Git tracked-file listing failed")).filter(Boolean);
@@ -37021,6 +37047,8 @@ async function collect(options) {
   const limitations = [];
   const notes = [];
   if (movedOn) notes.push(`${baseRef} has commits that HEAD does not; the review compares against their merge base ${base.slice(0, 12)}, so changes made only on ${baseRef} are left out.`);
+  if (stagedReverted.length) notes.push(`${stagedReverted.length} staged change(s) are undone in the working tree, so the review does not see them, although a commit would include them: ${stagedReverted.join(", ")}. The review compares ${baseRef} with the working tree, not the index.`);
+  if (stagedRenamesUnpaired.length) notes.push(`${stagedRenamesUnpaired.length} staged rename(s) differ too much in the working tree for Git to pair the files, so each is reviewed as a deleted file and a new file without a baseline: ${stagedRenamesUnpaired.join(", ")}.`);
   if (!changePaths.length) notes.push(`No changes against ${baseRef}; nothing to review.`);
   else notes.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
   if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
@@ -51581,7 +51609,6 @@ __export(mcp_exports, {
   createServer: () => createServer,
   serve: () => serve
 });
-import { realpath as realpath5 } from "node:fs/promises";
 function toolResult(output2) {
   return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
 }
@@ -51599,18 +51626,23 @@ function createServer(repo, evaluatorFactory) {
   const server = new McpServer({ name: "tracecheck", version: releaseVersion });
   const cache = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
+  const reviews = new SharedWork();
   const scope = {
-    repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
+    repo: external_exports.string().min(1).optional().describe("Path to the repository or any directory in it. Required unless the server was launched with --repo; a bound server rejects a path in another repository."),
     base: reviewScopeFields.base.optional().describe("Git ref to review changes against, such as origin/main. The working tree is compared against the merge base of this ref and HEAD, so commits made only on a branch that has moved on are left out. Defaults to HEAD."),
     includeUntracked: reviewScopeFields.includeUntracked.optional().describe("Include untracked files. Defaults to false."),
     task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`)
   };
-  const target = async (requested) => {
-    if (repo && requested && await realpath5(repo) !== await realpath5(requested)) throw new Error("This server is bound to a different repository.");
-    if (!repo && !requested) throw new Error("Supply repo or launch the server with --repo.");
-    return repo ?? requested;
+  const target = async (requested, signal) => {
+    if (!repo) {
+      if (!requested) throw new Error("Supply repo or launch the server with --repo.");
+      return requested;
+    }
+    if (requested === void 0) return repo;
+    if (await gitRoot(requested, { signal }) !== await gitRoot(repo, { signal })) throw new Error("This server is bound to a different repository.");
+    return requested;
   };
   server.registerTool("tracecheck_verify", {
     description: "Verify one agent-discovered defect hypothesis against agent-selected source, contract, and counterevidence in any language. Validates exact target quotes; optional repo checks every excerpt against local files before and after inference. Returns support, impact, uncertainty, and a missing-evidence category. Does not discover concerns, execute code, or prove a fix.",
@@ -51619,7 +51651,7 @@ function createServer(repo, evaluatorFactory) {
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
     const signal = AbortSignal.any([ctx.mcpReq.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
-    const selected = repo || args.repo ? await target(args.repo) : void 0;
+    const selected = repo || args.repo ? await target(args.repo, signal) : void 0;
     const output2 = await verify({ ...args, repo: selected }, evaluatorFactory?.(signal) ?? jevFromEnv(signal), signal);
     return toolResult(output2);
   });
@@ -51649,7 +51681,7 @@ function createServer(repo, evaluatorFactory) {
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async (args, ctx) => {
-    const settings = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const settings = await resolveSettings(await target(args.repo, ctx.mcpReq.signal), args, ctx.mcpReq.signal);
     const plan = await collect({ repo: settings.root, ...settings.request, signal: ctx.mcpReq.signal });
     if (!plan.discovery) throw new Error("Collection did not produce a discovery scope. Run tracecheck_preview again.");
     previewScopes.set(plan.snapshot, plan.discovery);
@@ -51675,11 +51707,14 @@ function createServer(repo, evaluatorFactory) {
       previousEvaluation: previousEvaluationSchema.optional(),
       snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.")
     }),
-    outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
+    outputSchema: external_exports.object({
+      cached: external_exports.boolean().describe("True when this call made no provider request: the report came from the cache, or from an identical review that another call had in flight."),
+      report: reportSchema
+    }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
   }, async (args, ctx) => {
     const progress = progressFor(ctx);
-    const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
+    const effective = await resolveSettings(await target(args.repo, ctx.mcpReq.signal), args, ctx.mcpReq.signal);
     const { reviewTimeoutMs, maxRequests, request: collectionRequest } = effective;
     const signal = AbortSignal.any([
       ctx.mcpReq.signal,
@@ -51692,19 +51727,25 @@ function createServer(repo, evaluatorFactory) {
     const settings = jevSettings(process.env, effective.provider);
     const key = `${plan.root}:${plan.snapshot}:${settings.baseUrl}:${settings.model}`;
     let report = cache.get(key);
-    const cached2 = report !== void 0;
+    let cached2 = report !== void 0;
     if (!report) {
-      report = await reviewAll(
-        plan,
-        evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }),
-        { signal, concurrency: settings.concurrency, maxRequests, onProgress: progress?.review.requests }
-      );
-      signal.throwIfAborted();
-      progress?.review.checking();
-      const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
-      if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
-      if (!isIncomplete(report)) cache.set(key, report);
-      progress?.review.finished();
+      const shared = await reviews.run(`${key}:${maxRequests}`, signal, progress?.review, async (reviewSignal, emit) => {
+        const fresh = await reviewAll(plan, evaluatorFactory?.(reviewSignal) ?? new Jev({ ...settings, signal: reviewSignal }), {
+          signal: reviewSignal,
+          concurrency: settings.concurrency,
+          maxRequests,
+          onProgress: (completed, total) => emit((each) => each.requests(completed, total))
+        });
+        reviewSignal.throwIfAborted();
+        emit((each) => each.checking());
+        const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal: reviewSignal });
+        if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Preview and review again.");
+        if (!isIncomplete(fresh)) cache.set(key, fresh);
+        emit((each) => each.finished());
+        return fresh;
+      });
+      report = shared.value;
+      cached2 = shared.joined;
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
@@ -51725,7 +51766,7 @@ async function serve(repo) {
   process.once("SIGINT", close);
   process.once("SIGTERM", close);
 }
-var CACHE_LIMIT, CACHE_TTL_MS, ExpiringCache;
+var CACHE_LIMIT, CACHE_TTL_MS, ExpiringCache, SharedWork;
 var init_mcp = __esm({
   "src/mcp.ts"() {
     "use strict";
@@ -51733,6 +51774,7 @@ var init_mcp = __esm({
     init_dist();
     init_stdio();
     init_zod();
+    init_git_context();
     init_collector();
     init_jev();
     init_review();
@@ -51769,6 +51811,51 @@ var init_mcp = __esm({
         this.entries.set(key, { expires: now + this.ttlMs, value });
       }
     };
+    SharedWork = class {
+      flights = /* @__PURE__ */ new Map();
+      /** Runs `task` for `key`, or waits for the run already in flight; `joined` is true when another call started it. */
+      async run(key, signal, listener, task) {
+        signal.throwIfAborted();
+        const running = this.flights.get(key);
+        const flight = running ?? this.start(key, task);
+        flight.waiting++;
+        if (listener) {
+          for (const event of flight.events) event(listener);
+          flight.listeners.add(listener);
+        }
+        let stop;
+        const stopped = new Promise((_resolve, reject) => {
+          stop = () => reject(signal.reason);
+        });
+        signal.addEventListener("abort", stop, { once: true });
+        try {
+          return { value: await Promise.race([flight.result, stopped]), joined: running !== void 0 };
+        } finally {
+          signal.removeEventListener("abort", stop);
+          if (listener) flight.listeners.delete(listener);
+          if (--flight.waiting === 0 && this.flights.get(key) === flight) {
+            this.flights.delete(key);
+            flight.controller.abort(signal.reason);
+          }
+        }
+      }
+      start(key, task) {
+        const controller = new AbortController();
+        const listeners = /* @__PURE__ */ new Set();
+        const events = [];
+        const result = task(controller.signal, (event) => {
+          events.push(event);
+          for (const listener of listeners) event(listener);
+        }).finally(() => {
+          if (this.flights.get(key) === flight) this.flights.delete(key);
+        });
+        result.catch(() => {
+        });
+        const flight = { controller, result, waiting: 0, listeners, events };
+        this.flights.set(key, flight);
+        return flight;
+      }
+    };
   }
 });
 
@@ -51786,22 +51873,39 @@ import { access, readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
+var siteKey = (item) => JSON.stringify([item.previousPath ?? item.path, item.check, item.symbol, item.quote.replace(/\s+/g, " ")]);
 function compare(previous, current) {
   if (previous.root !== current.root || previous.base !== current.base || previous.checkVersion !== current.checkVersion || previous.policyVersion !== current.policyVersion || [...previous.models].sort().join("\n") !== [...current.models].sort().join("\n")) {
     throw new Error("Reports have different repositories, baselines, models, or policies and cannot be compared.");
   }
-  const supported = previous.decisions.filter((item) => item.status === "supported");
-  const previouslySupported = new Set(supported.map((item) => item.id));
-  const earlier = supported.map((item) => {
-    const next = current.decisions.find((candidate) => candidate.id === item.id);
+  const previousIds = new Set(previous.decisions.map((item) => item.id));
+  const currentById = new Map(current.decisions.map((item) => [item.id, item]));
+  const unmatched = /* @__PURE__ */ new Map();
+  for (const item of current.decisions) {
+    if (previousIds.has(item.id)) continue;
+    const key = siteKey(item);
+    const sites = unmatched.get(key);
+    if (sites) sites.push(item);
+    else unmatched.set(key, [item]);
+  }
+  const followed = /* @__PURE__ */ new Set();
+  const earlier = previous.decisions.filter((item) => item.status === "supported").map((item) => {
+    let next = currentById.get(item.id);
+    if (!next) {
+      const sites = unmatched.get(siteKey(item)) ?? [];
+      const index = sites.findIndex((site) => site.path !== item.path);
+      if (index >= 0) [next] = sites.splice(index, 1);
+    }
+    if (next) followed.add(next.id);
     return {
       id: item.id,
       path: item.path,
       check: item.check,
+      ...next && next.id !== item.id ? { currentId: next.id, currentPath: next.path } : {},
       status: !next ? "not_reassessed" : next.status === "not_supported" ? "no_longer_supported" : next.status === "supported" ? "still_present" : "unresolved"
     };
   });
-  const added = current.decisions.filter((item) => item.status === "supported" && !previouslySupported.has(item.id)).map((item) => ({ id: item.id, path: item.path, check: item.check, status: "newly_supported" }));
+  const added = current.decisions.filter((item) => item.status === "supported" && !followed.has(item.id)).map((item) => ({ id: item.id, path: item.path, check: item.check, status: "newly_supported" }));
   return [...earlier, ...added];
 }
 
