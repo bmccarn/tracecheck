@@ -63,7 +63,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   const cache = new ExpiringCache<Report>(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache<DiscoveryScope>(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = { repo: z.string().min(1).optional().describe('Repository path; required unless the server was launched with --repo.'),
-    base: reviewScopeFields.base.optional().describe('Git baseline; the working tree is compared against this commit. Defaults to HEAD.'),
+    base: reviewScopeFields.base.optional().describe('Git ref to review changes against, such as origin/main. The working tree is compared against the merge base of this ref and HEAD, so commits made only on a branch that has moved on are left out. Defaults to HEAD.'),
     includeUntracked: reviewScopeFields.includeUntracked.optional().describe('Include untracked files. Defaults to false.'),
     task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
@@ -97,6 +97,8 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     inputSchema: z.object(scope),
     outputSchema: z.object({
       snapshot: z.string(),
+      base: z.string().describe('Commit the working tree is compared against: the merge base of baseRef and HEAD.'),
+      baseRef: z.string().describe('The requested base ref.'),
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
       files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
       candidates: z.number(), limitations: z.array(z.string()),
@@ -110,7 +112,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     const plan = await collect({ repo: settings.root, ...settings.request, signal: ctx.mcpReq.signal });
     if (!plan.discovery) throw new Error('Collection did not produce a discovery scope. Run tracecheck_preview again.');
     previewScopes.set(plan.snapshot, plan.discovery);
-    const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
+    const output = { snapshot: plan.snapshot, base: plan.base, baseRef: plan.baseRef ?? 'HEAD', packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length, limitations: plan.limitations, notes: [...plan.notes, ...settings.settingsFileNotes], estimate: estimateReview(plan) };
     return toolResult(output);

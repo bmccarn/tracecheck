@@ -138,7 +138,9 @@ node dist/plugin.mjs review --repo /path/to/repo \
 
 Paths to the runtime above are relative to the Tracecheck checkout. `--repo` selects the repository being reviewed; report paths are relative to your current directory.
 
-By default, collection compares **HEAD with the working tree**, including staged and unstaged tracked changes. Use `--base COMMIT` for another baseline and `--include-untracked` to include supported new files. Already committed changes need an earlier baseline to appear in the review.
+By default, collection compares **HEAD with the working tree**, including staged and unstaged tracked changes. Use `--base REF` for another baseline and `--include-untracked` to include supported new files. Already committed changes need an earlier baseline to appear in the review.
+
+Not in 0.3.0: the working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`. 0.3.0 compared with the tip of REF.
 
 ## How it works
 
@@ -271,6 +273,17 @@ Not in 0.3.0. `review --sarif FILE` writes the supported source-anchored finding
 node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
 ```
 
+The review needs `origin/main` and the history back to the commit where the pull request left it. The default `actions/checkout` fetch is one commit deep and fetches only the checked-out ref, so it has neither. Fetch the full history:
+
+```yaml
+- uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+- run: node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
+```
+
+A smaller `fetch-depth` works when it reaches that commit, but a long-lived branch may need more than you expect. Without enough history, the review stops with exit `2` and an error that names the missing ref or says the clone is too shallow, rather than reviewing the wrong changes.
+
 - Each check family that produced a decision (`zero-divisor`, `swallowed-failure`, `unhandled-json`) is a rule, with the check hypothesis as its description and the verification step as its help.
 - Each `supported` decision is one result. Its location is the repository-relative path and line range, with the quoted source as the snippet; its message is the hypothesis. The level follows the judged impact: `high` is `error`, `medium` and `unknown` are `warning`, and `low` is `note`. Result properties carry `impact`, `impactConfidence`, `confidence`, `probability`, and `verification`.
 - `uncertain`, `needs_context`, and `not_supported` decisions are not results. The run's `omittedDecisions` property counts them; the JSON report keeps them in full.
@@ -284,7 +297,7 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 | Option | Purpose |
 | --- | --- |
 | `--repo PATH` | Git repository to collect; preview and review default to the current directory. verify matches excerpts against it; mcp uses it when a tool call names no repository. |
-| `--base REF` | Git baseline; defaults to `HEAD`. |
+| `--base REF` | Git ref to review changes against; defaults to `HEAD`. The working tree is compared with the merge base of REF and HEAD (not in 0.3.0, which compared with REF itself). |
 | `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` (not in 0.3.0) states the default explicitly. |
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
@@ -516,6 +529,7 @@ GitHub Actions runs CI on every pull request and on every push to `main`. The wo
 | --- | --- |
 | Missing API key | Export a supported variable in the launching process. For GUI clients, configure its environment explicitly. |
 | No changed files | The default baseline is `HEAD`. Select an earlier commit for committed changes; opt in to untracked files when needed. |
+| `Base ... was not found` or `this is a shallow clone` | The ref is misspelled or was never fetched, or the clone's history stops before the merge base. Fetch the ref, for example `git fetch origin main`, or fetch the full history with `git fetch --unshallow` or `fetch-depth: 0` on `actions/checkout`. |
 | Snapshot mismatch | Preview again and use the same repository, baseline, task, and context for review. |
 | Missing scores or inconclusive result | Read applicability and coverage limitations. Provide the missing contracts, callers, or tests rather than treating uncertainty as a defect. |
 | Comparison skipped or rejected | Keep scope, baseline, model, and rubric/policies consistent; use the correct report type for the command. |

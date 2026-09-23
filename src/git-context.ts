@@ -1,4 +1,6 @@
 import { execFile, spawn } from 'node:child_process';
+import { realpath } from 'node:fs/promises';
+import { resolve } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { promisify } from 'node:util';
 import type { Range } from './domain.js';
@@ -53,6 +55,20 @@ function gitEnvironment(): NodeJS.ProcessEnv {
 /** Runs a Git command in `root` with the safe configuration and environment, and returns its standard output. */
 export async function gitOutput(root: string, args: string[], options: { signal?: AbortSignal; timeout?: number } = {}): Promise<string> {
   return (await execGit('git', [...SAFE_CONFIGURATION, '-C', root, ...args], { ...options, env: gitEnvironment() })).stdout;
+}
+
+/** The real path of the working tree that contains `repo`. A path Git cannot open fails with Git's reason, not its command line. */
+export async function gitRoot(repo: string, options: { signal?: AbortSignal; timeout?: number } = {}): Promise<string> {
+  let output: string;
+  try {
+    output = await gitOutput(resolve(repo), ['rev-parse', '--show-toplevel'], options);
+  } catch (error) {
+    options.signal?.throwIfAborted();
+    const reason = error instanceof Error && 'stderr' in error && typeof error.stderr === 'string' ? error.stderr.match(/^fatal: (.+)$/m)?.[1] : undefined;
+    if (!reason) throw error;
+    throw new Error(`Cannot open ${repo} as a Git working tree: ${reason.replace(/\.$/, '')}.`);
+  }
+  return realpath(output.trim());
 }
 
 async function streamGit(root: string, args: string[], signal: AbortSignal, onData: (data: Buffer) => Promise<void> | void, input?: Buffer, failure = 'Git context command failed'): Promise<void> {

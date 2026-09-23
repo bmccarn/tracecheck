@@ -45,7 +45,7 @@ export function toSarif(report: Report) {
    originalUriBaseIds: { SRCROOT: { uri: pathToFileURL(report.root.endsWith('/') ? report.root : `${report.root}/`).href } },
    results,
    properties: {
-    reportId: report.id, status: report.status, snapshot: report.snapshot, base: report.base, head: report.head,
+    reportId: report.id, status: report.status, snapshot: report.snapshot, base: report.base, baseRef: report.baseRef, head: report.head,
     models: report.models, limitations: report.limitations, notes: report.notes,
     omittedDecisions: { uncertain: omitted('uncertain'), needsContext: omitted('needs_context'), notSupported: omitted('not_supported') }
    },
