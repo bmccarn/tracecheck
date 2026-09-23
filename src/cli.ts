@@ -6,7 +6,7 @@ import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
 import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { deadline } from './deadline.js';
-import { estimateReview, reviewAll, render } from './review.js';
+import { estimateReview, markStale, reviewAll, render } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, renderQuality, type PreviousEvaluation } from './quality.js';
 import { compare } from './history.js';
 import { reportSchema } from './schema.js';
@@ -18,6 +18,8 @@ import type { Report } from './domain.js';
 
 /** Exit codes for review and verify statuses, as the help text documents them. */
 const EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 } as const satisfies Record<Report['status'], number>;
+/** A review whose evidence changed while it ran; the report is printed, marked stale. */
+const STALE_EXIT_CODE = 4;
 
 function positiveSafeInteger(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -128,6 +130,8 @@ Exit codes:
      assess --fail-on-priorities: actionable quality priorities.
   2  Execution or input error.
   3  review or verify is inconclusive.
+  4  review: the reviewed files changed while the review ran. The report is still printed
+     and saved, marked stale; run review again.
 
 Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
 require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
@@ -200,7 +204,7 @@ cannot hold credentials or the endpoint.`);
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.join(', ')}`).join('\n');
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : '';
-    console.log(values.json ? JSON.stringify({ ...plan, notes, estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${notes.map(item => `Note: ${item}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
+    console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${[...plan.notes, ...notes].map(item => `Note: ${item}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
     return;
   }
   const reviewSignal = AbortSignal.any([controller.signal,
@@ -210,15 +214,18 @@ cannot hold credentials or the endpoint.`);
   const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }),
     { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests });
   reviewSignal.throwIfAborted();
-  if (notes.length) report.notes = [...report.notes ?? [], ...notes];
+  report.notes.push(...notes);
   progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
-  if (current.snapshot !== plan.snapshot) throw new Error('Repository changed during review. Run review again.');
+  // The provider requests are already paid for, so a changed repository marks the report stale instead of discarding it.
+  const stale = current.snapshot !== plan.snapshot;
+  if (stale) markStale(report);
   progress?.finished();
+  if (stale) console.error('Tracecheck: the repository changed during the review, so the report is marked stale. Run review again.');
   if (values.out) await writeJson(values.out, report);
   if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
-  process.exitCode = EXIT_CODES[report.status];
+  process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
 }
 
 main().catch(error => {

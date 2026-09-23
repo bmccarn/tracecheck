@@ -100,7 +100,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
       files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
       candidates: z.number(), limitations: z.array(z.string()),
-      notes: z.array(z.string()).describe(`Caveats, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
+      notes: z.array(z.string()).describe(`Caveats that never affect the status, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
       estimate: z.object({ requests: z.number(), inputBytes: z.number() })
         .describe('Provider requests tracecheck_review would make and their serialized evidence and question bytes.'),
     }),
@@ -112,7 +112,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     previewScopes.set(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
-      candidates: plan.candidates.length, limitations: plan.limitations, notes: settings.settingsFileNotes, estimate: estimateReview(plan) };
+      candidates: plan.candidates.length, limitations: plan.limitations, notes: [...plan.notes, ...settings.settingsFileNotes], estimate: estimateReview(plan) };
     return toolResult(output);
   });
   server.registerTool('tracecheck_review', {
@@ -150,7 +150,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
-    if (effective.settingsFileNotes.length) compared.notes = [...compared.notes ?? [], ...effective.settingsFileNotes];
+    compared.notes.push(...effective.settingsFileNotes);
     const output = { cached, report: compared };
     await progress?.sent();
     return toolResult(output);

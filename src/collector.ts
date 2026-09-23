@@ -66,8 +66,12 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const known = new Set([...tracked, ...(options.includeUntracked ? untracked : [])]);
   const changePaths = [...new Set([...changed, ...(options.includeUntracked ? untracked : [])])].sort();
   const limitations: string[] = [];
-  if (changePaths.length) limitations.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
-  if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
+  // Notes stay out of the snapshot, so untracked files that are not reviewed, such as editor swap files or test
+  // output, can come and go without invalidating a preview or a review.
+  const notes: string[] = [];
+  if (!changePaths.length) notes.push(`No changes against ${options.base ?? 'HEAD'}; nothing to review.`);
+  else notes.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
+  if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
 
   const loaded = new Map<string, Loaded>();
   const candidates: ReviewPlan['candidates'] = [];
@@ -213,7 +217,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const indexPaths = tracked.filter(path => isSource(path) && isImportable(path)).sort();
   options.onPhase?.('Indexing imports');
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
-  limitations.push(...index.limitations);
+  // With nothing changed, no packet depends on discovery, so its gaps are not gaps in the review.
+  if (changePaths.length) limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
 
   const conventionalTests = new Map<string, string[]>();
@@ -261,7 +266,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     batchChars += sourceChars(source);
     batchBytes += sourceBytes(source) + (batch.length > 1 ? 1 : 0);
   }
-  if (batch.length || !primaryPaths.length) batches.push(batch);
+  // Changes that were all omitted still get a packet, whose missing evidence keeps the review inconclusive.
+  if (batch.length || (changePaths.length && !primaryPaths.length)) batches.push(batch);
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const primary = batches[batchIndex]!;
     const packetLimitations: string[] = [...sharedPacketLimitations];
@@ -343,5 +349,5 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...(options.projectConfig ? { projectConfig: options.projectConfig } : {}) });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
+  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }

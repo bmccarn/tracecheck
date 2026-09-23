@@ -110,8 +110,9 @@ test('MCP preview applies the bound repository configuration, review enforces it
   // The label is for the reviewer; the provider sees the task only as the task.
   assert.ok(states.every(state => !JSON.stringify(state).includes('repository settings file')));
   const label = 'Task from the repository settings file .tracecheck.json: Configured task text';
-  assert.deepEqual(z.object({ notes: z.array(z.string()) }).parse(preview.structuredContent).notes, [label]);
-  assert.deepEqual(z.object({ report: z.object({ notes: z.array(z.string()) }) }).parse(review.structuredContent).report.notes, [label]);
+  const labeled = (notes: string[]) => notes.filter(note => note.includes('repository settings file'));
+  assert.deepEqual(labeled(z.object({ notes: z.array(z.string()) }).parse(preview.structuredContent).notes), [label]);
+  assert.deepEqual(labeled(z.object({ report: z.object({ notes: z.array(z.string()) }) }).parse(review.structuredContent).report.notes), [label]);
 
   await writeFile(config, JSON.stringify({ task: 'Configured task text', collection: { indexTimeoutMs: 10_000 }, model: 'jev-other' }));
   const stale = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: configured.snapshot, base: 'HEAD~1' } });

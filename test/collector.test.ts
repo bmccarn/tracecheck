@@ -48,7 +48,7 @@ test('untracked files require opt-in; credentials, deleted files and symlinks ar
   await symlink('/etc/hosts', join(repo.root, 'outside.ts'));
   const preview = await collect({ repo: repo.root });
   assert.equal(preview.candidates.length, 0);
-  assert.match(preview.limitations.join('\n'), /untracked/);
+  assert.match(preview.notes.join('\n'), /untracked/);
   const included = await collect({ repo: repo.root, includeUntracked: true });
   assert.equal(included.candidates.length, 1);
   assert.ok(!JSON.stringify(included).includes(credential));

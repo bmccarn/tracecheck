@@ -21089,9 +21089,10 @@ var init_schema = __esm({
         impactConfidence: external_exports.number().min(0).max(1),
         raw: external_exports.object({ assessment: answerSchema, impact: answerSchema })
       })),
+      // Coverage gaps: any gap keeps a report from `no_findings`.
       limitations: external_exports.array(external_exports.string()),
-      /** Caveats that never affect the status, such as a task that came from the repository settings file. */
-      notes: external_exports.array(external_exports.string()).optional(),
+      // Permanent caveats shown with the report; they never change its status. Reports saved by 0.3.0 and earlier have none.
+      notes: external_exports.array(external_exports.string()).default([]),
       quality: qualityEvaluationSchema.optional(),
       packetQualities: external_exports.array(external_exports.object({ packetId: external_exports.string(), changedPaths: external_exports.array(external_exports.string()), evaluation: qualityEvaluationSchema })).optional(),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
@@ -21128,15 +21129,14 @@ function questionsFor(candidate) {
 function unique(values) {
   return [...new Set(values)];
 }
-function packetLimitations(packet, broadReviewed = false) {
+function packetLimitations(packet) {
   if (packet.candidateIds.length) return [...packet.limitations];
-  return [...packet.limitations, broadReviewed ? `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.` : `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+  return [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
 }
 function assertUnique(values, description) {
   if (new Set(values).size !== values.length) throw new Error(`Invalid review plan: duplicate ${description}.`);
 }
 function resolvePacketEvidence(plan) {
-  if (!plan.packets.length) throw new Error("Invalid review plan: at least one packet is required.");
   assertUnique(plan.packets.map((packet) => packet.id), "packet id");
   assertUnique(plan.sources.map((source) => source.path), "source path");
   assertUnique(plan.candidates.map((candidate) => candidate.id), "candidate id");
@@ -21201,6 +21201,7 @@ function requestState(plan, evidence, candidates) {
     sources: evidence.sources,
     candidates,
     limitations: evidence.limitations,
+    ...plan.notes.length ? { notes: plan.notes } : {},
     packetId: evidence.packet.id,
     task: plan.task,
     repositoryContext: plan.repositoryContext
@@ -21295,7 +21296,7 @@ function decisionsFrom(answers, candidates) {
     };
   });
 }
-function reportFor(plan, started, decisions, models, limitations, usage) {
+function reportFor(plan, started, decisions, models, limitations, notes, usage) {
   usage.elapsedMs = Date.now() - started;
   return {
     schemaVersion: 1,
@@ -21311,6 +21312,7 @@ function reportFor(plan, started, decisions, models, limitations, usage) {
     status: reportStatus(decisions, limitations),
     decisions,
     limitations,
+    notes,
     usage
   };
 }
@@ -21337,6 +21339,13 @@ async function evaluateAll(evaluator, requests, limit, signal, onProgress) {
 }
 function isIncomplete(report) {
   return report.limitations.some((item) => item.startsWith(`${INCOMPLETE} `));
+}
+function markStale(report) {
+  report.limitations = unique([...report.limitations, STALE]);
+  if (report.status === "no_findings") report.status = "inconclusive";
+}
+function isStale(report) {
+  return report.limitations.includes(STALE);
 }
 async function orchestrate(plan, evaluator, broad, options) {
   const started = Date.now();
@@ -21416,8 +21425,10 @@ async function orchestrate(plan, evaluator, broad, options) {
     ];
     return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(", ") || "no changed paths"}): ${[...missing.reasons].join(" ")} Not evaluated: ${work.join("; ")}.`];
   });
-  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((evidence) => broadResults.has(evidence.packet.id) ? packetLimitations(evidence.packet, true) : evidence.limitations)]);
-  const report = reportFor(plan, started, decisions, models, limitations, usage);
+  const broadOnly = packets.filter(({ packet }) => broadResults.has(packet.id) && !packet.candidateIds.length);
+  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((evidence) => broadResults.has(evidence.packet.id) ? evidence.packet.limitations : evidence.limitations)]);
+  const notes = unique([...plan.notes, ...broadOnly.map(({ packet }) => `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.`)]);
+  const report = reportFor(plan, started, decisions, models, limitations, notes, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
     const result = broadResults.get(packet.id);
     if (!result) return [];
@@ -21459,7 +21470,7 @@ function applyPreviousEvaluation(report, previous) {
   } else {
     reason = report.packetQualities?.length ? "this review has multiple packet scopes; comparison applies only to a single-packet quality result" : "this review produced no quality result";
   }
-  if (reason) report.limitations = unique([...report.limitations, `Previous evaluation was not compared because ${reason}.`]);
+  if (reason) report.notes = unique([...report.notes, `Previous evaluation was not compared because ${reason}.`]);
 }
 function render(report) {
   const findings = report.decisions.filter((item) => item.status !== "not_supported");
@@ -21468,6 +21479,7 @@ function render(report) {
   const lines = [
     `# Tracecheck`,
     "",
+    ...isStale(report) ? ["**Stale:** the reviewed evidence changed during the review. Run review again.", ""] : [],
     `**${report.status.replaceAll("_", " ")}**${packetSummary} \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
     "",
     `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.join(", ") || "not called"}`,
@@ -21509,11 +21521,11 @@ function render(report) {
     );
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
-  if (report.notes?.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${item}`), "");
+  if (report.notes.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${item}`), "");
   if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${item}`), "");
   return lines.join("\n");
 }
-var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes, estimateOf;
+var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, STALE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes, estimateOf;
 var init_review = __esm({
   "src/review.ts"() {
     "use strict";
@@ -21523,6 +21535,7 @@ var init_review = __esm({
     MAX_PROVIDER_REQUEST_BYTES = 16e4;
     MAX_CANDIDATES_PER_REQUEST = 10;
     INCOMPLETE = "Review incomplete for packet";
+    STALE = "Stale report: the reviewed evidence changed while the review ran, so this report does not describe the current working tree. Run review again.";
     nonWhitespace = /\S/u;
     jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value));
     NONE2 = { bytes: 0, count: 0 };
@@ -21579,6 +21592,7 @@ ${item.content}`);
     snapshot,
     task: input2.contract,
     limitations: input2.missingContext,
+    notes: [],
     sources: [...excerpts].map(([path, parts]) => ({ path, role: "changed", content: parts.join("\n\n") })),
     packets: [{
       id: hash2([sourcePaths, candidateId]),
@@ -36912,8 +36926,10 @@ async function collect(options) {
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
   const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
-  if (changePaths.length) limitations.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
-  if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
+  const notes = [];
+  if (!changePaths.length) notes.push(`No changes against ${options.base ?? "HEAD"}; nothing to review.`);
+  else notes.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
+  if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
   const loaded = /* @__PURE__ */ new Map();
   const candidates = [];
   const candidateIds = /* @__PURE__ */ new Set();
@@ -37077,7 +37093,7 @@ async function collect(options) {
   const indexPaths = tracked.filter((path) => isSource(path) && isImportable(path)).sort();
   options.onPhase?.("Indexing imports");
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
-  limitations.push(...index.limitations);
+  if (changePaths.length) limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
   const conventionalTests = /* @__PURE__ */ new Map();
   for (const path of tracked) {
@@ -37128,7 +37144,7 @@ async function collect(options) {
     batchChars += sourceChars(source);
     batchBytes += sourceBytes(source) + (batch.length > 1 ? 1 : 0);
   }
-  if (batch.length || !primaryPaths.length) batches.push(batch);
+  if (batch.length || changePaths.length && !primaryPaths.length) batches.push(batch);
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const primary = batches[batchIndex];
     const packetLimitations2 = [...sharedPacketLimitations];
@@ -37213,7 +37229,7 @@ async function collect(options) {
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
+  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }
 var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
 var init_collector = __esm({
@@ -51539,7 +51555,7 @@ function createServer(repo, evaluatorFactory) {
       files: external_exports.array(external_exports.object({ path: external_exports.string(), previousPath: external_exports.string().optional(), role: external_exports.string(), characters: external_exports.number() })),
       candidates: external_exports.number(),
       limitations: external_exports.array(external_exports.string()),
-      notes: external_exports.array(external_exports.string()).describe(`Caveats, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
+      notes: external_exports.array(external_exports.string()).describe(`Caveats that never affect the status, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
       estimate: external_exports.object({ requests: external_exports.number(), inputBytes: external_exports.number() }).describe("Provider requests tracecheck_review would make and their serialized evidence and question bytes.")
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -51554,7 +51570,7 @@ function createServer(repo, evaluatorFactory) {
       files: plan.sources.map((source) => ({ path: source.path, ...source.previousPath ? { previousPath: source.previousPath } : {}, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length,
       limitations: plan.limitations,
-      notes: settings.settingsFileNotes,
+      notes: [...plan.notes, ...settings.settingsFileNotes],
       estimate: estimateReview(plan)
     };
     return toolResult(output2);
@@ -51601,7 +51617,7 @@ function createServer(repo, evaluatorFactory) {
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
-    if (effective.settingsFileNotes.length) compared.notes = [...compared.notes ?? [], ...effective.settingsFileNotes];
+    compared.notes.push(...effective.settingsFileNotes);
     const output2 = { cached: cached2, report: compared };
     await progress?.sent();
     return toolResult(output2);
@@ -51756,6 +51772,7 @@ function toSarif(report) {
         head: report.head,
         models: report.models,
         limitations: report.limitations,
+        notes: report.notes,
         omittedDecisions: { uncertain: omitted("uncertain"), needsContext: omitted("needs_context"), notSupported: omitted("not_supported") }
       }
     }]
@@ -51767,6 +51784,7 @@ init_collection_options();
 init_project_config();
 init_progress();
 var EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 };
+var STALE_EXIT_CODE = 4;
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -51878,6 +51896,8 @@ Exit codes:
      assess --fail-on-priorities: actionable quality priorities.
   2  Execution or input error.
   3  review or verify is inconclusive.
+  4  review: the reviewed files changed while the review ran. The report is still printed
+     and saved, marked stale; run review again.
 
 Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
 require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
@@ -51955,14 +51975,14 @@ cannot hold credentials or the endpoint.`);
     const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : "";
-    console.log(values.json ? JSON.stringify({ ...plan, notes, estimate }, null, 2) : `Tracecheck preview (local only)
+    console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)
 ${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}
 ` : ""}Snapshot: ${plan.snapshot}
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
 Review estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.
 ${packets}
 ${plan.sources.map((source) => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ""}`).join("\n")}
-${notes.map((item) => `Note: ${item}`).join("\n")}
+${[...plan.notes, ...notes].map((item) => `Note: ${item}`).join("\n")}
 ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     return;
   }
@@ -51978,15 +51998,17 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
     { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests }
   );
   reviewSignal.throwIfAborted();
-  if (notes.length) report.notes = [...report.notes ?? [], ...notes];
+  report.notes.push(...notes);
   progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
-  if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
+  const stale = current.snapshot !== plan.snapshot;
+  if (stale) markStale(report);
   progress?.finished();
+  if (stale) console.error("Tracecheck: the repository changed during the review, so the report is marked stale. Run review again.");
   if (values.out) await writeJson(values.out, report);
   if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
-  process.exitCode = EXIT_CODES[report.status];
+  process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
 }
 main().catch((error62) => {
   console.error(`Tracecheck: ${error62 instanceof Error ? error62.message : "Unexpected failure"}`);
