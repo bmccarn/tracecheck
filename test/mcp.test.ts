@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { createServer, ExpiringCache } from '../src/mcp.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
 import type { TypedEvaluator } from '../src/domain.js';
-import { repository, typedFixture } from './helpers.js';
+import { judgeNotSupported, repository, typedFixture } from './helpers.js';
 
 async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
@@ -93,9 +93,9 @@ test('MCP validates bounded collection settings, pins preview discovery, and rev
     snapshot: metadata.snapshot, collection, previousEvaluation: output.report.packetQualities![0]!.evaluation,
   } });
   assert.ok(!compared.isError, JSON.stringify(compared));
-  const repeated = z.object({ cached: z.boolean(), report: z.object({ limitations: z.array(z.string()) }) }).parse(compared.structuredContent);
+  const repeated = z.object({ cached: z.boolean(), report: z.object({ notes: z.array(z.string()) }) }).parse(compared.structuredContent);
   assert.equal(repeated.cached, true); assert.equal(calls, 2);
-  assert.match(repeated.report.limitations.join('\n'), /single-packet quality result/);
+  assert.match(repeated.report.notes.join('\n'), /single-packet quality result/);
 });
 
 test('MCP review sends strictly increasing progress only when the client asks for it', async t => {
@@ -229,6 +229,29 @@ test('an MCP review left incomplete by a failed request is not cached, so the ne
   assert.equal(repeated.cached, true); assert.equal(packets.length, 4);
 });
 
+test('an MCP review cache hit requires the same provider endpoint and model', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  const saved = { TYPESAFE_BASE_URL: process.env.TYPESAFE_BASE_URL, JEV_MODEL: process.env.JEV_MODEL };
+  t.after(() => { for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value; });
+  let calls = 0;
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(_state, questions) { calls++; return typedFixture(questions); } })));
+  const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
+  const snapshot = z.object({ snapshot: z.string() }).parse(preview.structuredContent).snapshot;
+  const review = async (baseUrl: string, model: string) => {
+    process.env.TYPESAFE_BASE_URL = baseUrl; process.env.JEV_MODEL = model;
+    const result = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
+    assert.ok(!result.isError, JSON.stringify(result));
+    return z.object({ cached: z.boolean() }).parse(result.structuredContent).cached;
+  };
+  assert.equal(await review('https://one.example.invalid', 'model-a'), false);
+  assert.equal(await review('https://one.example.invalid', 'model-a'), true);
+  assert.equal(await review('https://one.example.invalid', 'model-b'), false, 'another model must not reuse the cached report');
+  assert.equal(await review('https://two.example.invalid', 'model-a'), false, 'another endpoint must not reuse the cached report');
+  assert.equal(await review('https://two.example.invalid', 'model-a'), true);
+  assert.equal(calls, 3);
+});
+
 test('MCP assess uses the injected evaluator, keeps the JSON text block, and cancels with the client request', { timeout: 10_000 }, async t => {
   let hang = false;
   let evaluating!: () => void;
@@ -280,4 +303,34 @@ test('previousEvaluation inputs advertise only the fields the comparison reads',
       .parse(tools.find(tool => tool.name === name)!.inputSchema);
     assert.deepEqual(Object.keys(schema.properties.previousEvaluation.properties).sort(), ['metrics', 'model', 'rubricVersion', 'scope'], name);
   }
+});
+
+test('an untracked file outside the review keeps an MCP preview valid, and a clean change has no findings', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n');
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(_state, questions) {
+    const response = await typedFixture(questions);
+    judgeNotSupported(response);
+    return response;
+  } })));
+  const previewOutput = z.object({ snapshot: z.string(), notes: z.array(z.string()), limitations: z.array(z.string()) });
+  const preview = previewOutput.parse((await client.callTool({ name: 'tracecheck_preview', arguments: {} })).structuredContent);
+  assert.deepEqual(preview.limitations, []);
+  assert.match(preview.notes.join('\n'), /Import\/caller discovery is heuristic/);
+
+  await writeFile(join(repo.root, 'coverage.json'), '{}\n');
+  const review = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: preview.snapshot } });
+  assert.ok(!review.isError, JSON.stringify(review));
+  const { report } = z.object({ report: z.object({ status: z.string(), limitations: z.array(z.string()), notes: z.array(z.string()) }) })
+    .parse(review.structuredContent);
+  assert.equal(report.status, 'no_findings');
+  assert.deepEqual(report.limitations, []);
+  assert.match(report.notes.join('\n'), /1 untracked file\(s\) excluded/);
+
+  // An included untracked source file is reviewed evidence, so a new one changes the snapshot.
+  const included = previewOutput.parse((await client.callTool({ name: 'tracecheck_preview', arguments: { includeUntracked: true } })).structuredContent);
+  await writeFile(join(repo.root, 'extra.ts'), 'export const extra = 1;\n');
+  const changed = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: included.snapshot, includeUntracked: true } });
+  assert.equal(changed.isError, true);
+  assert.match(JSON.stringify(changed), /changed since preview/);
 });

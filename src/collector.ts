@@ -63,15 +63,20 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const known = new Set([...tracked, ...(options.includeUntracked ? untracked : [])]);
   const changePaths = [...new Set([...changed, ...(options.includeUntracked ? untracked : [])])].sort();
   const limitations: string[] = [];
-  if (changePaths.length) limitations.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
-  if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
+  // Notes stay out of the snapshot, so untracked files that are not reviewed, such as editor swap files or test
+  // output, can come and go without invalidating a preview or a review.
+  const notes: string[] = [];
+  if (!changePaths.length) notes.push(`No changes against ${options.base ?? 'HEAD'}; nothing to review.`);
+  else notes.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
+  if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
 
   const loaded = new Map<string, Loaded>();
   const candidates: ReviewPlan['candidates'] = [];
   const candidateIds = new Set<string>();
   const changedSourcePaths = new Set<string>();
-  // Name every credential omission so each flagged file can be inspected.
-  const omissions = new FileTally(reason => reason.includes('potential credential'));
+  // Name every file flagged for a potential credential so each one can be inspected.
+  const namesCredential = (reason: string) => reason.includes('potential credential');
+  const omissions = new FileTally(namesCredential);
   // Reasons per path; each is reported as `${reason}: ${path}`, and counts group by reason.
   const sourceIssues = new Map<string, string[]>();
   const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
@@ -122,7 +127,11 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       let beforeRanges = ranges;
       if (role === 'changed') {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error('Base version with a potential credential');
+        // The current text passed screening, so the change is still reviewed, only without the flagged baseline.
+        if (before && hasSecret(before)) {
+          before = undefined;
+          noteSource(path, 'Base version with a potential credential omitted; reviewed without a baseline');
+        }
         ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
@@ -205,7 +214,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const indexPaths = tracked.filter(path => isSource(path) && isImportable(path)).sort();
   options.onPhase?.('Indexing imports');
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
-  limitations.push(...index.limitations);
+  // With nothing changed, no packet depends on discovery, so its gaps are not gaps in the review.
+  if (changePaths.length) limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
 
   const conventionalTests = new Map<string, string[]>();
@@ -253,7 +263,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     batchChars += sourceChars(source);
     batchBytes += sourceBytes(source) + (batch.length > 1 ? 1 : 0);
   }
-  if (batch.length || !primaryPaths.length) batches.push(batch);
+  // Changes that were all omitted still get a packet, whose missing evidence keeps the review inconclusive.
+  if (batch.length || (changePaths.length && !primaryPaths.length)) batches.push(batch);
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const primary = batches[batchIndex]!;
     const packetLimitations: string[] = [...sharedPacketLimitations];
@@ -326,7 +337,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     packets.push({ id: hash({ primary, paths, packetLimitations }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations });
   }
 
-  const sourceIssueCounts = new FileTally();
+  const sourceIssueCounts = new FileTally(namesCredential);
   for (const path of sourceByPath.keys()) {
     for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
@@ -335,5 +346,5 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...(options.projectConfig ? { projectConfig: options.projectConfig } : {}) });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
+  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }

@@ -21111,7 +21111,10 @@ var init_schema = __esm({
         impactConfidence: external_exports.number().min(0).max(1),
         raw: external_exports.object({ assessment: answerSchema, impact: answerSchema })
       })),
+      // Coverage gaps: any gap keeps a report from `no_findings`.
       limitations: external_exports.array(external_exports.string()),
+      // Permanent caveats shown with the report; they never change its status. Reports saved by 0.3.0 and earlier have none.
+      notes: external_exports.array(external_exports.string()).default([]),
       quality: qualityEvaluationSchema.optional(),
       packetQualities: external_exports.array(external_exports.object({ packetId: external_exports.string(), changedPaths: external_exports.array(external_exports.string()), evaluation: qualityEvaluationSchema })).optional(),
       usage: external_exports.object({ inputTokens: external_exports.number().nonnegative(), outputTokens: external_exports.number().nonnegative(), requests: external_exports.number().nonnegative(), elapsedMs: external_exports.number().nonnegative() })
@@ -21148,15 +21151,14 @@ function questionsFor(candidate) {
 function unique(values) {
   return [...new Set(values)];
 }
-function packetLimitations(packet, broadReviewed = false) {
+function packetLimitations(packet) {
   if (packet.candidateIds.length) return [...packet.limitations];
-  return [...packet.limitations, broadReviewed ? `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.` : `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+  return [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
 }
 function assertUnique(values, description) {
   if (new Set(values).size !== values.length) throw new Error(`Invalid review plan: duplicate ${description}.`);
 }
 function resolvePacketEvidence(plan) {
-  if (!plan.packets.length) throw new Error("Invalid review plan: at least one packet is required.");
   assertUnique(plan.packets.map((packet) => packet.id), "packet id");
   assertUnique(plan.sources.map((source) => source.path), "source path");
   assertUnique(plan.candidates.map((candidate) => candidate.id), "candidate id");
@@ -21221,6 +21223,7 @@ function requestState(plan, evidence, candidates) {
     sources: evidence.sources,
     candidates,
     limitations: evidence.limitations,
+    ...plan.notes.length ? { notes: plan.notes } : {},
     packetId: evidence.packet.id,
     task: plan.task,
     repositoryContext: plan.repositoryContext
@@ -21308,7 +21311,7 @@ function decisionsFrom(answers, candidates) {
     };
   });
 }
-function reportFor(plan, started, decisions, models, limitations, usage) {
+function reportFor(plan, started, decisions, models, limitations, notes, usage) {
   usage.elapsedMs = Date.now() - started;
   return {
     schemaVersion: 1,
@@ -21324,6 +21327,7 @@ function reportFor(plan, started, decisions, models, limitations, usage) {
     status: reportStatus(decisions, limitations),
     decisions,
     limitations,
+    notes,
     usage
   };
 }
@@ -21350,6 +21354,13 @@ async function evaluateAll(evaluator, requests, limit, signal, onProgress) {
 }
 function isIncomplete(report) {
   return report.limitations.some((item) => item.startsWith(`${INCOMPLETE} `));
+}
+function markStale(report) {
+  report.limitations = unique([...report.limitations, STALE]);
+  if (report.status === "no_findings") report.status = "inconclusive";
+}
+function isStale(report) {
+  return report.limitations.includes(STALE);
 }
 async function orchestrate(plan, evaluator, broad, options) {
   const started = Date.now();
@@ -21426,8 +21437,10 @@ async function orchestrate(plan, evaluator, broad, options) {
     ];
     return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(", ") || "no changed paths"}): ${[...missing.reasons].join(" ")} Not evaluated: ${work.join("; ")}.`];
   });
-  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((evidence) => broadResults.has(evidence.packet.id) ? packetLimitations(evidence.packet, true) : evidence.limitations)]);
-  const report = reportFor(plan, started, decisions, models, limitations, usage);
+  const broadOnly = packets.filter(({ packet }) => broadResults.has(packet.id) && !packet.candidateIds.length);
+  const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap((evidence) => broadResults.has(evidence.packet.id) ? evidence.packet.limitations : evidence.limitations)]);
+  const notes = unique([...plan.notes, ...broadOnly.map(({ packet }) => `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.`)]);
+  const report = reportFor(plan, started, decisions, models, limitations, notes, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
     const result = broadResults.get(packet.id);
     if (!result) return [];
@@ -21469,7 +21482,7 @@ function applyPreviousEvaluation(report, previous) {
   } else {
     reason = report.packetQualities?.length ? "this review has multiple packet scopes; comparison applies only to a single-packet quality result" : "this review produced no quality result";
   }
-  if (reason) report.limitations = unique([...report.limitations, `Previous evaluation was not compared because ${reason}.`]);
+  if (reason) report.notes = unique([...report.notes, `Previous evaluation was not compared because ${reason}.`]);
 }
 function render(report) {
   const findings = report.decisions.filter((item) => item.status !== "not_supported");
@@ -21478,6 +21491,7 @@ function render(report) {
   const lines = [
     `# Tracecheck`,
     "",
+    ...isStale(report) ? ["**Stale:** the reviewed evidence changed during the review. Run review again.", ""] : [],
     `**${report.status.replaceAll("_", " ")}**${packetSummary} \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
     "",
     `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.map(markdownText).join(", ") || "not called"}`,
@@ -21519,10 +21533,11 @@ function render(report) {
     );
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
+  if (report.notes.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${markdownText(item)}`), "");
   if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${markdownText(item)}`), "");
   return lines.join("\n");
 }
-var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes;
+var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, STALE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes;
 var init_review = __esm({
   "src/review.ts"() {
     "use strict";
@@ -21533,6 +21548,7 @@ var init_review = __esm({
     MAX_PROVIDER_REQUEST_BYTES = 16e4;
     MAX_CANDIDATES_PER_REQUEST = 10;
     INCOMPLETE = "Review incomplete for packet";
+    STALE = "Stale report: the reviewed evidence changed while the review ran, so this report does not describe the current working tree. Run review again.";
     nonWhitespace = /\S/u;
     jsonBytes = (value) => Buffer.byteLength(JSON.stringify(value));
     NONE2 = { bytes: 0, count: 0 };
@@ -21588,6 +21604,7 @@ ${item.content}`);
     snapshot,
     task: input2.contract,
     limitations: input2.missingContext,
+    notes: [],
     sources: [...excerpts].map(([path, parts]) => ({ path, role: "changed", content: parts.join("\n\n") })),
     packets: [{
       id: hash2([sourcePaths, candidateId]),
@@ -36921,13 +36938,16 @@ async function collect(options) {
   const known = /* @__PURE__ */ new Set([...tracked, ...options.includeUntracked ? untracked : []]);
   const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
-  if (changePaths.length) limitations.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
-  if (!options.includeUntracked && untracked.length) limitations.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
+  const notes = [];
+  if (!changePaths.length) notes.push(`No changes against ${options.base ?? "HEAD"}; nothing to review.`);
+  else notes.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
+  if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
   const loaded = /* @__PURE__ */ new Map();
   const candidates = [];
   const candidateIds = /* @__PURE__ */ new Set();
   const changedSourcePaths = /* @__PURE__ */ new Set();
-  const omissions = new FileTally((reason) => reason.includes("potential credential"));
+  const namesCredential = (reason) => reason.includes("potential credential");
+  const omissions = new FileTally(namesCredential);
   const sourceIssues = /* @__PURE__ */ new Map();
   const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path, reason) => {
@@ -36973,7 +36993,10 @@ async function collect(options) {
       let beforeRanges = ranges;
       if (role === "changed") {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error("Base version with a potential credential");
+        if (before && hasSecret(before)) {
+          before = void 0;
+          noteSource(path, "Base version with a potential credential omitted; reviewed without a baseline");
+        }
         ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split("\n").length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === "mode-only") noteSource(path, "File mode changed without a content change; no changed lines to review");
@@ -37082,7 +37105,7 @@ async function collect(options) {
   const indexPaths = tracked.filter((path) => isSource(path) && isImportable(path)).sort();
   options.onPhase?.("Indexing imports");
   const index = await buildImportIndex({ root, paths: indexPaths, known, changedPaths: [...changedSourcePaths], signal, limits: settings, discovery: options.discovery });
-  limitations.push(...index.limitations);
+  if (changePaths.length) limitations.push(...index.limitations);
   const sharedPacketLimitations = [...limitations];
   const conventionalTests = /* @__PURE__ */ new Map();
   for (const path of tracked) {
@@ -37133,7 +37156,7 @@ async function collect(options) {
     batchChars += sourceChars(source);
     batchBytes += sourceBytes(source) + (batch.length > 1 ? 1 : 0);
   }
-  if (batch.length || !primaryPaths.length) batches.push(batch);
+  if (batch.length || changePaths.length && !primaryPaths.length) batches.push(batch);
   for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
     const primary = batches[batchIndex];
     const packetLimitations2 = [...sharedPacketLimitations];
@@ -37209,7 +37232,7 @@ async function collect(options) {
     const packetCandidates = candidates.filter((candidate) => primary.includes(candidate.path)).map((candidate) => candidate.id);
     packets.push({ id: hash2({ primary, paths, packetLimitations: packetLimitations2 }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations2 });
   }
-  const sourceIssueCounts = new FileTally();
+  const sourceIssueCounts = new FileTally(namesCredential);
   for (const path of sourceByPath.keys()) {
     for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
@@ -37218,7 +37241,7 @@ async function collect(options) {
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, discovery: index.discovery, ...context, snapshot };
+  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }
 var MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
 var init_collector = __esm({
@@ -51515,7 +51538,8 @@ function createServer(repo, evaluatorFactory) {
       packets: external_exports.array(external_exports.object({ id: external_exports.string(), changedPaths: external_exports.array(external_exports.string()) })),
       files: external_exports.array(external_exports.object({ path: external_exports.string(), previousPath: external_exports.string().optional(), role: external_exports.string(), characters: external_exports.number() })),
       candidates: external_exports.number(),
-      limitations: external_exports.array(external_exports.string())
+      limitations: external_exports.array(external_exports.string()),
+      notes: external_exports.array(external_exports.string())
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false }
   }, async (args, ctx) => {
@@ -51528,12 +51552,13 @@ function createServer(repo, evaluatorFactory) {
       packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map((source) => ({ path: source.path, ...source.previousPath ? { previousPath: source.previousPath } : {}, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length,
-      limitations: plan.limitations
+      limitations: plan.limitations,
+      notes: plan.notes
     };
     return toolResult(output2);
   });
   server.registerTool("tracecheck_review", {
-    description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
+    description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
     inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
@@ -51722,6 +51747,7 @@ function toSarif(report) {
         head: report.head,
         models: report.models,
         limitations: report.limitations,
+        notes: report.notes,
         omittedDecisions: { uncertain: omitted("uncertain"), needsContext: omitted("needs_context"), notSupported: omitted("not_supported") }
       }
     }]
@@ -51734,6 +51760,7 @@ init_project_config();
 init_progress();
 init_terminal();
 var EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 };
+var STALE_EXIT_CODE = 4;
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -51840,6 +51867,8 @@ Exit codes:
      assess --fail-on-priorities: actionable quality priorities.
   2  Execution or input error.
   3  review or verify is inconclusive.
+  4  review: the reviewed files changed while the review ran. The report is still printed
+     and saved, marked stale; run review again.
 
 Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
 require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
@@ -51918,6 +51947,7 @@ ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${p
 Review implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.
 ${packets}
 ${plan.sources.map((source) => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ""}`).join("\n")}
+${plan.notes.map((item) => `Note: ${terminalText(item)}`).join("\n")}
 ${plan.limitations.map((item) => `Coverage gap: ${terminalText(item)}`).join("\n")}`);
     return;
   }
@@ -51935,12 +51965,14 @@ ${plan.limitations.map((item) => `Coverage gap: ${terminalText(item)}`).join("\n
   reviewSignal.throwIfAborted();
   progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
-  if (current.snapshot !== plan.snapshot) throw new Error("Repository changed during review. Run review again.");
+  const stale = current.snapshot !== plan.snapshot;
+  if (stale) markStale(report);
   progress?.finished();
+  if (stale) console.error("Tracecheck: the repository changed during the review, so the report is marked stale. Run review again.");
   if (values.out) await writeJson(values.out, report);
   if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
-  process.exitCode = EXIT_CODES[report.status];
+  process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
 }
 main().catch((error62) => {
   console.error(`Tracecheck: ${error62 instanceof Error ? terminalLines(error62.message) : "Unexpected failure"}`);

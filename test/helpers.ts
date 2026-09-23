@@ -23,7 +23,7 @@ export function planFor(content = 'export function ratio(a: number, b: number) {
   const candidates = findCandidates('example.ts', content, [{ start: 1, end: 100 }]);
   return { schemaVersion: 1, root: '/fixture', base: 'base', head: 'head', snapshot: 'a'.repeat(64), sources, candidates,
     packets: [{ id: 'packet-1', changedPaths: ['example.ts'], sourcePaths: ['example.ts'], candidateIds: candidates.map(candidate => candidate.id), limitations: [] }],
-    limitations: [] };
+    limitations: [], notes: [] };
 }
 
 export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evaluator {
@@ -53,4 +53,13 @@ export async function typedFixture(questions: Record<string, import('../src/doma
       probabilities: Object.fromEntries(Object.keys(question.criteria).map(key => [key, key === choice ? 1 : 0])) };
   }
   return { model: 'fixture-v1', answers, usage: { input_tokens: 100, output_tokens: 50 } };
+}
+
+/** Judges every source-check candidate in `response` not supported, with certainty. */
+export function judgeNotSupported(response: import('../src/domain.js').TypedResponse): void {
+  for (const [id, answer] of Object.entries(response.answers)) {
+    if (!id.endsWith('_assessment') || answer.type !== 'choice') continue;
+    answer.choice = 'not_supported';
+    answer.probabilities = Object.fromEntries(Object.keys(answer.probabilities).map(key => [key, key === 'not_supported' ? 1 : 0]));
+  }
 }

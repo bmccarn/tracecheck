@@ -99,7 +99,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
       snapshot: z.string(),
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
       files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
-      candidates: z.number(), limitations: z.array(z.string()),
+      candidates: z.number(), limitations: z.array(z.string()), notes: z.array(z.string()),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args, ctx) => {
@@ -109,11 +109,11 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     previewScopes.set(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
-      candidates: plan.candidates.length, limitations: plan.limitations };
+      candidates: plan.candidates.length, limitations: plan.limitations, notes: plan.notes };
     return toolResult(output);
   });
   server.registerTool('tracecheck_review', {
-    description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
+    description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
     inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
     outputSchema: z.object({ cached: z.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },

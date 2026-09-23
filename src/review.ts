@@ -8,6 +8,7 @@ import { markdownText, terminalLines } from './terminal.js';
 const MAX_PROVIDER_REQUEST_BYTES = 160_000;
 const MAX_CANDIDATES_PER_REQUEST = 10;
 const INCOMPLETE = 'Review incomplete for packet';
+const STALE = 'Stale report: the reviewed evidence changed while the review ran, so this report does not describe the current working tree. Run review again.';
 const nonWhitespace = /\S/u;
 
 type PacketEvidence = {
@@ -46,14 +47,12 @@ function unique(values: string[]): string[] {
 }
 
 /**
- * A packet's own limitations. A packet without source-check candidates gets a semantic review only from its broad
- * quality review; `broadReviewed` says that review completed, which is known only after the requests return.
+ * A packet's own limitations before review. A packet without source-check candidates gets a semantic review only from
+ * its broad quality review; once that review completes, the gap closes and a note takes its place.
  */
-function packetLimitations(packet: ReviewPacket, broadReviewed = false): string[] {
+function packetLimitations(packet: ReviewPacket): string[] {
   if (packet.candidateIds.length) return [...packet.limitations];
-  return [...packet.limitations, broadReviewed
-    ? `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.`
-    : `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
+  return [...packet.limitations, `No supported check candidates were found in packet ${packet.id}; no semantic review was performed.`];
 }
 
 function assertUnique<T>(values: T[], description: string): void {
@@ -61,7 +60,6 @@ function assertUnique<T>(values: T[], description: string): void {
 }
 
 function resolvePacketEvidence(plan: ReviewPlan): PacketEvidence[] {
-  if (!plan.packets.length) throw new Error('Invalid review plan: at least one packet is required.');
   assertUnique(plan.packets.map(packet => packet.id), 'packet id');
   assertUnique(plan.sources.map(source => source.path), 'source path');
   assertUnique(plan.candidates.map(candidate => candidate.id), 'candidate id');
@@ -132,6 +130,7 @@ type ReviewState = {
   sources: Source[];
   candidates: Candidate[];
   limitations: string[];
+  notes?: string[];
   packetId: string;
   task?: string;
   repositoryContext?: string;
@@ -157,8 +156,8 @@ function withEvidenceLimitations(evidence: PacketEvidence): PacketEvidence {
 }
 
 function requestState(plan: ReviewPlan, evidence: PacketEvidence, candidates: Candidate[]): ReviewState {
-  return { sources: evidence.sources, candidates, limitations: evidence.limitations, packetId: evidence.packet.id,
-    task: plan.task, repositoryContext: plan.repositoryContext };
+  return { sources: evidence.sources, candidates, limitations: evidence.limitations, ...(plan.notes.length ? { notes: plan.notes } : {}),
+    packetId: evidence.packet.id, task: plan.task, repositoryContext: plan.repositoryContext };
 }
 
 /**
@@ -215,6 +214,7 @@ function planPacket(plan: ReviewPlan, evidence: PacketEvidence, broad?: Record<s
   return requests;
 }
 
+/** Coverage gaps keep a report from `no_findings`; notes never do. */
 function reportStatus(decisions: Decision[], limitations: string[]): Report['status'] {
   return decisions.some(item => item.status === 'supported') ? 'needs_attention'
     : limitations.length || decisions.some(item => item.status !== 'not_supported') ? 'inconclusive' : 'no_findings';
@@ -236,11 +236,11 @@ function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candida
 }
 
 function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], models: Set<string>, limitations: string[],
-  usage: Report['usage']): Report {
+  notes: string[], usage: Report['usage']): Report {
   usage.elapsedMs = Date.now() - started;
   return { schemaVersion: 1, id: hash([plan.snapshot, Date.now(), decisions]).slice(0, 24), createdAt: new Date().toISOString(),
     snapshot: plan.snapshot, root: plan.root, base: plan.base, head: plan.head,
-    checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations), decisions, limitations, usage };
+    checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations), decisions, limitations, notes, usage };
 }
 
 type Outcome = { response: TypedResponse } | { error: unknown };
@@ -279,6 +279,19 @@ type BroadResult = { model: string; answers: Record<string, TypedAnswer>; inputT
 /** True when a provider request failed, so the report's limitations name work that was not evaluated. */
 export function isIncomplete(report: Report): boolean {
   return report.limitations.some(item => item.startsWith(`${INCOMPLETE} `));
+}
+
+/**
+ * Marks a report whose reviewed evidence changed before the review finished. A report without supported findings
+ * becomes inconclusive, because the current files were not reviewed; supported findings stay visible.
+ */
+export function markStale(report: Report): void {
+  report.limitations = unique([...report.limitations, STALE]);
+  if (report.status === 'no_findings') report.status = 'inconclusive';
+}
+
+export function isStale(report: Report): boolean {
+  return report.limitations.includes(STALE);
 }
 
 export type ReviewOptions = {
@@ -369,10 +382,14 @@ async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: R
       ...(missing.broad ? ['the broad quality review'] : [])];
     return [`${INCOMPLETE} ${packet.id} (${packet.changedPaths.join(', ') || 'no changed paths'}): ${[...missing.reasons].join(' ')} Not evaluated: ${work.join('; ')}.`];
   });
-  // A packet with a broad result had source evidence, so rebuilding its limitations changes only the candidate note.
+  // A packet with a broad result had source evidence, so its only added gap was the missing candidates, which that
+  // broad review closed.
+  const broadOnly = packets.filter(({ packet }) => broadResults.has(packet.id) && !packet.candidateIds.length);
   const limitations = unique([...incomplete, ...plan.limitations, ...packets.flatMap(evidence =>
-    broadResults.has(evidence.packet.id) ? packetLimitations(evidence.packet, true) : evidence.limitations)]);
-  const report = reportFor(plan, started, decisions, models, limitations, usage);
+    broadResults.has(evidence.packet.id) ? evidence.packet.limitations : evidence.limitations)]);
+  const notes = unique([...plan.notes, ...broadOnly.map(({ packet }) =>
+    `No source-anchored check candidates were found in packet ${packet.id}; only the broad quality review was performed.`)]);
+  const report = reportFor(plan, started, decisions, models, limitations, notes, usage);
   const packetQualities = packets.flatMap(({ packet }) => {
     const result = broadResults.get(packet.id);
     if (!result) return [];
@@ -409,7 +426,7 @@ export function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: 
 
 /**
  * Compares a single-packet quality result with a previous evaluation in place. When no comparison is possible,
- * a limitation says why; it does not change the review status.
+ * a note says why; it does not change the review status.
  */
 export function applyPreviousEvaluation(report: Report, previous: PreviousEvaluation | undefined): void {
   if (!previous) return;
@@ -421,14 +438,15 @@ export function applyPreviousEvaluation(report: Report, previous: PreviousEvalua
     reason = report.packetQualities?.length ? 'this review has multiple packet scopes; comparison applies only to a single-packet quality result'
       : 'this review produced no quality result';
   }
-  if (reason) report.limitations = unique([...report.limitations, `Previous evaluation was not compared because ${reason}.`]);
+  if (reason) report.notes = unique([...report.notes, `Previous evaluation was not compared because ${reason}.`]);
 }
 
 export function render(report: Report): string {
   const findings = report.decisions.filter(item => item.status !== 'not_supported');
   const packetCount = report.packetQualities?.length ?? (report.quality ? 1 : undefined);
   const packetSummary = packetCount === undefined ? '' : ` · ${packetCount} packet${packetCount === 1 ? '' : 's'}`;
-  const lines = [`# Tracecheck`, '', `**${report.status.replaceAll('_', ' ')}**${packetSummary} · ${report.decisions.length} checks · ${report.usage.requests} Jev request(s)`, '',
+  const lines = [`# Tracecheck`, '', ...(isStale(report) ? ['**Stale:** the reviewed evidence changed during the review. Run review again.', ''] : []),
+    `**${report.status.replaceAll('_', ' ')}**${packetSummary} · ${report.decisions.length} checks · ${report.usage.requests} Jev request(s)`, '',
     `Snapshot: ${report.snapshot.slice(0, 12)} · Models: ${report.models.map(markdownText).join(', ') || 'not called'}`, '',
     `${report.quality || report.packetQualities ? 'Broad review: all 19 quality dimensions per packet. ' : ''}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`, ''];
   if (report.quality) lines.push(renderQuality(report.quality), '', '## Source-anchored findings', '');
@@ -447,6 +465,7 @@ export function render(report: Report): string {
       `Verify: ${markdownText(finding.verification)}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '');
   }
   if (!findings.length) lines.push('No findings from the checks performed. This is not a repository-wide correctness verdict.', '');
+  if (report.notes.length) lines.push('## Notes', '', ...report.notes.map(item => `- ${markdownText(item)}`), '');
   if (report.limitations.length) lines.push('## Coverage gaps', '', ...report.limitations.map(item => `- ${markdownText(item)}`), '');
   return lines.join('\n');
 }
