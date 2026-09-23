@@ -40,6 +40,8 @@
 - A changed file whose committed version held a potential credential is now reviewed without its baseline, with a limitation naming it, instead of being omitted. The `tracecheck_review` description names the configured provider.
 - A review with no coverage gaps and no supported findings now exits 0. Permanent caveats such as heuristic discovery and excluded untracked files move to a new `notes` field that never changes the status, and a working tree with no changes says there is nothing to review.
 - Untracked files outside the review no longer invalidate a preview or review. A CLI review whose reviewed files change mid-run prints the report marked stale and exits 4.
+- Treat a committed `.tracecheck.json` as untrusted: it may only tighten defaults, so enabling untracked files, changing `base`, or raising limits, concurrency, or timeouts needs a flag or MCP argument. A task or context from the file is shown to the user.
+- Preview reports an estimate of provider requests and input bytes, and review refuses before sending anything when the estimate exceeds `--max-requests` or the MCP `maxRequests` argument (default 50).
 
 ## 0.3.0 — 2026-09-18
 
