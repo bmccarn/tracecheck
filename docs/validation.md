@@ -9,6 +9,12 @@
 
 The sections below are dated records, newest first. When an older record says a step was pending, such as npm trusted publishing, it describes that date. This summary gives the current state.
 
+## Decision-gate calibration — September 23, 2026
+
+- A labeled calibration measured the source-check and quality gates against `typesafe/jev-1.13-20260917`. It used 36 synthetic defect/clean pairs, reviewed three times each, in 216 provider requests with no failures. [Decision-gate calibration](calibration.md) has the dataset, method, cost, full grids, and candidate policies with holdout results.
+- Under the current gates, 73% of planted defects were supported and no clean variant was. 7% of labeled-relevant quality dimensions were scored on development cases and none on holdout cases.
+- The thresholds in `src/` are unchanged pending a maintainer decision on #59 and #70. `npm run calibrate -- replay` recomputes every table from the saved raw answers. The raw answers stay in ignored `.tracecheck/`.
+
 ## Stable 0.3.0 preparation — September 18, 2026
 
 - `npm run release:check` passes all 82 tests, type-checking, builds, synchronized metadata, and offline CLI/four-tool MCP checks for the actual `0.3.0` npm and marketplace archives. The tagged release gate selects `latest`. Workflow lint passes; primary LSP checks confirm all five updated metadata files with no diagnostics.

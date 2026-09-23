@@ -15,7 +15,7 @@ import { parseArgs } from 'node:util';
 import { collect } from '../src/collector.js';
 import type { Candidate, ReviewPlan, TypedAnswer, TypedEvaluator } from '../src/domain.js';
 import { Jev, jevSettings } from '../src/jev.js';
-import { dimensionKeys, dimensions } from '../src/quality/dimensions.js';
+import { dimensionKeys } from '../src/quality/dimensions.js';
 import { estimateReview, isIncomplete, reviewAll } from '../src/review.js';
 import { cases, expectedChecks, variantNames, type CalibrationCase, type CheckLabel, type Family, type QualityLabels, type Split, type VariantName } from './calibration/cases.js';
 
@@ -606,7 +606,7 @@ async function replay(dir: string): Promise<string> {
   const markdown = sections.join('\n\n') + '\n';
   await writeFile(join(dir, 'tables.md'), markdown);
   await writeFile(join(dir, 'summary.json'), JSON.stringify({
-    current: CURRENT, dimensions: dimensions.map(dimension => dimension.key), sourceGrid, qualityGrid,
+    current: CURRENT, dimensions: dimensionKeys, sourceGrid, qualityGrid,
     sourcePolicies: sourcePolicies.map(policy => ({ name: policy.name, probability: policy.point.probability, confidence: policy.point.confidence })),
     qualityPolicies: qualityPolicies.map(policy => ({ name: policy.name, relevance: policy.point.relevance, applicability: policy.point.applicability, scoreConfidence: policy.point.scoreConfidence }))
   }, null, 2) + '\n');
