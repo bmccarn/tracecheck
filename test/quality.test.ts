@@ -208,10 +208,10 @@ test('publishes independent packet qualities without inventing an aggregate qual
   assert.equal(report.usage.requests, 2); assert.equal(report.usage.inputTokens, 200);
 });
 
-test('a supplied previous evaluation is compared or leaves a limitation saying why not', async () => {
+test('a supplied previous evaluation is compared or leaves a note saying why not', async () => {
   const evaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
   const previous = (await reviewAll(planFor(), evaluator)).quality!;
-  const notCompared = (report: { limitations: string[] }) => report.limitations.filter(value => value.startsWith('Previous evaluation was not compared'));
+  const notCompared = (report: { notes: string[] }) => report.notes.filter(value => value.startsWith('Previous evaluation was not compared'));
 
   const comparable = await reviewAll(planFor(), evaluator, { previousEvaluation: previous });
   assert.equal(comparable.quality!.comparison.length, 19);

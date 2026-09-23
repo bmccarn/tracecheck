@@ -161,7 +161,7 @@ flowchart TD
 5. **Compare locally.** Previous assessments are used for comparison, not sent to Jev as evidence about the current implementation.
 6. **Investigate disagreement and act.** Investigate findings, make justified changes, run normal project checks, and review another checkpoint. Avoid changing code solely to raise a score.
 
-For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. Repository reviews also recollect after inference and reject changes made during the request. CLI `review` collects its own current context and does not require a prior preview token.
+For MCP repository reviews, preview produces a snapshot token. Review recollects the context and rejects a mismatched token if code, requirements, or supplied context changed. Repository reviews also recollect after inference. MCP review rejects evidence that changed during the request; CLI `review` prints the report with a `Stale report: ...` limitation and exits `4`, so the provider results are not lost. Untracked files outside the review, such as editor swap files or test output, never invalidate a snapshot. CLI `review` collects its own current context and does not require a prior preview token.
 
 MCP preview tokens belong to the current server process and expire after five minutes or bounded-cache eviction. Repeat preview if the token is unavailable. A time-limited preview pins its completed discovery scope for review and freshness checks, so a faster warm scan cannot masquerade as a repository edit.
 
@@ -227,7 +227,7 @@ node dist/plugin.mjs compare \
 
 Keep the baseline fixed across commits by passing the same commit SHA with `--base` to both reviews. Quality comparisons require matching scope, model, and rubric; uncertain pairs do not produce numeric improvement claims. Source history additionally checks repository, baseline, and policy compatibility.
 
-A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a limitation that says why. Source-finding history still uses the combined decisions.
+A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a note that says why. Source-finding history still uses the combined decisions.
 
 `--previous` takes either a report saved by `review --out` or an evaluation saved by `assess --out`, for both `review` and `assess`. Tracecheck reads the quality evaluation from it: a report's `quality`, or the evaluation itself. A multi-packet report has no single quality evaluation, so it is rejected, as is any other file. The comparison still requires the same scope, model, and rubric version; a review and an assessment usually have different scopes, so they are reported as not comparable unless the assessment `scope` matches.
 
@@ -275,6 +275,7 @@ node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
 - Each `supported` decision is one result. Its location is the repository-relative path and line range, with the quoted source as the snippet; its message is the hypothesis. The level follows the judged impact: `high` is `error`, `medium` and `unknown` are `warning`, and `low` is `note`. Result properties carry `impact`, `impactConfidence`, `confidence`, `probability`, and `verification`.
 - `uncertain`, `needs_context`, and `not_supported` decisions are not results. The run's `omittedDecisions` property counts them; the JSON report keeps them in full.
 - Quality priorities have no source location and are not SARIF results. The run's `status` property still reflects them, and the exit code is unchanged.
+- The run's `limitations` property lists coverage gaps and its `notes` property (not in 0.3.0) lists caveats that do not affect the status.
 
 Paths are relative to the `SRCROOT` base, which the log maps to the reviewed repository root. The file holds source excerpts and is written with owner-only permissions.
 
@@ -309,10 +310,13 @@ Exit codes:
 
 | Code | Meaning |
 | --- | --- |
-| `0` | Success. `review` and `verify` found no actionable concern in the checks performed. |
+| `0` | Success. `review` and `verify` found no actionable concern in the checks performed, with no coverage gaps. A working tree with no changes also exits `0` and says there is nothing to review. |
 | `1` | `review`: supported source findings or quality priorities. `verify`: the hypothesis is supported. `assess --fail-on-priorities`: actionable quality priorities. |
 | `2` | Execution or input error. |
 | `3` | `review` or `verify` is inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
+| `4` | `review`: the reviewed files changed while the review ran. The report is still printed and saved, with a `Stale report: ...` limitation; run the review again. Not in 0.3.0. |
+
+A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes` (not in 0.3.0), caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**.
 
 A zero exit does not prove correctness. Without `--fail-on-priorities`, `assess` exits `0` on any result. `--help` lists every flag for each command.
 
@@ -323,7 +327,7 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | Tool | Input and behavior |
 | --- | --- |
 | `tracecheck_verify` | Verify an agent-selected hypothesis, contract, and source evidence; return uncertainty and a missing-evidence category. |
-| `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, candidate count, and snapshot token. |
+| `tracecheck_preview` | Collect a repository locally and return its manifest, limitations, notes, candidate count, and snapshot token. |
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 

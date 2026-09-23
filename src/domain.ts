@@ -15,9 +15,13 @@ export type ReviewPacket = {
   id: string; changedPaths: string[]; sourcePaths: string[]; candidateIds: string[]; limitations: string[];
 };
 export type DiscoveryScope = { scannedFiles: number; deadlineLimited: boolean };
+/**
+ * `limitations` are coverage gaps: evidence the review could not see. `notes` are permanent caveats, such as heuristic
+ * caller discovery; they never change a report's status and are not part of the snapshot.
+ */
 export type ReviewPlan = {
   schemaVersion: 1; root: string; base: string; head: string; snapshot: string;
-  sources: Source[]; candidates: Candidate[]; packets: ReviewPacket[]; limitations: string[];
+  sources: Source[]; candidates: Candidate[]; packets: ReviewPacket[]; limitations: string[]; notes: string[];
   discovery?: DiscoveryScope;
   task?: string; repositoryContext?: string;
 };
