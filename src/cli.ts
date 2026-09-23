@@ -6,12 +6,12 @@ import { dirname, resolve } from 'node:path';
 import { collect } from './collector.js';
 import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { deadline } from './deadline.js';
-import { markStale, reviewAll, render } from './review.js';
+import { estimateReview, markStale, reviewAll, render } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, renderQuality, type PreviousEvaluation } from './quality.js';
 import { compare } from './history.js';
 import { reportSchema } from './schema.js';
 import { toSarif } from './sarif.js';
-import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
+import { collectionOptionsSchema, DEFAULT_MAX_REQUESTS, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { ReviewProgress } from './progress.js';
 import { terminalLines, terminalText } from './terminal.js';
@@ -75,7 +75,7 @@ async function main() {
     input: { type: 'string' }, task: { type: 'string' }, context: { type: 'string' },
     'index-max-files': { type: 'string' }, 'index-max-bytes': { type: 'string' },
     'index-timeout-ms': { type: 'string' }, 'collection-timeout-ms': { type: 'string' },
-    'review-timeout-ms': { type: 'string' },
+    'review-timeout-ms': { type: 'string' }, 'max-requests': { type: 'string' },
     sarif: { type: 'string' }, 'fail-on-priorities': { type: 'boolean', default: false },
     quiet: { type: 'boolean', short: 'q', default: false },
   } });
@@ -85,10 +85,11 @@ async function main() {
 
 Usage:
   tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--json]
+                     [--context TEXT] [collection limits] [--max-requests N] [--json]
   tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
                      [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--previous FILE] [--json] [--out FILE] [--sarif FILE] [--quiet]
+                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
+                     [--sarif FILE] [--quiet]
   tracecheck verify  --input FILE [--repo PATH] [--out FILE]
   tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
   tracecheck compare --previous FILE --current FILE
@@ -99,10 +100,13 @@ Options:
                               matches excerpts against it; mcp uses it when a call names none.
   --base REF                  Git baseline (default: HEAD).
   --include-untracked         Include supported, non-ignored untracked files.
-  --no-include-untracked      Exclude untracked files even when the config file includes them.
+  --no-include-untracked      Exclude untracked files (the default).
   --task TEXT                 Requested behavior or acceptance criteria.
   --context TEXT              Repository facts, contracts, or observed test results.
   --review-timeout-ms N       Review deadline (default: 300000).
+  --max-requests N            Most provider requests a review may make (default: ${DEFAULT_MAX_REQUESTS}).
+                              A larger review is refused before any request; preview shows
+                              the estimate.
   --input FILE                verify: evidence JSON. assess: context JSON.
   --previous FILE             review and assess: a report saved by review --out or an evaluation
                               saved by assess --out; its quality evaluation is compared with this
@@ -140,11 +144,14 @@ source-anchored checks cover three JS/TS patterns; no code or tests are executed
 Packet evidence is bounded and does not establish repository-wide semantic completeness.
 Use --task and --context to supply requirements and repository facts.
 
-Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: base,
-includeUntracked, task, repositoryContext, collection, reviewTimeoutMs, model,
-requestTimeoutMs, and requestConcurrency. Flags override the file, and JEV_MODEL,
-JEV_TIMEOUT_MS, and JEV_CONCURRENCY override its model, requestTimeoutMs, and
-requestConcurrency. The file cannot hold credentials or the endpoint.`);
+Preview and review read optional defaults from ${CONFIG_FILE} at the repository root: task,
+repositoryContext, collection, reviewTimeoutMs, model, requestTimeoutMs, requestConcurrency,
+and maxRequests. Anyone who can commit to the repository controls the file, so it may only
+lower limits: a timeout, requestConcurrency, or maxRequests above its default, base other
+than HEAD, or includeUntracked true is an error. Preview and review print any task or
+context the file supplied. Flags override the file, and JEV_MODEL, JEV_TIMEOUT_MS, and
+JEV_CONCURRENCY override its model, requestTimeoutMs, and requestConcurrency. The file
+cannot hold credentials or the endpoint.`);
     return;
   }
   if (command === 'mcp') {
@@ -189,13 +196,16 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
   process.once('SIGINT', () => controller.abort());
   const settings = await resolveSettings(values.repo ?? '.', { base: values.base, includeUntracked: values['include-untracked'],
     task: values.task, repositoryContext: values.context, collection: collectionOptions(values),
-    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')) }, controller.signal);
-  const { reviewTimeoutMs, request: collectionRequest } = settings;
+    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')),
+    maxRequests: positiveSafeInteger(values['max-requests'], '--max-requests') }, controller.signal);
+  const { reviewTimeoutMs, maxRequests, settingsFileNotes: notes, request: collectionRequest } = settings;
   const progress = command === 'review' && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : undefined;
   const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === 'preview') {
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.map(terminalText).join(', ')}`).join('\n');
-    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${plan.notes.map(item => `Note: ${terminalText(item)}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
+    const estimate = estimateReview(plan);
+    const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : '';
+    console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${[...plan.notes, ...notes].map(item => `Note: ${terminalText(item)}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
     return;
   }
   const reviewSignal = AbortSignal.any([controller.signal,
@@ -203,8 +213,9 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
   const previous = values.previous ? await readPrevious(values.previous) : undefined;
   const provider = jevSettings(process.env, settings.provider);
   const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }),
-    { signal: reviewSignal, concurrency: provider.concurrency, previousEvaluation: previous, onProgress: progress?.requests });
+    { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests });
   reviewSignal.throwIfAborted();
+  report.notes.push(...notes);
   progress?.checking();
   const current = await collect({ repo: plan.root, ...collectionRequest, discovery: plan.discovery, signal: reviewSignal });
   // The provider requests are already paid for, so a changed repository marks the report stale instead of discarding it.

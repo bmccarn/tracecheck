@@ -5,11 +5,11 @@ import { z } from 'zod';
 import { realpath } from 'node:fs/promises';
 import { collect } from './collector.js';
 import { Jev, jevFromEnv, jevSettings } from './jev.js';
-import { applyPreviousEvaluation, isIncomplete, reviewAll } from './review.js';
+import { applyPreviousEvaluation, estimateReview, isIncomplete, reviewAll } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
 import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.js';
-import { reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
+import { DEFAULT_MAX_REQUESTS, maxRequestsSchema, reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { deadline } from './deadline.js';
 import { ReviewProgress } from './progress.js';
@@ -63,10 +63,10 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   const cache = new ExpiringCache<Report>(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache<DiscoveryScope>(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = { repo: z.string().min(1).optional().describe('Repository path; required unless the server was launched with --repo.'),
-    base: reviewScopeFields.base.optional().describe(`Git baseline; the working tree is compared against this commit. Defaults to base in the repository's ${CONFIG_FILE}, then HEAD.`),
-    includeUntracked: reviewScopeFields.includeUntracked.optional().describe(`Include untracked files. Defaults to ${CONFIG_FILE}, then false.`),
-    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to ${CONFIG_FILE}.`),
-    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to ${CONFIG_FILE}.`),
+    base: reviewScopeFields.base.optional().describe('Git baseline; the working tree is compared against this commit. Defaults to HEAD.'),
+    includeUntracked: reviewScopeFields.includeUntracked.optional().describe('Include untracked files. Defaults to false.'),
+    task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
+    repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`) };
   const target = async (requested?: string) => {
     if (repo && requested && await realpath(repo) !== await realpath(requested)) throw new Error('This server is bound to a different repository.');
@@ -93,13 +93,16 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     return toolResult(output);
   });
   server.registerTool('tracecheck_preview', {
-    description: 'Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review.',
+    description: 'Collect bounded evidence for all change packets and source checks. Local only; no Jev request. Returns a snapshot token required by tracecheck_review and the number of provider requests that review would make.',
     inputSchema: z.object(scope),
     outputSchema: z.object({
       snapshot: z.string(),
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
       files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
-      candidates: z.number(), limitations: z.array(z.string()), notes: z.array(z.string()),
+      candidates: z.number(), limitations: z.array(z.string()),
+      notes: z.array(z.string()).describe(`Caveats that never affect the status, including any task or repository context taken from the repository's ${CONFIG_FILE}.`),
+      estimate: z.object({ requests: z.number(), inputBytes: z.number() })
+        .describe('Provider requests tracecheck_review would make and their serialized evidence and question bytes.'),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args, ctx) => {
@@ -109,18 +112,20 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     previewScopes.set(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
-      candidates: plan.candidates.length, limitations: plan.limitations, notes: plan.notes };
+      candidates: plan.candidates.length, limitations: plan.limitations, notes: [...plan.notes, ...settings.settingsFileNotes], estimate: estimateReview(plan) };
     return toolResult(output);
   });
   server.registerTool('tracecheck_review', {
     description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
-    inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
+    inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
+      maxRequests: maxRequestsSchema.optional().describe(`Most provider requests this review may make; a larger review is refused before any request. Defaults to ${CONFIG_FILE}, which may only lower it, then ${DEFAULT_MAX_REQUESTS}. Compare with the preview estimate.`),
+      previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
     outputSchema: z.object({ cached: z.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   }, async (args, ctx) => {
     const progress = progressFor(ctx);
     const effective = await resolveSettings(await target(args.repo), args, ctx.mcpReq.signal);
-    const { reviewTimeoutMs, request: collectionRequest } = effective;
+    const { reviewTimeoutMs, maxRequests, request: collectionRequest } = effective;
     const signal = AbortSignal.any([ctx.mcpReq.signal,
       deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise reviewTimeoutMs to allow more time.`)]);
     const discovery = previewScopes.get(args.snapshot);
@@ -134,7 +139,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     const cached = report !== undefined;
     if (!report) {
       report = await reviewAll(plan, evaluatorFactory?.(signal) ?? new Jev({ ...settings, signal }),
-        { signal, concurrency: settings.concurrency, onProgress: progress?.review.requests });
+        { signal, concurrency: settings.concurrency, maxRequests, onProgress: progress?.review.requests });
       signal.throwIfAborted();
       progress?.review.checking();
       const current = await collect({ ...collectionRequest, repo: plan.root, discovery, signal });
@@ -145,6 +150,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     }
     const compared = structuredClone(report);
     applyPreviousEvaluation(compared, args.previousEvaluation);
+    compared.notes.push(...effective.settingsFileNotes);
     const output = { cached, report: compared };
     await progress?.sent();
     return toolResult(output);

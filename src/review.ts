@@ -214,6 +214,23 @@ function planPacket(plan: ReviewPlan, evidence: PacketEvidence, broad?: Record<s
   return requests;
 }
 
+/** Every packet with its evidence limitations, and the provider requests a review of `plan` sends, in plan order. */
+function planReview(plan: ReviewPlan, broad: Record<string, Question> | undefined) {
+  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
+  return { packets, requests: packets.filter(hasSourceEvidence).flatMap(evidence => planPacket(plan, evidence, broad)) };
+}
+
+/** Planned provider requests and their serialized state and question bytes; retries are not counted. */
+export type ReviewEstimate = { requests: number; inputBytes: number };
+
+const estimateOf = (requests: PlannedRequest[]): ReviewEstimate =>
+  ({ requests: requests.length, inputBytes: requests.reduce((total, request) => total + jsonBytes({ state: request.state, questions: request.questions }), 0) });
+
+/** What reviewAll would send for `plan`, from the same planner, so the estimate matches the review's request count. */
+export function estimateReview(plan: ReviewPlan): ReviewEstimate {
+  return estimateOf(planReview(plan, qualityQuestions()).requests);
+}
+
 /** Coverage gaps keep a report from `no_findings`; notes never do. */
 function reportStatus(decisions: Decision[], limitations: string[]): Report['status'] {
   return decisions.some(item => item.status === 'supported') ? 'needs_attention'
@@ -300,6 +317,8 @@ export type ReviewOptions = {
   concurrency?: number;
   /** Called with 0 once the requests are planned, then once per finished request with the number finished so far. */
   onProgress?: (completed: number, total: number) => void;
+  /** Most provider requests the plan may contain; a larger plan is refused before any request is sent. */
+  maxRequests?: number;
 };
 
 /**
@@ -311,10 +330,13 @@ export type ReviewOptions = {
 async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: Record<string, Question> | undefined,
   options: ReviewOptions & { previousEvaluation?: PreviousEvaluation }): Promise<Report> {
   const started = Date.now();
-  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress } = options;
+  const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress, maxRequests } = options;
   if (!Number.isSafeInteger(concurrency) || concurrency < 1) throw new Error('Review concurrency must be a positive whole number.');
-  const packets = resolvePacketEvidence(plan).map(withEvidenceLimitations);
-  const requests = packets.filter(hasSourceEvidence).flatMap(evidence => planPacket(plan, evidence, broad));
+  const { packets, requests } = planReview(plan, broad);
+  if (maxRequests !== undefined && requests.length > maxRequests) {
+    const { inputBytes } = estimateOf(requests);
+    throw new Error(`Review would make ${requests.length} provider requests, over the budget of ${maxRequests}, and send about ${inputBytes} bytes of evidence and questions. No request was sent. Narrow the change or raise the budget with --max-requests or the MCP maxRequests argument.`);
+  }
   const outcomes = await evaluateAll(evaluator, requests, concurrency, signal, onProgress);
   signal?.throwIfAborted();
 

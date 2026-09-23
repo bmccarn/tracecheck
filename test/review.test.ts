@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { isIncomplete, review, reviewAll, render } from '../src/review.js';
+import { estimateReview, isIncomplete, review, reviewAll, render } from '../src/review.js';
 import { compare } from '../src/history.js';
 import { reportSchema } from '../src/schema.js';
 import type { Report, ReviewPlan, TypedEvaluator } from '../src/domain.js';
@@ -190,6 +190,24 @@ test('keeps provider requests in flight within the configured limit', async () =
     assert.equal(report.usage.requests, 9);
   }
   await assert.rejects(reviewAll(plan, fixtureEvaluator(), { concurrency: 0 }), /positive whole number/);
+});
+
+test('a review over its request budget is refused before any provider request, and the estimate matches a review within it', async () => {
+  // Twelve candidates split the first packet into two requests, so the estimate counts requests, not packets.
+  const plan = packetPlan(3);
+  const extra = Array.from({ length: 11 }, (_, index) => ({ ...plan.candidates[0]!, id: `candidate-0-${index}` }));
+  plan.candidates.push(...extra);
+  plan.packets[0]!.candidateIds.push(...extra.map(candidate => candidate.id));
+  const estimate = estimateReview(plan);
+  assert.equal(estimate.requests, 4);
+  let calls = 0;
+  const counting: TypedEvaluator = { async evaluate(_state, questions) { calls++; return typedFixture(questions); } };
+  await assert.rejects(reviewAll(plan, counting, { maxRequests: estimate.requests - 1 }),
+    new RegExp(`^Error: Review would make ${estimate.requests} provider requests, over the budget of ${estimate.requests - 1}`));
+  assert.equal(calls, 0);
+  const report = await reviewAll(plan, counting, { maxRequests: estimate.requests });
+  assert.equal(report.usage.requests, estimate.requests);
+  assert.equal(calls, estimate.requests);
 });
 
 test('a concurrent review matches the sequential review apart from timings', async () => {
