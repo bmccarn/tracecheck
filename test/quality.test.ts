@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { assess, qualityQuestions, transformQuality, qualityInputSchema } from '../src/quality.js';
+import { assess, qualityQuestions, renderQuality, transformQuality, qualityInputSchema } from '../src/quality.js';
 import { dimensions } from '../src/quality/dimensions.js';
 import { reviewAll } from '../src/review.js';
 import { typedFixture, planFor } from './helpers.js';
@@ -20,7 +20,7 @@ test('retains the complete 19-dimension baseline and four conditional dimensions
 test('normalizes independent scores and withholds scores without sufficient context', async () => {
   const response = await baseline();
   response.answers.quality_performance_relevance = { type: 'noul', noul: 0.1 };
-  response.answers.quality_correctness_applicability = { type: 'noul', noul: 0.5 };
+  response.answers.quality_correctness_applicability = { type: 'noul', noul: 0.45 };
   const evaluation = transformQuality(response, 'scope', 'snapshot');
   assert.equal(evaluation.metrics.readability!.score, 8);
   assert.equal(evaluation.metrics.performance!.status, 'not_applicable');
@@ -28,6 +28,21 @@ test('normalizes independent scores and withholds scores without sufficient cont
   assert.equal(evaluation.metrics.correctness!.status, 'uncertain');
   assert.equal(evaluation.metrics.correctness!.score, undefined);
   assert.equal('overallScore' in evaluation, false);
+});
+
+test('scores a relevant dimension once evidence sufficiency reaches 0.5 and score confidence reaches 0.4', async () => {
+  const response = await baseline();
+  response.answers.quality_correctness_applicability = { type: 'noul', noul: 0.5 };
+  const score = response.answers.quality_correctness_score;
+  if (score?.type !== 'score') throw new Error('Fixture score missing');
+  score.confidence = 0.4;
+  assert.equal(transformQuality(response, 'scope', 'snapshot').metrics.correctness!.status, 'assessed');
+  score.confidence = 0.39;
+  const withheld = transformQuality(response, 'scope', 'snapshot');
+  assert.equal(withheld.metrics.correctness!.status, 'uncertain');
+  assert.match(renderQuality(withheld), /\d+ of 19 dimensions scored/);
+  response.answers.quality_correctness_relevance = { type: 'noul', noul: 0.79 };
+  assert.equal(transformQuality(response, 'scope', 'snapshot').metrics.correctness!.score, undefined);
 });
 
 test('an actionable concern survives a high score; confidence controls actionability', async () => {

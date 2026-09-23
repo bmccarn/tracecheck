@@ -20,9 +20,9 @@ The collector retains current and baseline source, one hop of supported JS/TS an
 
 ## Quality policy
 
-All 19 dimensions are considered; performance, scalability, compatibility, and observability require evidence of relevance. Separate relevance and evidence sufficiency judgments must both be >= 0.8 to permit a score. The compatibility applicability field is their minimum, not a product. Rubric version 2 is not numerically compared with version 1. Lower values produce unassessed or uncertain states. This is stricter than the binary 0.5 cutoff of the earlier `jev_review` tool, and it is a deliberate, provisional policy requiring calibration.
+All 19 dimensions are considered; performance, scalability, compatibility, and observability require evidence of relevance. A score requires a relevance judgment of at least 0.8 and an evidence-sufficiency judgment of at least 0.5. The compatibility applicability field is the minimum of the two, not a product. Lower values produce unassessed or uncertain states. The gates live in `src/policy.ts` and come from a labeled calibration against the live model; see [the calibration results](calibration.md). Reports from different rubric versions are not numerically compared; rubric version 3 introduced these gates.
 
-A Score is converted from Jev's zero-based ten-level rubric to a 1–10 value. Its confidence is preserved separately from applicability. Scores with confidence below 0.6 remain explicitly uncertain. Concerns require Choice confidence >= 0.6 and selected probability >= 0.8 to become actionable priorities. An evaluation lists at most five priorities, ordered by dimension importance and then by lowest score; further actionable concerns stay on their dimensions but are not listed as priorities. A high score cannot suppress an actionable concern.
+A Score is converted from Jev's zero-based ten-level rubric to a 1–10 value. Its confidence is preserved separately from applicability. Scores with confidence below 0.4 remain explicitly uncertain. Concerns require Choice confidence >= 0.6 and selected probability >= 0.8 to become actionable priorities. An evaluation lists at most five priorities, ordered by dimension importance and then by lowest score; further actionable concerns stay on their dimensions but are not listed as priorities. A high score cannot suppress an actionable concern.
 
 There is no overall grade. Priority importance is not a verified defect severity. Suggested actions are static next steps associated with selected concerns, not model-generated patches. Generic quality concerns are distinguished from source-anchored defect hypotheses.
 
@@ -34,7 +34,7 @@ Previous evaluations are compared locally, never included as current implementat
 
 Three candidate families currently exist: division/remainder, catch handlers, and JSON.parse boundaries in changed JS/TS functions. Syntax selects opportunities for review, not proven bugs. Each candidate includes an exact source quote, symbol, and lines. Jev evaluates support and impact separately.
 
-Support or rejection requires selected probability >= 0.8 and confidence >= 0.6. Other decisions remain uncertain or need context. Low-confidence impact becomes unknown. These are provisional thresholds. A parser quote establishes where the hypothesis applies, not a verified witness or complete evidence chain.
+Support or rejection requires selected probability of at least 0.7 and confidence of at least 0.6. Other decisions remain uncertain or need context, and the Markdown report says which way the model leaned and how far it fell short. Low-confidence impact becomes unknown. Policy version 3 introduced these gates after the [calibration](calibration.md); reports from other policy versions are not compared. A parser quote establishes where the hypothesis applies, not a verified witness or complete evidence chain.
 
 Candidate identities use path, symbol, check, normalized expression, and duplicate occurrence. Moving a line retains identity. Changing an expression may change identity. Finding history uses still-present, no-longer-supported, unresolved, and not-reassessed states. No transition claims a verified fix.
 

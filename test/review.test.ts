@@ -28,6 +28,23 @@ test('uncertain negatives and missing context cannot produce a no-findings resul
   assert.equal((await review(planFor(), fixtureEvaluator('not_supported'))).status, 'no_findings');
 });
 
+test('a finding needs probability of at least 0.70 and confidence of at least 0.60, and near misses say how close they came', async () => {
+  const judged = (probability: number, confidence: number) => ({ async evaluate(_state: unknown, questions: Record<string, import('../src/domain.js').Choice>) {
+    return { model: 'offline-fixture-not-jev', usage: { input_tokens: 0, output_tokens: 0 },
+      answers: Object.fromEntries(Object.entries(questions).map(([id, question]) => {
+        const keys = Object.keys(question.criteria);
+        const selected = id.endsWith('_impact') ? 'medium' : 'supported';
+        const rest = (1 - probability) / (keys.length - 1);
+        return [id, { type: 'choice' as const, choice: selected, confidence, probabilities: Object.fromEntries(keys.map(key => [key, key === selected ? probability : rest])) }];
+      })) };
+  } });
+  assert.equal((await review(planFor(), judged(0.7, 0.6))).decisions[0]!.status, 'supported');
+  const nearMiss = await review(planFor(), judged(0.69, 0.6));
+  assert.equal(nearMiss.decisions[0]!.status, 'uncertain');
+  assert.match(render(nearMiss), /leaned toward supported, but a decision needs probability of at least 0\.70 and confidence of at least 0\.60/);
+  assert.equal((await review(planFor(), judged(0.9, 0.59))).decisions[0]!.status, 'uncertain');
+});
+
 test('omitted context and zero candidates do not create a clean bill of health', async () => {
   const plan = planFor(); plan.limitations.push('File budget exhausted: caller.ts');
   assert.equal((await review(plan, fixtureEvaluator('not_supported'))).status, 'inconclusive');
