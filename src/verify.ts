@@ -1,10 +1,10 @@
 import { z } from 'zod';
-import { realpath } from 'node:fs/promises';
-import { isAbsolute } from 'node:path';
+import { lstat, realpath } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { hash, type TypedEvaluator, type Answer } from './domain.js';
 import { reportSchema } from './schema.js';
 import { review } from './review.js';
-import { assertSafeOutbound, readSource } from './safety.js';
+import { assertSafeOutbound, MAX_SOURCE_BYTES, readSource } from './safety.js';
 
 /** UTF-8 bytes of evidence content one verification may send; request preflights are also byte based. */
 const MAX_EVIDENCE_BYTES = 60_000;
@@ -29,6 +29,31 @@ export const verificationOutputSchema = z.object({
 });
 export type VerificationInput = z.input<typeof verificationInputSchema>;
 
+const UNBIND = 'or omit the repository binding to verify caller-supplied evidence';
+
+/**
+ * Reads the file one evidence item cites. A failure names the evidence ID and its repository-relative path and
+ * never quotes system error text, which carries absolute paths.
+ */
+async function readEvidence(root: string, item: { id: string; path: string }, signal?: AbortSignal): Promise<string> {
+  try {
+    return await readSource(root, item.path, signal);
+  } catch (error) {
+    signal?.throwIfAborted();
+    const code = (error as NodeJS.ErrnoException).code;
+    const reason = error instanceof Error && !code ? error.message : undefined;
+    // realpath reports a dangling symlink as missing; name it as the symlink it is.
+    const dangling = code === 'ENOENT' && await lstat(resolve(root, item.path)).then(stat => stat.isSymbolicLink(), () => false);
+    const problem = dangling || reason === 'Symlink or external path' ? `is a symlink or resolves outside the repository. Cite the file by its own path inside the repository, ${UNBIND}`
+      : code === 'ENOENT' || code === 'ENOTDIR' ? `was not found in the repository. Correct the path, ${UNBIND}`
+      : reason === 'Nonregular file' ? `is a directory or other non-regular file. Cite a file, ${UNBIND}`
+      : reason === 'Oversized file' ? `is larger than the ${MAX_SOURCE_BYTES}-byte limit for a local file. Omit the repository binding to verify caller-supplied evidence`
+      : reason === 'File changed during collection' ? 'changed while it was read. Re-read the referenced lines and verify again'
+      : `is an unreadable file. Check its permissions, ${UNBIND}`;
+    throw new Error(`Evidence ${item.id} (${item.path}) ${problem}.`);
+  }
+}
+
 /** The agent chooses the concern and evidence; code checks provenance and freshness. */
 export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, signal?: AbortSignal) {
   const input = verificationInputSchema.parse(raw);
@@ -45,17 +70,17 @@ export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, 
   if (start < 0 || end <= start || end > target.content.split('\n').length
     || target.content.split('\n').slice(start, end).join('\n') !== input.target.quote) throw new Error('Target quote does not match the supplied original line range.');
   const root = input.repo ? await realpath(input.repo) : undefined;
-  const captured = new Map<string, string>();
+  const captured = new Map<string, { id: string; content: string }>();
   for (const item of input.evidence) {
     signal?.throwIfAborted();
     if (!root) continue;
-    if (isAbsolute(item.path) || item.path.split(/[\\/]/).includes('..')) throw new Error('Evidence paths must be repository-relative.');
-    const content = captured.get(item.path) ?? await readSource(root, item.path, signal);
-    captured.set(item.path, content);
+    if (isAbsolute(item.path) || item.path.split(/[\\/]/).includes('..')) throw new Error(`Evidence ${item.id}: paths must be repository-relative.`);
+    const content = captured.get(item.path)?.content ?? await readEvidence(root, item, signal);
+    if (!captured.has(item.path)) captured.set(item.path, { id: item.id, content });
     const excerpt = content.split('\n').slice(item.startLine - 1, item.startLine - 1 + item.content.split('\n').length).join('\n');
-    if (excerpt !== item.content) throw new Error('Evidence differs from local source. Re-read the referenced lines.');
+    if (excerpt !== item.content) throw new Error(`Evidence ${item.id} (${item.path}) differs from local source. Re-read the referenced lines.`);
   }
-  const snapshot = hash({ ...input, repo: root, digests: [...captured].map(([path, content]) => [path, hash(content)]) });
+  const snapshot = hash({ ...input, repo: root, digests: [...captured].map(([path, { content }]) => [path, hash(content)]) });
   const excerpts = new Map<string, string[]>();
   for (const item of input.evidence) {
     const parts = excerpts.get(item.path) ?? [];
@@ -87,7 +112,9 @@ export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, 
     return { ...response, answers };
   } }, { signal });
   signal?.throwIfAborted();
-  for (const [path, content] of captured) if (await readSource(root!, path, signal) !== content) throw new Error('Evidence changed during verification. Re-read and verify again.');
+  for (const [path, { id, content }] of captured) {
+    if (await readEvidence(root!, { id, path }, signal) !== content) throw new Error(`Evidence ${id} (${path}) changed during verification. Re-read and verify again.`);
+  }
   const status = report.decisions[0]!.status;
   return verificationOutputSchema.parse({ schemaVersion: 1, snapshot, provenance: root ? 'local_files_checked' : 'caller_supplied', report,
     nextAction: status === 'supported' ? 'investigate_supported_concern' : status === 'not_supported' ? 'inspect_counterevidence' : 'gather_evidence',

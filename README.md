@@ -211,7 +211,7 @@ node dist/plugin.mjs verify --input evidence.json --repo /path/to/project \
   --out .tracecheck/verification.json
 ```
 
-The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
+The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
 
 ### Compare implementation checkpoints
 

@@ -4511,7 +4511,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve5) {
+function isRecursive(inst, stack, resolve6) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -4521,7 +4521,7 @@ function isRecursive(inst, stack, resolve5) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve5);
+      const answer = isRecursive(child, stack, resolve6);
       if (answer > result)
         result = answer;
     }
@@ -4532,7 +4532,7 @@ function isRecursive(inst, stack, resolve5) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve5) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -4596,7 +4596,7 @@ function isRecursive(inst, stack, resolve5) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve5 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -20446,10 +20446,10 @@ function isInside(root, path) {
 function failureReason(error62, fallback) {
   return error62 instanceof Error && !("code" in error62) && NAMED_FAILURE.test(error62.message) ? error62.message : fallback;
 }
-async function readSource(root, path, signal, maxBytes = 256e3) {
+async function readSource(root, path, signal, maxBytes = MAX_SOURCE_BYTES) {
   return (await readSourceFile(root, path, signal, maxBytes)).content;
 }
-async function readSourceFile(root, path, signal, maxBytes = 256e3) {
+async function readSourceFile(root, path, signal, maxBytes = MAX_SOURCE_BYTES) {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   const physical = await realpath(absolute);
@@ -20457,7 +20457,8 @@ async function readSourceFile(root, path, signal, maxBytes = 256e3) {
   const file2 = await open2(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file2.stat();
-    if (!before.isFile() || before.size > maxBytes) throw new Error("Nonregular or oversized file");
+    if (!before.isFile()) throw new Error("Nonregular file");
+    if (before.size > maxBytes) throw new Error("Oversized file");
     const buffer = Buffer.alloc(before.size + 1);
     let size = 0;
     while (size < buffer.length) {
@@ -20478,7 +20479,7 @@ async function readSourceFile(root, path, signal, maxBytes = 256e3) {
     await file2.close();
   }
 }
-var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE, NAMED_FAILURE;
+var PRIVATE_KEY, PROVIDER_TOKEN, ASSIGNMENT, URL_PASSWORD, REFERENCE, NAMED_FAILURE, MAX_SOURCE_BYTES;
 var init_safety = __esm({
   "src/safety.ts"() {
     "use strict";
@@ -20503,6 +20504,7 @@ var init_safety = __esm({
     URL_PASSWORD = /\b[a-z][a-z0-9+.-]{0,31}:\/\/[^\s:@/?#"'`]*:([^\s@/?#"'`]+)@/gi;
     REFERENCE = /^[$%{<[*(]|\$\{|\{\{|<%|\.\.\.|…/;
     NAMED_FAILURE = /Symlink|external path|Nonregular|oversized|credential|Binary|changed during|Base version unavailable/i;
+    MAX_SOURCE_BYTES = 256e3;
   }
 });
 
@@ -21573,8 +21575,20 @@ var init_review = __esm({
 });
 
 // src/verify.ts
-import { realpath as realpath2 } from "node:fs/promises";
-import { isAbsolute as isAbsolute2 } from "node:path";
+import { lstat as lstat2, realpath as realpath2 } from "node:fs/promises";
+import { isAbsolute as isAbsolute2, resolve as resolve2 } from "node:path";
+async function readEvidence(root, item, signal) {
+  try {
+    return await readSource(root, item.path, signal);
+  } catch (error62) {
+    signal?.throwIfAborted();
+    const code2 = error62.code;
+    const reason = error62 instanceof Error && !code2 ? error62.message : void 0;
+    const dangling = code2 === "ENOENT" && await lstat2(resolve2(root, item.path)).then((stat) => stat.isSymbolicLink(), () => false);
+    const problem = dangling || reason === "Symlink or external path" ? `is a symlink or resolves outside the repository. Cite the file by its own path inside the repository, ${UNBIND}` : code2 === "ENOENT" || code2 === "ENOTDIR" ? `was not found in the repository. Correct the path, ${UNBIND}` : reason === "Nonregular file" ? `is a directory or other non-regular file. Cite a file, ${UNBIND}` : reason === "Oversized file" ? `is larger than the ${MAX_SOURCE_BYTES}-byte limit for a local file. Omit the repository binding to verify caller-supplied evidence` : reason === "File changed during collection" ? "changed while it was read. Re-read the referenced lines and verify again" : `is an unreadable file. Check its permissions, ${UNBIND}`;
+    throw new Error(`Evidence ${item.id} (${item.path}) ${problem}.`);
+  }
+}
 async function verify(raw, evaluator, signal) {
   const input2 = verificationInputSchema.parse(raw);
   assertSafeOutbound(input2);
@@ -21593,13 +21607,13 @@ async function verify(raw, evaluator, signal) {
   for (const item of input2.evidence) {
     signal?.throwIfAborted();
     if (!root) continue;
-    if (isAbsolute2(item.path) || item.path.split(/[\\/]/).includes("..")) throw new Error("Evidence paths must be repository-relative.");
-    const content = captured.get(item.path) ?? await readSource(root, item.path, signal);
-    captured.set(item.path, content);
+    if (isAbsolute2(item.path) || item.path.split(/[\\/]/).includes("..")) throw new Error(`Evidence ${item.id}: paths must be repository-relative.`);
+    const content = captured.get(item.path)?.content ?? await readEvidence(root, item, signal);
+    if (!captured.has(item.path)) captured.set(item.path, { id: item.id, content });
     const excerpt = content.split("\n").slice(item.startLine - 1, item.startLine - 1 + item.content.split("\n").length).join("\n");
-    if (excerpt !== item.content) throw new Error("Evidence differs from local source. Re-read the referenced lines.");
+    if (excerpt !== item.content) throw new Error(`Evidence ${item.id} (${item.path}) differs from local source. Re-read the referenced lines.`);
   }
-  const snapshot = hash2({ ...input2, repo: root, digests: [...captured].map(([path, content]) => [path, hash2(content)]) });
+  const snapshot = hash2({ ...input2, repo: root, digests: [...captured].map(([path, { content }]) => [path, hash2(content)]) });
   const excerpts = /* @__PURE__ */ new Map();
   for (const item of input2.evidence) {
     const parts = excerpts.get(item.path) ?? [];
@@ -21653,7 +21667,9 @@ ${item.content}`);
     return { ...response, answers };
   } }, { signal });
   signal?.throwIfAborted();
-  for (const [path, content] of captured) if (await readSource(root, path, signal) !== content) throw new Error("Evidence changed during verification. Re-read and verify again.");
+  for (const [path, { id, content }] of captured) {
+    if (await readEvidence(root, { id, path }, signal) !== content) throw new Error(`Evidence ${id} (${path}) changed during verification. Re-read and verify again.`);
+  }
   const status = report.decisions[0].status;
   return verificationOutputSchema.parse({
     schemaVersion: 1,
@@ -21664,7 +21680,7 @@ ${item.content}`);
     missingEvidence: missing && missing.confidence >= 0.6 && (missing.probabilities[missing.choice] ?? 0) >= 0.8 ? missing.choice : "unspecified"
   });
 }
-var MAX_EVIDENCE_BYTES, evidenceSchema, verificationInputSchema, verificationOutputSchema;
+var MAX_EVIDENCE_BYTES, evidenceSchema, verificationInputSchema, verificationOutputSchema, UNBIND;
 var init_verify = __esm({
   "src/verify.ts"() {
     "use strict";
@@ -21697,6 +21713,7 @@ var init_verify = __esm({
       nextAction: external_exports.enum(["investigate_supported_concern", "inspect_counterevidence", "gather_evidence"]),
       missingEvidence: external_exports.enum(["contract", "caller", "handling", "test", "none", "unspecified"])
     });
+    UNBIND = "or omit the repository binding to verify caller-supplied evidence";
   }
 });
 
@@ -36083,7 +36100,7 @@ var init_collection_options = __esm({
 // src/git-context.ts
 import { execFile, spawn } from "node:child_process";
 import { realpath as realpath3 } from "node:fs/promises";
-import { resolve as resolve2 } from "node:path";
+import { resolve as resolve3 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 function patchRange(start, count) {
@@ -36116,7 +36133,7 @@ async function gitOutput(root, args, options = {}) {
 async function gitRoot(repo, options = {}) {
   let output2;
   try {
-    output2 = await gitOutput(resolve2(repo), ["rev-parse", "--show-toplevel"], options);
+    output2 = await gitOutput(resolve3(repo), ["rev-parse", "--show-toplevel"], options);
   } catch (error62) {
     options.signal?.throwIfAborted();
     const reason = error62 instanceof Error && "stderr" in error62 && typeof error62.stderr === "string" ? error62.stderr.match(/^fatal: (.+)$/m)?.[1] : void 0;
@@ -36127,7 +36144,7 @@ async function gitRoot(repo, options = {}) {
 }
 async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
   signal.throwIfAborted();
-  await new Promise((resolve5, reject) => {
+  await new Promise((resolve6, reject) => {
     const child = spawn("git", ["--literal-pathspecs", ...SAFE_CONFIGURATION, "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
     let settled = false;
     let output2 = Promise.resolve();
@@ -36138,7 +36155,7 @@ async function streamGit(root, args, signal, onData, input2, failure2 = "Git con
       if (error62) {
         child.kill();
         reject(error62);
-      } else resolve5();
+      } else resolve6();
     };
     const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
     signal.addEventListener("abort", abort, { once: true });
@@ -36745,20 +36762,20 @@ var init_path_aliases = __esm({
 });
 
 // src/import-index.ts
-import { lstat as lstat2, realpath as realpath4 } from "node:fs/promises";
-import { posix as posix3, resolve as resolve3 } from "node:path";
+import { lstat as lstat3, realpath as realpath4 } from "node:fs/promises";
+import { posix as posix3, resolve as resolve4 } from "node:path";
 function fingerprintMatches(left, right) {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 async function metadata(root, path, signal) {
   signal?.throwIfAborted();
-  const absolute = resolve3(root, path);
+  const absolute = resolve4(root, path);
   if (!isInside(root, absolute)) throw new Error("External path");
-  const logical = await lstat2(absolute);
+  const logical = await lstat3(absolute);
   if (logical.isSymbolicLink()) throw new Error("Symlink or external path");
   const physical = await realpath4(absolute);
   if (!isInside(root, physical)) throw new Error("External path");
-  const current = await lstat2(physical);
+  const current = await lstat3(physical);
   if (!current.isFile() || current.isSymbolicLink()) throw new Error("Nonregular file");
   return { physical, dev: current.dev, ino: current.ino, size: current.size, mtimeMs: current.mtimeMs, ctimeMs: current.ctimeMs };
 }
@@ -36791,7 +36808,7 @@ function boundedCache(root, cache) {
 async function buildImportIndex(options) {
   options.signal?.throwIfAborted();
   const physicalRoot = await realpath4(options.root);
-  const rootStat = await lstat2(physicalRoot);
+  const rootStat = await lstat3(physicalRoot);
   const rootIdentity = `${physicalRoot}\0${rootStat.dev}\0${rootStat.ino}`;
   const paths = [...new Set(options.paths)].sort();
   const universe = paths.join("\0");
@@ -36865,8 +36882,8 @@ async function buildImportIndex(options) {
       const path = candidates[position];
       const previous = admitted;
       let release;
-      admitted = new Promise((resolve5) => {
-        release = resolve5;
+      admitted = new Promise((resolve6) => {
+        release = resolve6;
       });
       let admission;
       try {
@@ -40979,14 +40996,14 @@ function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
 }
 function sleep(ms, signal) {
-  return new Promise((resolve5, reject) => {
+  return new Promise((resolve6, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof SdkError ? signal.reason : new SdkError(SdkErrorCode.RequestTimeout, String(signal.reason)));
       return;
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
-      resolve5();
+      resolve6();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
@@ -42778,7 +42795,7 @@ var init_src_CX2iR2pK = __esm({
         const flowStartedAt = Date.now();
         let onAbort;
         let cleanupMessageId;
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve6, reject) => {
           const earlyReject = (error62) => {
             reject(error62);
           };
@@ -42846,7 +42863,7 @@ var init_src_CX2iR2pK = __esm({
             }
             if (decoded.kind === "invalid") return reject(decoded.error);
             if (decoded.kind === "input_required") {
-              if (options?.allowInputRequired === true) return resolve5(manualInputRequiredValue(decoded));
+              if (options?.allowInputRequired === true) return resolve6(manualInputRequiredValue(decoded));
               const flow2 = {
                 codec: codec2,
                 request,
@@ -42858,11 +42875,11 @@ var init_src_CX2iR2pK = __esm({
                   params
                 }, resultSchema, legOptions)
               };
-              return resolve5(this._resolveNonCompleteResult(decoded, flow2));
+              return resolve6(this._resolveNonCompleteResult(decoded, flow2));
             }
             const result = decoded.result;
             validateStandardSchema(resultSchema, result).then((parseResult) => {
-              if (parseResult.success) resolve5(parseResult.data);
+              if (parseResult.success) resolve6(parseResult.data);
               else reject(new SdkError(SdkErrorCode.InvalidResult, `Invalid result for ${request.method}: ${parseResult.error}`));
             }, reject);
           });
@@ -45678,7 +45695,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
         const schOrFunc = root.refs[ref];
         if (schOrFunc) return schOrFunc;
-        let _sch = resolve5.call(this, root, ref);
+        let _sch = resolve6.call(this, root, ref);
         if (_sch === void 0) {
           const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
           const { schemaId } = this.opts;
@@ -45704,7 +45721,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       function sameSchemaEnv(s1, s2) {
         return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
       }
-      function resolve5(root, ref) {
+      function resolve6(root, ref) {
         let sch;
         while (typeof (sch = this.refs[ref]) == "string") ref = sch;
         return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
@@ -46154,7 +46171,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         else if (typeof uri === "object") uri = parse4(serialize(uri, options), options);
         return uri;
       }
-      function resolve5(baseURI, relativeURI, options) {
+      function resolve6(baseURI, relativeURI, options) {
         const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
         const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
         schemelessOptions.skipEscape = true;
@@ -46328,7 +46345,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const fastUri = {
         SCHEMES,
         normalize,
-        resolve: resolve5,
+        resolve: resolve6,
         resolveComponent,
         equal,
         serialize,
@@ -51527,7 +51544,7 @@ var init_stdio = __esm({
       }
       send(message) {
         if (this._closed) return Promise.reject(/* @__PURE__ */ new Error("StdioServerTransport is closed"));
-        return new Promise((resolve5, reject) => {
+        return new Promise((resolve6, reject) => {
           const json2 = serializeMessage(message);
           let settled = false;
           const onError = (error62) => {
@@ -51542,14 +51559,14 @@ var init_stdio = __esm({
             settled = true;
             this._stdout.off("error", onError);
             this._stdout.off("drain", onDrain);
-            resolve5();
+            resolve6();
           };
           this._stdout.once("error", onError);
           if (this._stdout.write(json2)) {
             if (settled) return;
             settled = true;
             this._stdout.off("error", onError);
-            resolve5();
+            resolve6();
           } else if (!settled) this._stdout.once("drain", onDrain);
         });
       }
@@ -51764,7 +51781,7 @@ init_review();
 init_quality();
 import { parseArgs } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve as resolve4 } from "node:path";
+import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
 function compare(previous, current) {
@@ -51877,7 +51894,7 @@ function collectionOptions(values) {
   });
 }
 async function writeJson(file2, value) {
-  const destination = resolve4(file2);
+  const destination = resolve5(file2);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
 }
@@ -51998,7 +52015,7 @@ cannot hold credentials or the endpoint.`);
   }
   if (command === "mcp") {
     const { serve: serve2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-    await serve2(values.repo ? resolve4(values.repo) : void 0);
+    await serve2(values.repo ? resolve5(values.repo) : void 0);
     return;
   }
   if (command === "compare") {
