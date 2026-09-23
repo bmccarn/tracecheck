@@ -49,6 +49,7 @@
 - `--base` and the MCP `base` argument now compare against the merge base of the named ref and `HEAD`, so a base branch that has moved on no longer shows its newer work as your changes. Reports record the requested ref in `baseRef`.
 - Unknown refs, shallow clones without enough history, repositories with no commits, and directories that are not Git working trees give plain errors instead of raw Git command lines.
 - The CLI checks the provider key and the `--out` and `--sarif` destinations before collecting, prints the result before writing files, rejects unexpected positional arguments, names the flag and file in input errors, prints validation problems as one line per field, and exits 130 on Ctrl-C.
+- `compare` follows a finding into a renamed file when its check, symbol, and quoted code are unchanged, and decisions record the previous path. Preview notes staged changes that the working tree undoes and staged renames Git cannot pair; the README states that collection compares the base with the working tree.
 
 ## 0.3.0 — 2026-09-18
 
