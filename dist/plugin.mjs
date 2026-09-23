@@ -4511,7 +4511,7 @@ function isRef(value) {
 function cloneIssues(issues) {
   return issues.map((iss) => iss.path ? { ...iss, path: iss.path.slice() } : { ...iss });
 }
-function isRecursive(inst, stack, resolve7) {
+function isRecursive(inst, stack, resolve6) {
   const cached2 = recursive.get(inst);
   if (cached2 !== void 0)
     return cached2 ? PROVEN : NONE;
@@ -4521,7 +4521,7 @@ function isRecursive(inst, stack, resolve7) {
   let result = NONE;
   const check2 = (child) => {
     if (result !== PROVEN && child?._zod) {
-      const answer = isRecursive(child, stack, resolve7);
+      const answer = isRecursive(child, stack, resolve6);
       if (answer > result)
         result = answer;
     }
@@ -4532,7 +4532,7 @@ function isRecursive(inst, stack, resolve7) {
       const desc = Object.getOwnPropertyDescriptor(sh, key);
       if (spread && !desc.enumerable)
         continue;
-      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve7) : NONE;
+      const child = desc.get ? ASSUMED : desc.value?._zod ? isRecursive(desc.value, stack, resolve6) : NONE;
       if (child > answer)
         answer = child;
     }
@@ -4596,7 +4596,7 @@ function isRecursive(inst, stack, resolve7) {
       break;
     // `$ZodLazy` caches its inner on the def, so a resolved edge is followed exactly
     case "lazy": {
-      const inner = def._cachedInner ?? (resolve7 ? inst._zod.innerType : void 0);
+      const inner = def._cachedInner ?? (resolve6 ? inst._zod.innerType : void 0);
       merge2(inner ? isRecursive(inner, stack, false) : ASSUMED);
       break;
     }
@@ -21101,6 +21101,8 @@ var init_schema = __esm({
       root: external_exports.string(),
       base: external_exports.string(),
       head: external_exports.string(),
+      // The ref the review was asked to compare against; `base` is its merge base with HEAD. Reports saved by 0.3.x have none.
+      baseRef: external_exports.string().optional(),
       checkVersion: external_exports.string(),
       policyVersion: external_exports.string(),
       models: external_exports.array(external_exports.string()),
@@ -21329,6 +21331,7 @@ function reportFor(plan, started, decisions, models, limitations, notes, usage) 
     snapshot: plan.snapshot,
     root: plan.root,
     base: plan.base,
+    ...plan.baseRef ? { baseRef: plan.baseRef } : {},
     head: plan.head,
     checkVersion: CHECK_VERSION,
     policyVersion: POLICY_VERSION,
@@ -21506,7 +21509,7 @@ function render(report) {
     ...isStale(report) ? ["**Stale:** the reviewed evidence changed during the review. Run review again.", ""] : [],
     `**${report.status.replaceAll("_", " ")}**${packetSummary} \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
     "",
-    `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.map(markdownText).join(", ") || "not called"}`,
+    `Snapshot: ${report.snapshot.slice(0, 12)}${report.baseRef ? ` \xB7 Base: ${report.base.slice(0, 12)} (from ${markdownText(report.baseRef)})` : ""} \xB7 Models: ${report.models.map(markdownText).join(", ") || "not called"}`,
     "",
     `${report.quality || report.packetQualities ? "Broad review: all 19 quality dimensions per packet. " : ""}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`,
     ""
@@ -36096,6 +36099,8 @@ var init_collection_options = __esm({
 
 // src/git-context.ts
 import { execFile, spawn } from "node:child_process";
+import { realpath as realpath3 } from "node:fs/promises";
+import { resolve as resolve3 } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { promisify } from "node:util";
 function patchRange(start, count) {
@@ -36125,9 +36130,21 @@ function gitEnvironment() {
 async function gitOutput(root, args, options = {}) {
   return (await execGit("git", [...SAFE_CONFIGURATION, "-C", root, ...args], { ...options, env: gitEnvironment() })).stdout;
 }
+async function gitRoot(repo, options = {}) {
+  let output2;
+  try {
+    output2 = await gitOutput(resolve3(repo), ["rev-parse", "--show-toplevel"], options);
+  } catch (error62) {
+    options.signal?.throwIfAborted();
+    const reason = error62 instanceof Error && "stderr" in error62 && typeof error62.stderr === "string" ? error62.stderr.match(/^fatal: (.+)$/m)?.[1] : void 0;
+    if (!reason) throw error62;
+    throw new Error(`Cannot open ${repo} as a Git working tree: ${reason.replace(/\.$/, "")}.`);
+  }
+  return realpath3(output2.trim());
+}
 async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
   signal.throwIfAborted();
-  await new Promise((resolve7, reject) => {
+  await new Promise((resolve6, reject) => {
     const child = spawn("git", ["--literal-pathspecs", ...SAFE_CONFIGURATION, "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
     let settled = false;
     let output2 = Promise.resolve();
@@ -36138,7 +36155,7 @@ async function streamGit(root, args, signal, onData, input2, failure2 = "Git con
       if (error62) {
         child.kill();
         reject(error62);
-      } else resolve7();
+      } else resolve6();
     };
     const abort = () => finish(signal.reason instanceof Error ? signal.reason : new Error("Git context collection aborted"));
     signal.addEventListener("abort", abort, { once: true });
@@ -36745,18 +36762,18 @@ var init_path_aliases = __esm({
 });
 
 // src/import-index.ts
-import { lstat as lstat3, realpath as realpath3 } from "node:fs/promises";
-import { posix as posix3, resolve as resolve3 } from "node:path";
+import { lstat as lstat3, realpath as realpath4 } from "node:fs/promises";
+import { posix as posix3, resolve as resolve4 } from "node:path";
 function fingerprintMatches(left, right) {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 async function metadata(root, path, signal) {
   signal?.throwIfAborted();
-  const absolute = resolve3(root, path);
+  const absolute = resolve4(root, path);
   if (!isInside(root, absolute)) throw new Error("External path");
   const logical = await lstat3(absolute);
   if (logical.isSymbolicLink()) throw new Error("Symlink or external path");
-  const physical = await realpath3(absolute);
+  const physical = await realpath4(absolute);
   if (!isInside(root, physical)) throw new Error("External path");
   const current = await lstat3(physical);
   if (!current.isFile() || current.isSymbolicLink()) throw new Error("Nonregular file");
@@ -36790,7 +36807,7 @@ function boundedCache(root, cache) {
 }
 async function buildImportIndex(options) {
   options.signal?.throwIfAborted();
-  const physicalRoot = await realpath3(options.root);
+  const physicalRoot = await realpath4(options.root);
   const rootStat = await lstat3(physicalRoot);
   const rootIdentity = `${physicalRoot}\0${rootStat.dev}\0${rootStat.ino}`;
   const paths = [...new Set(options.paths)].sort();
@@ -36865,8 +36882,8 @@ async function buildImportIndex(options) {
       const path = candidates[position];
       const previous = admitted;
       let release;
-      admitted = new Promise((resolve7) => {
-        release = resolve7;
+      admitted = new Promise((resolve6) => {
+        release = resolve6;
       });
       let admission;
       try {
@@ -36940,8 +36957,39 @@ var init_import_index = __esm({
 });
 
 // src/collector.ts
-import { realpath as realpath4 } from "node:fs/promises";
-import { posix as posix4, resolve as resolve4 } from "node:path";
+import { posix as posix4 } from "node:path";
+async function lookup(git, root, args) {
+  try {
+    return (await git(root, args)).trim() || void 0;
+  } catch (error62) {
+    if (error62 instanceof Error && "code" in error62 && error62.code === 1) return void 0;
+    throw error62;
+  }
+}
+async function resolveBase(git, root, ref) {
+  const revParse = (name) => lookup(git, root, ["rev-parse", "--verify", "--quiet", "--end-of-options", name]);
+  const head = await revParse("HEAD^{commit}");
+  if (!head) throw new Error("The current branch has no commits yet, so there is nothing to compare against. Commit a baseline, then run Tracecheck again.");
+  const tip = await revParse(`${ref}^{commit}`);
+  if (!tip) {
+    if (await revParse(ref)) throw new Error(`Base ${ref} does not name a commit.`);
+    const remotes = (await git(root, ["remote"])).split("\n").filter(Boolean);
+    for (const remote2 of remotes) {
+      if (await revParse(`refs/remotes/${remote2}/${ref}^{commit}`)) throw new Error(`Base ${ref} was not found in this repository, but ${remote2}/${ref} was. Use ${remote2}/${ref} as the base.`);
+    }
+    const remote = remotes.find((name) => ref.startsWith(`${name}/`));
+    const fetch2 = remote ? `, for example with git fetch ${remote} ${ref.slice(remote.length + 1)},` : " with git fetch";
+    const shallow = (await git(root, ["rev-parse", "--is-shallow-repository"])).trim() === "true";
+    throw new Error(`Base ${ref} was not found in this repository. Check the name, or fetch it first${fetch2} and run Tracecheck again.${shallow ? " This is a shallow clone, which fetches only the checked-out branch unless told otherwise; fetch-depth: 0 on actions/checkout fetches every branch and its history." : ""}`);
+  }
+  if (tip === head) return { base: head, head, movedOn: false };
+  const base = await lookup(git, root, ["merge-base", tip, head]);
+  if (base) return { base, head, movedOn: base !== tip };
+  if ((await git(root, ["rev-parse", "--is-shallow-repository"])).trim() === "true") {
+    throw new Error(`Cannot find the commit where HEAD's history meets ${ref}: this is a shallow clone, and its history stops before that commit. Fetch more history, for example with fetch-depth: 0 on actions/checkout or git fetch --unshallow, and run Tracecheck again.`);
+  }
+  throw new Error(`HEAD and ${ref} share no history, so there is no commit to compare against. Pass a base that HEAD's history contains.`);
+}
 async function collect(options) {
   const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...options.signal ? [options.signal] : []]);
@@ -36949,9 +36997,10 @@ async function collect(options) {
     signal.throwIfAborted();
     return gitOutput(root2, args, { signal });
   };
-  const root = await realpath4((await git(resolve4(options.repo), ["rev-parse", "--show-toplevel"])).trim());
-  const base = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`])).trim();
-  const head = (await git(root, ["rev-parse", "HEAD"])).trim();
+  signal.throwIfAborted();
+  const root = await gitRoot(options.repo, { signal });
+  const baseRef = options.base ?? "HEAD";
+  const { base, head, movedOn } = await resolveBase(git, root, baseRef);
   const changed = [];
   const renames = /* @__PURE__ */ new Map();
   options.onPhase?.("Listing changed files");
@@ -36971,7 +37020,8 @@ async function collect(options) {
   const changePaths = [.../* @__PURE__ */ new Set([...changed, ...options.includeUntracked ? untracked : []])].sort();
   const limitations = [];
   const notes = [];
-  if (!changePaths.length) notes.push(`No changes against ${options.base ?? "HEAD"}; nothing to review.`);
+  if (movedOn) notes.push(`${baseRef} has commits that HEAD does not; the review compares against their merge base ${base.slice(0, 12)}, so changes made only on ${baseRef} are left out.`);
+  if (!changePaths.length) notes.push(`No changes against ${baseRef}; nothing to review.`);
   else notes.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
   if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
   const loaded = /* @__PURE__ */ new Map();
@@ -37272,8 +37322,8 @@ async function collect(options) {
   if ((await git(root, ["rev-parse", "HEAD"])).trim() !== head) throw new Error("Repository HEAD changed during collection; retry the preview.");
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
+  const snapshot = hash2({ root, base, baseRef, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
+  return { schemaVersion: 1, root, base, baseRef, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }
 var MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
 var init_collector = __esm({
@@ -37310,8 +37360,6 @@ var init_version = __esm({
 });
 
 // src/project-config.ts
-import { realpath as realpath5 } from "node:fs/promises";
-import { resolve as resolve5 } from "node:path";
 function beyondDefaults(config2) {
   return FILE_LIMITS.flatMap(({ path, limit, raise }) => {
     const value = path.reduce((item, key) => item?.[key], config2);
@@ -37345,7 +37393,7 @@ function parseProjectConfig(text) {
   throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
 }
 async function loadProjectConfig(repo, signal) {
-  const root = await realpath5((await gitOutput(resolve5(repo), ["rev-parse", "--show-toplevel"], { timeout: 1e4, signal })).trim());
+  const root = await gitRoot(repo, { timeout: 1e4, signal });
   let text;
   try {
     text = await readSource(root, CONFIG_FILE, signal, MAX_CONFIG_BYTES2);
@@ -40948,14 +40996,14 @@ function inputRequiredRoundsExceededMessage(method, maxRounds) {
   return `Multi-round-trip request '${method}' still required input after ${maxRounds} rounds (inputRequired.maxRounds)`;
 }
 function sleep(ms, signal) {
-  return new Promise((resolve7, reject) => {
+  return new Promise((resolve6, reject) => {
     if (signal?.aborted) {
       reject(signal.reason instanceof SdkError ? signal.reason : new SdkError(SdkErrorCode.RequestTimeout, String(signal.reason)));
       return;
     }
     const timer = setTimeout(() => {
       signal?.removeEventListener("abort", onAbort);
-      resolve7();
+      resolve6();
     }, ms);
     const onAbort = () => {
       clearTimeout(timer);
@@ -42747,7 +42795,7 @@ var init_src_CX2iR2pK = __esm({
         const flowStartedAt = Date.now();
         let onAbort;
         let cleanupMessageId;
-        return new Promise((resolve7, reject) => {
+        return new Promise((resolve6, reject) => {
           const earlyReject = (error62) => {
             reject(error62);
           };
@@ -42815,7 +42863,7 @@ var init_src_CX2iR2pK = __esm({
             }
             if (decoded.kind === "invalid") return reject(decoded.error);
             if (decoded.kind === "input_required") {
-              if (options?.allowInputRequired === true) return resolve7(manualInputRequiredValue(decoded));
+              if (options?.allowInputRequired === true) return resolve6(manualInputRequiredValue(decoded));
               const flow2 = {
                 codec: codec2,
                 request,
@@ -42827,11 +42875,11 @@ var init_src_CX2iR2pK = __esm({
                   params
                 }, resultSchema, legOptions)
               };
-              return resolve7(this._resolveNonCompleteResult(decoded, flow2));
+              return resolve6(this._resolveNonCompleteResult(decoded, flow2));
             }
             const result = decoded.result;
             validateStandardSchema(resultSchema, result).then((parseResult) => {
-              if (parseResult.success) resolve7(parseResult.data);
+              if (parseResult.success) resolve6(parseResult.data);
               else reject(new SdkError(SdkErrorCode.InvalidResult, `Invalid result for ${request.method}: ${parseResult.error}`));
             }, reject);
           });
@@ -45647,7 +45695,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         ref = (0, resolve_1.resolveUrl)(this.opts.uriResolver, baseId, ref);
         const schOrFunc = root.refs[ref];
         if (schOrFunc) return schOrFunc;
-        let _sch = resolve7.call(this, root, ref);
+        let _sch = resolve6.call(this, root, ref);
         if (_sch === void 0) {
           const schema = (_a3 = root.localRefs) === null || _a3 === void 0 ? void 0 : _a3[ref];
           const { schemaId } = this.opts;
@@ -45673,7 +45721,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       function sameSchemaEnv(s1, s2) {
         return s1.schema === s2.schema && s1.root === s2.root && s1.baseId === s2.baseId;
       }
-      function resolve7(root, ref) {
+      function resolve6(root, ref) {
         let sch;
         while (typeof (sch = this.refs[ref]) == "string") ref = sch;
         return sch || this.schemas[ref] || resolveSchema.call(this, root, ref);
@@ -46123,7 +46171,7 @@ var init_ajvProvider_CEoC_sr = __esm({
         else if (typeof uri === "object") uri = parse4(serialize(uri, options), options);
         return uri;
       }
-      function resolve7(baseURI, relativeURI, options) {
+      function resolve6(baseURI, relativeURI, options) {
         const schemelessOptions = options ? Object.assign({ scheme: "null" }, options) : { scheme: "null" };
         const resolved = resolveComponent(parse4(baseURI, schemelessOptions), parse4(relativeURI, schemelessOptions), schemelessOptions, true);
         schemelessOptions.skipEscape = true;
@@ -46297,7 +46345,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       const fastUri = {
         SCHEMES,
         normalize,
-        resolve: resolve7,
+        resolve: resolve6,
         resolveComponent,
         equal,
         serialize,
@@ -51496,7 +51544,7 @@ var init_stdio = __esm({
       }
       send(message) {
         if (this._closed) return Promise.reject(/* @__PURE__ */ new Error("StdioServerTransport is closed"));
-        return new Promise((resolve7, reject) => {
+        return new Promise((resolve6, reject) => {
           const json2 = serializeMessage(message);
           let settled = false;
           const onError = (error62) => {
@@ -51511,14 +51559,14 @@ var init_stdio = __esm({
             settled = true;
             this._stdout.off("error", onError);
             this._stdout.off("drain", onDrain);
-            resolve7();
+            resolve6();
           };
           this._stdout.once("error", onError);
           if (this._stdout.write(json2)) {
             if (settled) return;
             settled = true;
             this._stdout.off("error", onError);
-            resolve7();
+            resolve6();
           } else if (!settled) this._stdout.once("drain", onDrain);
         });
       }
@@ -51533,7 +51581,7 @@ __export(mcp_exports, {
   createServer: () => createServer,
   serve: () => serve
 });
-import { realpath as realpath6 } from "node:fs/promises";
+import { realpath as realpath5 } from "node:fs/promises";
 function toolResult(output2) {
   return { content: [{ type: "text", text: JSON.stringify(output2) }], structuredContent: output2 };
 }
@@ -51553,14 +51601,14 @@ function createServer(repo, evaluatorFactory) {
   const previewScopes = new ExpiringCache(CACHE_LIMIT, CACHE_TTL_MS);
   const scope = {
     repo: external_exports.string().min(1).optional().describe("Repository path; required unless the server was launched with --repo."),
-    base: reviewScopeFields.base.optional().describe("Git baseline; the working tree is compared against this commit. Defaults to HEAD."),
+    base: reviewScopeFields.base.optional().describe("Git ref to review changes against, such as origin/main. The working tree is compared against the merge base of this ref and HEAD, so commits made only on a branch that has moved on are left out. Defaults to HEAD."),
     includeUntracked: reviewScopeFields.includeUntracked.optional().describe("Include untracked files. Defaults to false."),
     task: reviewScopeFields.task.optional().describe(`Current task or requirements. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     repositoryContext: reviewScopeFields.repositoryContext.optional().describe(`Repository facts for reviewers. Defaults to the repository's ${CONFIG_FILE}, which the output then labels as repository-supplied.`),
     collection: reviewScopeFields.collection.optional().describe(`Bounded local collection settings; each key overrides ${CONFIG_FILE}. Matching settings are required when reviewing a preview snapshot.`)
   };
   const target = async (requested) => {
-    if (repo && requested && await realpath6(repo) !== await realpath6(requested)) throw new Error("This server is bound to a different repository.");
+    if (repo && requested && await realpath5(repo) !== await realpath5(requested)) throw new Error("This server is bound to a different repository.");
     if (!repo && !requested) throw new Error("Supply repo or launch the server with --repo.");
     return repo ?? requested;
   };
@@ -51590,6 +51638,8 @@ function createServer(repo, evaluatorFactory) {
     inputSchema: external_exports.object(scope),
     outputSchema: external_exports.object({
       snapshot: external_exports.string(),
+      base: external_exports.string().describe("Commit the working tree is compared against: the merge base of baseRef and HEAD."),
+      baseRef: external_exports.string().describe("The requested base ref."),
       packets: external_exports.array(external_exports.object({ id: external_exports.string(), changedPaths: external_exports.array(external_exports.string()) })),
       files: external_exports.array(external_exports.object({ path: external_exports.string(), previousPath: external_exports.string().optional(), role: external_exports.string(), characters: external_exports.number() })),
       candidates: external_exports.number(),
@@ -51605,6 +51655,8 @@ function createServer(repo, evaluatorFactory) {
     previewScopes.set(plan.snapshot, plan.discovery);
     const output2 = {
       snapshot: plan.snapshot,
+      base: plan.base,
+      baseRef: plan.baseRef ?? "HEAD",
       packets: plan.packets.map((packet) => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map((source) => ({ path: source.path, ...source.previousPath ? { previousPath: source.previousPath } : {}, role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
       candidates: plan.candidates.length,
@@ -51729,7 +51781,7 @@ init_review();
 init_quality();
 import { parseArgs } from "node:util";
 import { readFile, writeFile, mkdir } from "node:fs/promises";
-import { dirname, resolve as resolve6 } from "node:path";
+import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
 function compare(previous, current) {
@@ -51808,6 +51860,7 @@ function toSarif(report) {
         status: report.status,
         snapshot: report.snapshot,
         base: report.base,
+        baseRef: report.baseRef,
         head: report.head,
         models: report.models,
         limitations: report.limitations,
@@ -51841,7 +51894,7 @@ function collectionOptions(values) {
   });
 }
 async function writeJson(file2, value) {
-  const destination = resolve6(file2);
+  const destination = resolve5(file2);
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
 }
@@ -51903,7 +51956,8 @@ Usage:
 Options:
   --repo PATH                 Git repository to collect; defaults to the current directory. verify
                               matches excerpts against it; mcp uses it when a call names none.
-  --base REF                  Git baseline (default: HEAD).
+  --base REF                  Git ref to review changes against (default: HEAD). The working
+                              tree is compared against the merge base of REF and HEAD.
   --include-untracked         Include supported, non-ignored untracked files.
   --no-include-untracked      Exclude untracked files (the default).
   --task TEXT                 Requested behavior or acceptance criteria.
@@ -51961,7 +52015,7 @@ cannot hold credentials or the endpoint.`);
   }
   if (command === "mcp") {
     const { serve: serve2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
-    await serve2(values.repo ? resolve6(values.repo) : void 0);
+    await serve2(values.repo ? resolve5(values.repo) : void 0);
     return;
   }
   if (command === "compare") {
@@ -52018,6 +52072,7 @@ cannot hold credentials or the endpoint.`);
     console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)
 ${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}
 ` : ""}Snapshot: ${plan.snapshot}
+Base: ${plan.base.slice(0, 12)} (from ${terminalText(plan.baseRef ?? "HEAD")})
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
 Review estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.
 ${packets}

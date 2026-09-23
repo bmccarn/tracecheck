@@ -18,9 +18,10 @@ export type DiscoveryScope = { scannedFiles: number; deadlineLimited: boolean };
 /**
  * `limitations` are coverage gaps: evidence the review could not see. `notes` are permanent caveats, such as heuristic
  * caller discovery; they never change a report's status and are not part of the snapshot.
+ * `base` is the commit the working tree is compared against: the merge base of `baseRef`, the requested ref, and HEAD.
  */
 export type ReviewPlan = {
-  schemaVersion: 1; root: string; base: string; head: string; snapshot: string;
+  schemaVersion: 1; root: string; base: string; baseRef?: string; head: string; snapshot: string;
   sources: Source[]; candidates: Candidate[]; packets: ReviewPacket[]; limitations: string[]; notes: string[];
   discovery?: DiscoveryScope;
   task?: string; repositoryContext?: string;

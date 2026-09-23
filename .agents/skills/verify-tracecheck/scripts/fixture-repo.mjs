@@ -201,6 +201,21 @@ const scenarios = {
     committed: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
     change: {},
   },
+  'moved-on-base': {
+    description: 'Branch feature removes the empty-input guard from mean() in a commit; after it branched, main hardened src/report.ts and added src/audit.ts. HEAD is feature with a clean working tree. With --base main, preview should report only src/stats.ts changed, compared at the branch point.',
+    baseline: {
+      'src/stats.ts': 'export function mean(values: number[]): number {\n  if (values.length === 0) return 0;\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n',
+      'src/report.ts': "import { mean } from './stats.js';\n\nexport function summary(values: number[]) {\n  return `mean=${mean(values)}`;\n}\n",
+    },
+    branch: {
+      feature: { 'src/stats.ts': 'export function mean(values: number[]): number {\n  return values.reduce((a, b) => a + b, 0) / values.length;\n}\n' },
+      main: {
+        'src/report.ts': "import { mean } from './stats.js';\n\nexport function summary(values: number[]) {\n  if (!Array.isArray(values)) throw new TypeError('values must be an array');\n  return `mean=${mean(values)}`;\n}\n",
+        'src/audit.ts': 'export const audited = true;\n',
+      },
+    },
+    change: {},
+  },
 };
 
 const [scenarioName] = process.argv.slice(2);
@@ -237,6 +252,13 @@ try {
     git('commit', '-q', '-m', 'Index-only paths');
   }
   if (scenario.committed) { write(scenario.committed); git('add', '-A'); git('commit', '-q', '-m', 'Fixture follow-up'); }
+  if (scenario.branch) {
+    git('checkout', '-q', '-b', 'feature');
+    write(scenario.branch.feature); git('add', '-A'); git('commit', '-q', '-m', 'Feature change');
+    git('checkout', '-q', 'main');
+    write(scenario.branch.main); git('add', '-A'); git('commit', '-q', '-m', 'Main moves on');
+    git('checkout', '-q', 'feature');
+  }
   for (const [from, to] of scenario.moves ?? []) git('mv', from, to);
   write(scenario.change);
   for (const [path, mode] of Object.entries(scenario.chmod ?? {})) chmodSync(join(root, path), mode);
