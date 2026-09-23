@@ -48,6 +48,8 @@ const OUTCOME = 'outcome';
 const PLUMBING = 'plumbing';
 const KNOWN = 'known issue';
 class Check extends Error { }
+/** Ends the run early when a later step cannot mean anything, such as after a failed install. */
+class StopJourney extends Error { }
 const expect = (condition, message) => { if (!condition) throw new Check(message); };
 const label = (kind, issue) => `[${kind}${issue ? ` #${issue}` : ''}]`;
 /** Runs one step of `kind`; `issue` names the issue whose fix the step checks. */
@@ -259,6 +261,7 @@ try {
     const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     return values.package ? `installed ${values.package} (${version}) from the registry` : `installed the packed checkout (${version}) with no network and no dependencies`;
   });
+  if (!results.at(-1)?.ok) throw new StopJourney('Stopping: the package did not install, so no other step can run.');
 
   await step(PLUMBING, 'create the project and the working-tree change', async () => {
     initRepo(project);
@@ -938,6 +941,9 @@ try {
     expect(!leaked.length, `key found in ${leaked.join(', ')}`);
     return `${files.length} evidence files scanned`;
   });
+} catch (error) {
+  if (!(error instanceof StopJourney)) throw error;
+  console.log(error.message);
 } finally {
   for (const cleanup of cleanups) cleanup();
   rmSync(scratch, { recursive: true, force: true });
