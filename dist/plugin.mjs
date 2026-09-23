@@ -21303,13 +21303,14 @@ function compareQuality(evaluation, previous) {
   }
   return qualityEvaluationSchema.parse(result);
 }
-function renderQuality(evaluation) {
-  const lines = ["## Quality dimensions", "", "| Dimension | Score | Confidence | State |", "| --- | --- | --- | --- |"];
+function renderQuality(evaluation, level = 2) {
+  const heading = "#".repeat(level);
+  const lines = [`${heading} Quality dimensions`, "", "| Dimension | Score | Confidence | State |", "| --- | --- | --- | --- |"];
   for (const dimension of dimensions) {
     const metric = evaluation.metrics[dimension.key];
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? "\u2014"} | ${metric.confidence?.toFixed(2) ?? "\u2014"} | ${metric.status} |`);
   }
-  if (evaluation.priorities.length) lines.push("", "### Quality priorities", "", ...evaluation.priorities.map((priority) => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
+  if (evaluation.priorities.length) lines.push("", `${heading}# Quality priorities`, "", ...evaluation.priorities.map((priority) => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
   if (evaluation.improvements.length) lines.push("", "Improvements:", ...evaluation.improvements.map((value) => `- ${markdownText(value)}`));
   if (evaluation.regressions.length) lines.push("", "Regressions:", ...evaluation.regressions.map((value) => `- ${markdownText(value)}`));
   if (evaluation.unresolvedWeaknesses.length) lines.push("", `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.map(markdownText).join(", ")}`);
@@ -21426,6 +21427,8 @@ var init_schema = __esm({
       policyVersion: external_exports.string(),
       models: external_exports.array(external_exports.string()),
       status: external_exports.enum(["needs_attention", "inconclusive", "no_findings"]),
+      // Change packets collected for the review, including any a failed request left unevaluated. Reports saved by 0.3.x have none.
+      packetCount: external_exports.number().int().nonnegative().optional(),
       decisions: external_exports.array(candidateSchema.extend({
         // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
         previousPath: external_exports.string().optional(),
@@ -21660,6 +21663,7 @@ function reportFor(plan, started, decisions, models, limitations, notes, usage) 
     policyVersion: POLICY_VERSION,
     models: [...models],
     status: reportStatus(decisions, limitations),
+    packetCount: plan.packets.length,
     decisions,
     limitations,
     notes,
@@ -21824,8 +21828,9 @@ function applyPreviousEvaluation(report, previous) {
 }
 function render(report) {
   const findings = report.decisions.filter((item) => item.status !== "not_supported");
-  const packetCount = report.packetQualities?.length ?? (report.quality ? 1 : void 0);
-  const packetSummary = packetCount === void 0 ? "" : ` \xB7 ${packetCount} packet${packetCount === 1 ? "" : "s"}`;
+  const incomplete = report.limitations.filter((item) => item.startsWith(`${INCOMPLETE} `));
+  const packetCount = report.packetCount ?? report.packetQualities?.length ?? (report.quality ? 1 : void 0);
+  const packetSummary = packetCount === void 0 ? "" : ` \xB7 ${packetCount} packet${packetCount === 1 ? "" : "s"}${incomplete.length ? `, ${incomplete.length} incomplete` : ""}`;
   const lines = [
     `# Tracecheck`,
     "",
@@ -21837,7 +21842,17 @@ function render(report) {
     `${report.quality || report.packetQualities ? "Broad review: all 19 quality dimensions per packet. " : ""}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`,
     ""
   ];
-  if (report.quality) lines.push(renderQuality(report.quality), "", "## Source-anchored findings", "");
+  if (incomplete.length) {
+    lines.push(
+      "## Incomplete review",
+      "",
+      `A provider request failed for ${incomplete.length} packet${incomplete.length === 1 ? "" : "s"}, so the results below leave out this work. Run the review again to evaluate it.`,
+      "",
+      ...incomplete.map((item) => `- ${markdownText(item)}`),
+      ""
+    );
+  }
+  if (report.quality) lines.push(renderQuality(report.quality), "");
   if (report.packetQualities) {
     lines.push("## Packet broad reviews", "");
     for (const packet of report.packetQualities) {
@@ -21846,15 +21861,15 @@ function render(report) {
         "",
         `Changed paths: ${packet.changedPaths.map(markdownText).join(", ") || "none recorded"}`,
         "",
-        renderQuality(packet.evaluation),
+        renderQuality(packet.evaluation, 4),
         ""
       );
     }
-    lines.push("## Source-anchored findings", "");
   }
+  lines.push("## Source-anchored findings", "");
   for (const finding of findings) {
     lines.push(
-      `## ${markdownText(finding.check)} \u2014 ${finding.status}`,
+      `### ${markdownText(finding.check)} \u2014 ${finding.status}`,
       "",
       `**${markdownText(finding.path)}:${finding.range.start}-${finding.range.end}** \xB7 ${markdownText(finding.symbol)} \xB7 impact: ${finding.impact}`,
       "",
@@ -21872,7 +21887,8 @@ function render(report) {
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
   if (report.notes.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${markdownText(item)}`), "");
-  if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${markdownText(item)}`), "");
+  const gaps = report.limitations.filter((item) => !incomplete.includes(item));
+  if (gaps.length) lines.push("## Coverage gaps", "", ...gaps.map((item) => `- ${markdownText(item)}`), "");
   return lines.join("\n");
 }
 var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, STALE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes, estimateOf;
@@ -36543,10 +36559,50 @@ function importsFor(path, content, known, aliases) {
 function definedSymbols(content) {
   return [...new Set(Array.from(content.matchAll(DEFINED_SYMBOL), (match) => match[1] ?? match[2]))];
 }
-function symbolRanges(content, names) {
+function changedSymbols(content, ranges) {
+  const lines = content.split("\n");
+  const indents = lines.map((line2) => line2.length - line2.trimStart().length);
+  const definitions2 = [];
+  let line = 0;
+  let nextLineStart = lines[0].length + 1;
+  for (const match of content.matchAll(DEFINED_SYMBOL)) {
+    while (line + 1 < lines.length && nextLineStart <= match.index) nextLineStart += lines[++line].length + 1;
+    definitions2.push({ line, name: match[1] ?? match[2] });
+  }
+  lines.forEach((text, index) => {
+    const name = text.match(METHOD)?.[1];
+    if (name && !NOT_METHODS.has(name)) definitions2.push({ line: index, name });
+  });
+  definitions2.sort((left, right) => right.line - left.line);
+  const names = /* @__PURE__ */ new Set();
+  for (const range of ranges) {
+    const first = Math.max(range.start, 1) - 1;
+    const last = Math.min(range.end, lines.length);
+    let threshold = Infinity;
+    for (let index = first; index < last; index++) {
+      for (const match of lines[index].matchAll(DECLARED_NAME)) names.add(match[1]);
+      if (lines[index].trim()) threshold = Math.min(threshold, indents[index]);
+    }
+    for (const definition of definitions2) {
+      if (threshold === 0 || threshold === Infinity) break;
+      if (definition.line >= first || indents[definition.line] >= threshold) continue;
+      names.add(definition.name);
+      threshold = indents[definition.line];
+    }
+  }
+  return [...names];
+}
+function declaredNames(content) {
+  return [...new Set(Array.from(content.matchAll(DECLARED_NAME), (match) => match[1]))];
+}
+function namePattern(names) {
   const wanted = [...new Set(names.filter((name) => /^[A-Za-z_$][\w$]*$/.test(name)))];
-  if (!wanted.length) return [];
-  const pattern = new RegExp(`(?<![\\w$])(?:${wanted.map((name) => name.replaceAll("$", "\\$")).join("|")})(?![\\w$])`);
+  if (!wanted.length) return void 0;
+  return new RegExp(`(?<![\\w$])(?:${wanted.map((name) => name.replaceAll("$", "\\$")).join("|")})(?![\\w$])`);
+}
+function symbolRanges(content, names) {
+  const pattern = namePattern(names);
+  if (!pattern) return [];
   const lines = content.split("\n");
   const ranges = [];
   for (let index = 0; index < lines.length; index++) {
@@ -36555,7 +36611,7 @@ function symbolRanges(content, names) {
   }
   return ranges;
 }
-var isSource, isTest, FileTally, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES, DEFINED_SYMBOL;
+var isSource, isTest, FileTally, PYTHON_TARGETS, SCRIPT_TARGETS, SCRIPT_SOURCES, DEFINED_SYMBOL, DECLARED_NAME, METHOD, NOT_METHODS;
 var init_evidence = __esm({
   "src/evidence.ts"() {
     "use strict";
@@ -36589,6 +36645,9 @@ var init_evidence = __esm({
     ];
     SCRIPT_SOURCES = { ".js": [".ts", ".tsx"], ".jsx": [".tsx"], ".mjs": [".mts"], ".cjs": [".cts"] };
     DEFINED_SYMBOL = /(?:def|function|class)\s+([A-Za-z_$][\w$]*)|\b(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::(?:[^=;]|=>)*?)?=\s*(?:async\b\s*)?(?:function\b|(?:<[^<>]*>\s*)?\([^()]*(?:\([^()]*\)[^()]*)*\)\s*(?::[^=;]*?)?=>|[A-Za-z_$][\w$]*\s*=>)/g;
+    DECLARED_NAME = /\b(?:def|function|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+    METHOD = /^\s*(?:(?:static|async|public|private|protected|override|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^<>]*>)?\([^()]*\)\s*(?::[^{;]*)?\{\s*$/;
+    NOT_METHODS = /* @__PURE__ */ new Set(["if", "for", "while", "switch", "catch", "function", "return", "with", "else", "do"]);
   }
 });
 
@@ -37149,8 +37208,16 @@ async function collect(options) {
           }
         };
       }
-      const names = role === "changed" ? definedSymbols(raw) : void 0;
-      loaded.set(path, { source, names });
+      if (role === "changed") {
+        const lines = raw.split("\n");
+        const beforeLines = before?.split("\n") ?? [];
+        const text = [
+          ...ranges.map((range) => lines.slice(range.start - 1, range.end).join("\n")),
+          ...before === void 0 ? [] : beforeRanges.map((range) => beforeLines.slice(range.start - 1, range.end).join("\n"))
+        ].join("\n");
+        const symbols = [.../* @__PURE__ */ new Set([...changedSymbols(raw, ranges), ...before === void 0 ? [] : changedSymbols(before, beforeRanges)])];
+        loaded.set(path, { source, names: definedSymbols(raw), change: { symbols, text } });
+      } else loaded.set(path, { source });
       if (role === "changed") reads.delete(path);
       if (!source.evidence.complete) noteSource(path, "Focused excerpts only; omitted lines are not reviewed");
       if (role === "changed" && !ranges.every((range) => current.ranges.some((captured) => captured.start <= range.start && captured.end >= range.end))) {
@@ -37236,13 +37303,28 @@ async function collect(options) {
     const stem = posix4.basename(path).replace(/\.[^.]+$/, "");
     for (const candidate of conventionalTests.get(stem) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, "test");
     for (const candidate of index.imports.get(path) ?? []) if (!changedSourcePaths.has(candidate) && !related.has(candidate)) related.set(candidate, "dependency");
-    const names = loaded.get(path)?.names ?? [];
+    const { names = [], change } = loaded.get(path) ?? {};
     for (const relatedPath of related.keys()) {
       const targetNames = supportNames.get(relatedPath) ?? /* @__PURE__ */ new Set();
       for (const name of names) targetNames.add(name);
       supportNames.set(relatedPath, targetNames);
     }
-    relatedByChange.set(path, related);
+    const touched = namePattern(change?.symbols.length ? change.symbols : names);
+    const entries = [...related];
+    const relevance = [];
+    for (let start = 0; start < entries.length; start += RANKING_READ_CONCURRENCY) {
+      relevance.push(...await Promise.all(entries.slice(start, start + RANKING_READ_CONCURRENCY).map(async ([relatedPath, role]) => {
+        let text;
+        try {
+          text = await screenedRead(relatedPath);
+        } catch {
+          signal.throwIfAborted();
+          return false;
+        }
+        return (role === "dependency" ? namePattern(declaredNames(text))?.test(change?.text ?? "") : touched?.test(text)) ?? false;
+      })));
+    }
+    relatedByChange.set(path, new Map(entries.map(([relatedPath, role], index2) => [relatedPath, { role, relevant: relevance[index2] }])));
   }
   options.onPhase?.("Assembling change packets");
   const packets = [];
@@ -37293,21 +37375,23 @@ async function collect(options) {
       packetLimitations2.push(...issueMessages(path));
     }
     const relatedRoles = ["test", "caller", "dependency"];
-    const relatedQueues = primary.map((path) => relatedRoles.map((role) => [...relatedByChange.get(path) ?? []].filter(([, relatedRole]) => relatedRole === role).sort(([left], [right]) => left.localeCompare(right))));
     const related = [];
     const queuedRelated = /* @__PURE__ */ new Set();
-    for (let offset = 0; ; offset++) {
-      let queuedAtOffset = false;
-      for (const queues of relatedQueues) for (const queue of queues) {
-        const entry = queue[offset];
-        if (!entry) continue;
-        queuedAtOffset = true;
-        if (!queuedRelated.has(entry[0])) {
-          queuedRelated.add(entry[0]);
-          related.push(entry);
+    for (const relevant of [true, false]) {
+      const relatedQueues = primary.map((path) => relatedRoles.map((role) => [...relatedByChange.get(path) ?? []].filter(([, entry]) => entry.role === role && entry.relevant === relevant).map(([relatedPath]) => [relatedPath, role]).sort(([left], [right]) => left.localeCompare(right))));
+      for (let offset = 0; ; offset++) {
+        let queuedAtOffset = false;
+        for (const queues of relatedQueues) for (const queue of queues) {
+          const entry = queue[offset];
+          if (!entry) continue;
+          queuedAtOffset = true;
+          if (!queuedRelated.has(entry[0])) {
+            queuedRelated.add(entry[0]);
+            related.push(entry);
+          }
         }
+        if (!queuedAtOffset) break;
       }
-      if (!queuedAtOffset) break;
     }
     let attempted = 0;
     for (const [relatedPath, role] of related) {
@@ -37353,7 +37437,7 @@ async function collect(options) {
   const snapshot = hash2({ root, base, baseRef, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
   return { schemaVersion: 1, root, base, baseRef, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }
-var MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
+var MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, RANKING_READ_CONCURRENCY, sourceChars, sourceBytes;
 var init_collector = __esm({
   "src/collector.ts"() {
     "use strict";
@@ -37373,6 +37457,7 @@ var init_collector = __esm({
     PRIMARY_TARGET_CHARS = 3e4;
     PRIMARY_TARGET_BYTES = 4e4;
     isImportable = (path) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
+    RANKING_READ_CONCURRENCY = 16;
     sourceChars = (source) => source.content.length + (source.before?.length ?? 0);
     sourceBytes = (source) => Buffer.byteLength(JSON.stringify(source));
   }

@@ -50,6 +50,7 @@
 - Unknown refs, shallow clones without enough history, repositories with no commits, and directories that are not Git working trees give plain errors instead of raw Git command lines.
 - The CLI checks the provider key and the `--out` and `--sarif` destinations before collecting, prints the result before writing files, rejects unexpected positional arguments, names the flag and file in input errors, prints validation problems as one line per field, and exits 130 on Ctrl-C.
 - `compare` follows a finding into a renamed file when its check, symbol, and quoted code are unchanged, and decisions record the previous path. Preview notes staged changes that the working tree undoes and staged renames Git cannot pair; the README states that collection compares the base with the working tree.
+- Partial reports count every collected packet in the header, list unevaluated work in an `Incomplete review` section near the top, and nest packet quality headings correctly. Related-file selection prefers callers and tests that use the changed functions.
 
 ## 0.3.0 — 2026-09-18
 

@@ -259,7 +259,8 @@ function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], mod
   usage.elapsedMs = Date.now() - started;
   return { schemaVersion: 1, id: hash([plan.snapshot, Date.now(), decisions]).slice(0, 24), createdAt: new Date().toISOString(),
     snapshot: plan.snapshot, root: plan.root, base: plan.base, ...(plan.baseRef ? { baseRef: plan.baseRef } : {}), head: plan.head,
-    checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations), decisions, limitations, notes, usage };
+    checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations),
+    packetCount: plan.packets.length, decisions, limitations, notes, usage };
 }
 
 type Outcome = { response: TypedResponse } | { error: unknown };
@@ -465,31 +466,43 @@ export function applyPreviousEvaluation(report: Report, previous: PreviousEvalua
   if (reason) report.notes = unique([...report.notes, `Previous evaluation was not compared because ${reason}.`]);
 }
 
+/**
+ * Markdown for a report. Headings nest one level at a time; work a failed request left unevaluated is listed before
+ * any result, and the header counts every collected packet, not only those with a quality result.
+ */
 export function render(report: Report): string {
   const findings = report.decisions.filter(item => item.status !== 'not_supported');
-  const packetCount = report.packetQualities?.length ?? (report.quality ? 1 : undefined);
-  const packetSummary = packetCount === undefined ? '' : ` · ${packetCount} packet${packetCount === 1 ? '' : 's'}`;
+  const incomplete = report.limitations.filter(item => item.startsWith(`${INCOMPLETE} `));
+  // Reports saved before packetCount was recorded count the packets that have a quality result.
+  const packetCount = report.packetCount ?? report.packetQualities?.length ?? (report.quality ? 1 : undefined);
+  const packetSummary = packetCount === undefined ? ''
+    : ` · ${packetCount} packet${packetCount === 1 ? '' : 's'}${incomplete.length ? `, ${incomplete.length} incomplete` : ''}`;
   const lines = [`# Tracecheck`, '', ...(isStale(report) ? ['**Stale:** the reviewed evidence changed during the review. Run review again.', ''] : []),
     `**${report.status.replaceAll('_', ' ')}**${packetSummary} · ${report.decisions.length} checks · ${report.usage.requests} Jev request(s)`, '',
     `Snapshot: ${report.snapshot.slice(0, 12)}${report.baseRef ? ` · Base: ${report.base.slice(0, 12)} (from ${markdownText(report.baseRef)})` : ''} · Models: ${report.models.map(markdownText).join(', ') || 'not called'}`, '',
     `${report.quality || report.packetQualities ? 'Broad review: all 19 quality dimensions per packet. ' : ''}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`, ''];
-  if (report.quality) lines.push(renderQuality(report.quality), '', '## Source-anchored findings', '');
+  if (incomplete.length) {
+    lines.push('## Incomplete review', '', `A provider request failed for ${incomplete.length} packet${incomplete.length === 1 ? '' : 's'}, so the results below leave out this work. Run the review again to evaluate it.`, '',
+      ...incomplete.map(item => `- ${markdownText(item)}`), '');
+  }
+  if (report.quality) lines.push(renderQuality(report.quality), '');
   if (report.packetQualities) {
     lines.push('## Packet broad reviews', '');
     for (const packet of report.packetQualities) {
       lines.push(`### Packet ${markdownText(packet.packetId)}`, '', `Changed paths: ${packet.changedPaths.map(markdownText).join(', ') || 'none recorded'}`, '',
-        renderQuality(packet.evaluation), '');
+        renderQuality(packet.evaluation, 4), '');
     }
-    lines.push('## Source-anchored findings', '');
   }
+  lines.push('## Source-anchored findings', '');
   for (const finding of findings) {
-    lines.push(`## ${markdownText(finding.check)} — ${finding.status}`, '',
+    lines.push(`### ${markdownText(finding.check)} — ${finding.status}`, '',
       `**${markdownText(finding.path)}:${finding.range.start}-${finding.range.end}** · ${markdownText(finding.symbol)} · impact: ${finding.impact}`, '',
       `Hypothesis: ${markdownText(finding.hypothesis)}`, '', 'Evidence:', '', ...terminalLines(finding.quote).split('\n').map(line => `    ${line}`), '',
       `Verify: ${markdownText(finding.verification)}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '');
   }
   if (!findings.length) lines.push('No findings from the checks performed. This is not a repository-wide correctness verdict.', '');
   if (report.notes.length) lines.push('## Notes', '', ...report.notes.map(item => `- ${markdownText(item)}`), '');
-  if (report.limitations.length) lines.push('## Coverage gaps', '', ...report.limitations.map(item => `- ${markdownText(item)}`), '');
+  const gaps = report.limitations.filter(item => !incomplete.includes(item));
+  if (gaps.length) lines.push('## Coverage gaps', '', ...gaps.map(item => `- ${markdownText(item)}`), '');
   return lines.join('\n');
 }
