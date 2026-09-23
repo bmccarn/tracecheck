@@ -229,6 +229,29 @@ test('an MCP review left incomplete by a failed request is not cached, so the ne
   assert.equal(repeated.cached, true); assert.equal(packets.length, 4);
 });
 
+test('an MCP review cache hit requires the same provider endpoint and model', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), 'export const average = (xs: number[]) => xs.length / 0;');
+  const saved = { TYPESAFE_BASE_URL: process.env.TYPESAFE_BASE_URL, JEV_MODEL: process.env.JEV_MODEL };
+  t.after(() => { for (const [name, value] of Object.entries(saved)) if (value === undefined) delete process.env[name]; else process.env[name] = value; });
+  let calls = 0;
+  const client = await connect(t, createServer(repo.root, () => ({ async evaluate(_state, questions) { calls++; return typedFixture(questions); } })));
+  const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
+  const snapshot = z.object({ snapshot: z.string() }).parse(preview.structuredContent).snapshot;
+  const review = async (baseUrl: string, model: string) => {
+    process.env.TYPESAFE_BASE_URL = baseUrl; process.env.JEV_MODEL = model;
+    const result = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
+    assert.ok(!result.isError, JSON.stringify(result));
+    return z.object({ cached: z.boolean() }).parse(result.structuredContent).cached;
+  };
+  assert.equal(await review('https://one.example.invalid', 'model-a'), false);
+  assert.equal(await review('https://one.example.invalid', 'model-a'), true);
+  assert.equal(await review('https://one.example.invalid', 'model-b'), false, 'another model must not reuse the cached report');
+  assert.equal(await review('https://two.example.invalid', 'model-a'), false, 'another endpoint must not reuse the cached report');
+  assert.equal(await review('https://two.example.invalid', 'model-a'), true);
+  assert.equal(calls, 3);
+});
+
 test('MCP assess uses the injected evaluator, keeps the JSON text block, and cancels with the client request', { timeout: 10_000 }, async t => {
   let hang = false;
   let evaluating!: () => void;

@@ -285,6 +285,28 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   assert.ok(!JSON.stringify(plan).includes(credential));
 });
 
+test('reviews a change whose base version held a credential without that baseline', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  // Assembled at runtime so the repository never contains a literal secret.
+  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
+  const client = (key: string, guard: string) =>
+    `const apiKey = ${key};\n\nexport function rate(total: number, count: number) {\n${guard}  return total / count;\n}\n\nexport const auth = () => apiKey;\n`;
+  await writeFile(join(repo.root, 'client.ts'), client(`"${credential}"`, '  if (count === 0) return 0;\n'));
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add client');
+  await writeFile(join(repo.root, 'client.ts'), client('process.env.CLIENT_API_KEY', ''));
+  const plan = await collect({ repo: repo.root });
+
+  assert.ok(!JSON.stringify(plan).includes(credential));
+  const source = plan.sources.find(item => item.path === 'client.ts')!;
+  assert.equal(source.role, 'changed');
+  assert.match(source.content, /process\.env\.CLIENT_API_KEY/);
+  assert.equal(source.before, undefined);
+  assert.deepEqual(plan.candidates.map(candidate => [candidate.check, candidate.symbol]), [['zero-divisor', 'rate']]);
+  const reason = 'Base version with a potential credential omitted; reviewed without a baseline';
+  assert.ok(plan.limitations.some(limitation => limitation.includes(`${reason} (client.ts)`)), plan.limitations.join('\n'));
+  assert.deepEqual(plan.packets.map(packet => packet.limitations.filter(limitation => limitation.includes('credential'))), [[`${reason}: client.ts`]]);
+});
+
 test('reads and screens each changed and supporting file once per collection', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   const modules = Array.from({ length: 9 }, (_value, index) => `lib/m${index}.ts`);

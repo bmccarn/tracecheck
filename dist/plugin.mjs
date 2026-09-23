@@ -36919,7 +36919,8 @@ async function collect(options) {
   const candidates = [];
   const candidateIds = /* @__PURE__ */ new Set();
   const changedSourcePaths = /* @__PURE__ */ new Set();
-  const omissions = new FileTally((reason) => reason.includes("potential credential"));
+  const namesCredential = (reason) => reason.includes("potential credential");
+  const omissions = new FileTally(namesCredential);
   const sourceIssues = /* @__PURE__ */ new Map();
   const label = (path) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
   const noteSource = (path, reason) => {
@@ -36965,7 +36966,10 @@ async function collect(options) {
       let beforeRanges = ranges;
       if (role === "changed") {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error("Base version with a potential credential");
+        if (before && hasSecret(before)) {
+          before = void 0;
+          noteSource(path, "Base version with a potential credential omitted; reviewed without a baseline");
+        }
         ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split("\n").length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === "mode-only") noteSource(path, "File mode changed without a content change; no changed lines to review");
@@ -37201,7 +37205,7 @@ async function collect(options) {
     const packetCandidates = candidates.filter((candidate) => primary.includes(candidate.path)).map((candidate) => candidate.id);
     packets.push({ id: hash2({ primary, paths, packetLimitations: packetLimitations2 }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations2 });
   }
-  const sourceIssueCounts = new FileTally();
+  const sourceIssueCounts = new FileTally(namesCredential);
   for (const path of sourceByPath.keys()) {
     for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
@@ -51532,7 +51536,7 @@ function createServer(repo, evaluatorFactory) {
     return toolResult(output2);
   });
   server.registerTool("tracecheck_review", {
-    description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to TypeSafe. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
+    description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
     inputSchema: external_exports.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`), previousEvaluation: previousEvaluationSchema.optional(), snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.") }),
     outputSchema: external_exports.object({ cached: external_exports.boolean(), report: reportSchema }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: false, openWorldHint: true }
