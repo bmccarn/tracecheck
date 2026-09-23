@@ -310,11 +310,20 @@ function sourceMetrics(observations: SourceObservation[], gates: SourceGates): S
   };
 }
 
+// Mirror transformQuality in src/quality.ts: a concern attaches once relevance and applicability pass, and a score is
+// published as assessed only when its confidence passes too.
+function scoredUnder(dimension: Dimension, gates: QualityGates): boolean {
+  return dimension.relevance >= gates.relevance && dimension.applicability >= gates.applicability && dimension.scoreConfidence >= gates.scoreConfidence;
+}
+
+function actionableUnder(dimension: Dimension, gates: QualityGates): boolean {
+  return dimension.relevance >= gates.relevance && dimension.applicability >= gates.applicability && dimension.weakness !== 'none'
+    && dimension.weaknessConfidence >= gates.concernConfidence && dimension.weaknessProbability >= gates.concernProbability;
+}
+
 function qualityMetrics(evaluations: Evaluation[], gates: QualityGates): QualityMetrics {
-  const passes = (dimension: Dimension) => dimension.relevance >= gates.relevance && dimension.applicability >= gates.applicability;
-  const scored = (dimension: Dimension) => passes(dimension) && dimension.scoreConfidence >= gates.scoreConfidence;
-  const fires = (evaluation: Evaluation) => Object.values(evaluation.dimensions).some(dimension => passes(dimension) && dimension.weakness !== 'none'
-    && dimension.weaknessConfidence >= gates.concernConfidence && dimension.weaknessProbability >= gates.concernProbability);
+  const scored = (dimension: Dimension) => scoredUnder(dimension, gates);
+  const fires = (evaluation: Evaluation) => Object.values(evaluation.dimensions).some(dimension => actionableUnder(dimension, gates));
   const groups = [...groupBy(evaluations, evaluation => `${evaluation.caseId}/${evaluation.variant}`).values()];
   const spreads: number[] = [];
   const agreement: boolean[] = [];
@@ -349,11 +358,21 @@ function qualityMetrics(evaluations: Evaluation[], gates: QualityGates): Quality
   };
 }
 
-/** Ties go to fewer flips and then to stricter gates, which change current behavior least. */
-function pickSource(grid: SourcePoint[], allowed: (metrics: SourceMetrics) => boolean, value: (metrics: SourceMetrics) => number) {
-  const share = ([count, total]: Ratio) => total ? count / total : 0;
-  return grid.filter(point => allowed(point.metrics)).sort((a, b) => value(b.metrics) - value(a.metrics) || share(a.metrics.flips) - share(b.metrics.flips)
-    || b.probability - a.probability || b.confidence - a.confidence)[0];
+/** The allowed point with the highest `value`; `tieBreak` orders equal points, preferring the smallest change from current behavior. */
+function pick<T>(points: T[], allowed: (point: T) => boolean, value: (point: T) => number, tieBreak: (a: T, b: T) => number): T | undefined {
+  return points.filter(allowed).sort((a, b) => value(b) - value(a) || tieBreak(a, b))[0];
+}
+
+/** Selection rules that land on the same point share one row. */
+function namedPolicies<T>(policies: Array<{ name: string; point: T | undefined }>): Array<{ name: string; point: T }> {
+  const merged: Array<{ name: string; point: T }> = [];
+  for (const { name, point } of policies) {
+    if (point === undefined) continue;
+    const same = merged.find(policy => policy.point === point);
+    if (same) same.name += ` = ${name}`;
+    else merged.push({ name, point });
+  }
+  return merged;
 }
 
 async function replay(dir: string): Promise<string> {
@@ -469,21 +488,27 @@ async function replay(dir: string): Promise<string> {
   const sourceGrid = Object.fromEntries(splits.map(split => [split, probabilities.flatMap(probability => confidences.map(confidence =>
   ({ probability, confidence, metrics: sourceMetrics(bySplit(sourceObservations, split), { probability, confidence }) })))]));
   const share = ([count, total]: Ratio) => total ? count / total : 0;
-  const sourcePolicies = [
-    { name: 'Current', point: sourceGrid.development!.find(point => point.probability === CURRENT.probability && point.confidence === CURRENT.confidence)! },
-    { name: 'No false positives', point: pickSource(sourceGrid.development!, metrics => metrics.singleFalsePositives[0] === 0, metrics => share(metrics.recall)) },
-    { name: 'Balanced', point: pickSource(sourceGrid.development!, () => true, metrics => share(metrics.recall) - share(metrics.falsePositives)) },
-  ].filter((policy): policy is { name: string; point: NonNullable<typeof policy.point> } => policy.point !== undefined);
-  const marked = (point: SourceGates) => sourcePolicies.filter(policy => policy.point.probability === point.probability && policy.point.confidence === point.confidence).map(policy => policy.name);
+  const stricterSource = (a: SourcePoint, b: SourcePoint) => share(a.metrics.flips) - share(b.metrics.flips) || b.probability - a.probability || b.confidence - a.confidence;
+  const sourcePolicies = namedPolicies([
+    { name: 'Current', point: sourceGrid.development!.find(point => point.probability === CURRENT.probability && point.confidence === CURRENT.confidence) },
+    { name: 'Strict', point: pick(sourceGrid.development!, point => point.metrics.singleFalsePositives[0] === 0, point => share(point.metrics.recall), stricterSource) },
+    { name: 'Balanced', point: pick(sourceGrid.development!, () => true, point => share(point.metrics.recall) - share(point.metrics.falsePositives), stricterSource) },
+  ]);
   for (const split of splits) {
     sections.push(`### Source-check grid, ${split} (recall · false positives · flips, majority of repeats)`, table(['Probability \\ confidence', ...confidences.map(value => `≥ ${value.toFixed(2)}`)],
       probabilities.map(probability => [`≥ ${probability.toFixed(2)}`, ...confidences.map(confidence => {
         const { metrics } = sourceGrid[split]!.find(point => point.probability === probability && point.confidence === confidence)!;
         const cell = `${percent(metrics.recall)} · ${percent(metrics.falsePositives)} · ${percent(metrics.flips)}`;
-        return marked({ probability, confidence }).length ? `**${cell}**` : cell;
+        return sourcePolicies.some(({ point }) => point.probability === probability && point.confidence === confidence) ? `**${cell}**` : cell;
       })])));
   }
   sections.push(`Bold cells are the candidate policies below, chosen on development data: ${sourcePolicies.map(policy => `${policy.name} (${policy.point.probability.toFixed(2)} / ${policy.point.confidence.toFixed(2)})`).join(', ')}.`);
+  sections.push(`### Probability gate at confidence ≥ ${CURRENT.confidence.toFixed(2)} (single reviews)`, table(['Probability', 'Dev recall', 'Dev false positives', 'Dev uncertain',
+    'Holdout recall', 'Holdout false positives', 'Holdout uncertain', 'Flips, both splits'], probabilities.map(probability => {
+      const [development, holdout] = splits.map(split => sourceGrid[split]!.find(point => point.probability === probability && point.confidence === CURRENT.confidence)!.metrics);
+      return [`≥ ${probability.toFixed(2)}`, counted(development!.singleRecall), counted(development!.singleFalsePositives), counted(development!.uncertain),
+      counted(holdout!.singleRecall), counted(holdout!.singleFalsePositives), counted(holdout!.uncertain), counted([development!.flips[0] + holdout!.flips[0], development!.flips[1] + holdout!.flips[1]])];
+    })));
   const holdoutPoint = (point: SourceGates) => sourceGrid.holdout!.find(item => item.probability === point.probability && item.confidence === point.confidence)!.metrics;
   sections.push('### Candidate source-check policies', table(['Policy', 'Probability', 'Confidence', 'Dev recall', 'Dev false positives', 'Dev single-review false positives', 'Dev flips',
     'Holdout recall', 'Holdout false positives', 'Holdout single-review recall', 'Holdout single-review false positives', 'Holdout flips', 'Holdout uncertain'],
@@ -491,38 +516,51 @@ async function replay(dir: string): Promise<string> {
       const holdout = holdoutPoint(point);
       return [name, `≥ ${point.probability.toFixed(2)}`, `≥ ${point.confidence.toFixed(2)}`, counted(point.metrics.recall), counted(point.metrics.falsePositives), counted(point.metrics.singleFalsePositives),
         counted(point.metrics.flips), counted(holdout.recall), counted(holdout.falsePositives), counted(holdout.singleRecall), counted(holdout.singleFalsePositives), counted(holdout.flips), counted(holdout.uncertain)];
-    })), 'No false positives: the highest development recall with no clean candidate supported in any development review. Balanced: the highest development recall minus false-positive rate. Ties go to fewer flips, then to stricter gates.');
+    })), 'Strict: the highest development recall with no clean candidate supported in any development review. Balanced: the highest development recall minus false-positive rate. Ties go to fewer flips, then to stricter gates.');
+  sections.push('### Candidate source-check policies by family (both splits)', table(['Policy', 'Family', 'Recall (majority)', 'Recall (single review)', 'False positives (single review)', 'Flips'],
+    sourcePolicies.flatMap(({ name, point }) => (['zero-divisor', 'swallowed-failure', 'unhandled-json'] as const).map(family => {
+      const metrics = sourceMetrics(sourceObservations.filter(observation => observation.family === family), point);
+      return [name, family, counted(metrics.recall), counted(metrics.singleRecall), counted(metrics.singleFalsePositives), counted(metrics.flips)];
+    }))));
 
   // Quality grid.
   const gateValues = hundredths(30, 80, 10);
   const scoreConfidences = hundredths(30, 60, 10);
-  const qualityGrid = Object.fromEntries(splits.map(split => [split, gateValues.flatMap(relevance => gateValues.flatMap(applicability => scoreConfidences.map(scoreConfidence => {
+  const qualityGrid: Record<string, QualityPoint[]> = Object.fromEntries(splits.map(split => [split, gateValues.flatMap(relevance => gateValues.flatMap(applicability => scoreConfidences.map(scoreConfidence => {
     const gates = { relevance, applicability, scoreConfidence, concernConfidence: CURRENT.concernConfidence, concernProbability: CURRENT.concernProbability };
     return { ...gates, metrics: qualityMetrics(bySplit(evaluations, split), gates) };
   })))]));
-  const pickQuality = (allowed: (point: QualityPoint) => boolean, value: (point: QualityPoint) => number) => qualityGrid.development!.filter(allowed)
-    .sort((a, b) => value(b) - value(a) || (b.relevance + b.applicability + b.scoreConfidence) - (a.relevance + a.applicability + a.scoreConfidence))[0];
-  const qualityPolicies = [
-    { name: 'Current', point: qualityGrid.development!.find(point => point.relevance === CURRENT.relevance && point.applicability === CURRENT.applicability && point.scoreConfidence === CURRENT.scoreConfidence) },
-    { name: 'Low noise', point: pickQuality(point => share(point.metrics.irrelevant) <= 0.05, point => share(point.metrics.relevant)) },
-    { name: 'Balanced', point: pickQuality(() => true, point => share(point.metrics.relevant) - share(point.metrics.irrelevant)) },
-  ].filter((policy): policy is { name: string; point: QualityPoint } => policy.point !== undefined);
-  const matrixConfidences = [...new Set([CURRENT.scoreConfidence, ...qualityPolicies.map(policy => policy.point.scoreConfidence)])].sort((a, b) => b - a);
-  for (const scoreConfidence of matrixConfidences) {
-    sections.push(`### Quality grid, development, score confidence ≥ ${scoreConfidence.toFixed(1)} (relevant scored · irrelevant scored)`, table(['Relevance \\ applicability', ...gateValues.map(value => `≥ ${value.toFixed(1)}`)],
-      [...gateValues].reverse().map(relevance => [`≥ ${relevance.toFixed(1)}`, ...gateValues.map(applicability => {
-        const point = qualityGrid.development!.find(item => item.relevance === relevance && item.applicability === applicability && item.scoreConfidence === scoreConfidence)!;
-        const cell = `${percent(point.metrics.relevant)} · ${percent(point.metrics.irrelevant)}`;
-        return qualityPolicies.some(policy => policy.point === point) ? `**${cell}**` : cell;
+  const gatesLabel = (point: Pick<QualityGates, 'relevance' | 'applicability' | 'scoreConfidence'>) => `${point.relevance.toFixed(1)} / ${point.applicability.toFixed(1)} / ${point.scoreConfidence.toFixed(1)}`;
+  const findQuality = (split: Split, gates: Pick<QualityGates, 'relevance' | 'applicability' | 'scoreConfidence'>) => qualityGrid[split]!.find(point => gatesLabel(point) === gatesLabel(gates))!;
+  const gateSum = (point: QualityPoint) => point.relevance + point.applicability + point.scoreConfidence;
+  const stricterQuality = (a: QualityPoint, b: QualityPoint) => gateSum(b) - gateSum(a) || b.relevance - a.relevance || b.applicability - a.applicability || b.scoreConfidence - a.scoreConfidence;
+  const qualityPolicies = namedPolicies([
+    { name: 'Current', point: findQuality('development', CURRENT) },
+    { name: 'Moderate', point: pick(qualityGrid.development!, point => share(point.metrics.relevant) >= 0.5 && share(point.metrics.irrelevant) <= 0.05, gateSum, stricterQuality) },
+    { name: 'Permissive', point: pick(qualityGrid.development!, () => true, point => share(point.metrics.relevant) - share(point.metrics.irrelevant), stricterQuality) },
+  ]);
+  for (const split of splits) {
+    sections.push(`### Quality grid, ${split}, relevance ≥ ${CURRENT.relevance.toFixed(1)} (relevant scored · irrelevant scored · clean above defect)`,
+      table(['Applicability \\ score confidence', ...scoreConfidences.map(value => `≥ ${value.toFixed(1)}`)], [...gateValues].reverse().map(applicability => [`≥ ${applicability.toFixed(1)}`,
+      ...scoreConfidences.map(scoreConfidence => {
+        const point = findQuality(split, { relevance: CURRENT.relevance, applicability, scoreConfidence });
+        const cell = `${percent(point.metrics.relevant)} · ${percent(point.metrics.irrelevant)} · ${percent(point.metrics.ordered)}`;
+        return qualityPolicies.some(policy => gatesLabel(policy.point) === gatesLabel(point)) ? `**${cell}**` : cell;
       })])));
   }
-  sections.push(`Bold cells are the candidate policies below, chosen on development data: ${qualityPolicies.map(policy => `${policy.name} (${policy.point.relevance.toFixed(1)} / ${policy.point.applicability.toFixed(1)} / ${policy.point.scoreConfidence.toFixed(1)})`).join(', ')}.`);
-  const qualityHoldout = (point: QualityGates) => qualityGrid.holdout!.find(item => item.relevance === point.relevance && item.applicability === point.applicability && item.scoreConfidence === point.scoreConfidence)!.metrics;
+  sections.push(`Bold cells are the candidate policies below, chosen on development data (relevance / applicability / score confidence): ${qualityPolicies.map(policy => `${policy.name} (${gatesLabel(policy.point)})`).join(', ')}.`);
+  const loosest = { applicability: gateValues[0]!, scoreConfidence: scoreConfidences[0]! };
+  sections.push('### Relevance gate, development (relevant scored · irrelevant scored)', table(['Relevance', `Applicability ≥ ${CURRENT.applicability.toFixed(1)}, score confidence ≥ ${CURRENT.scoreConfidence.toFixed(1)}`,
+    `Applicability ≥ ${loosest.applicability.toFixed(1)}, score confidence ≥ ${loosest.scoreConfidence.toFixed(1)}`], [...gateValues].reverse().map(relevance => [`≥ ${relevance.toFixed(1)}`,
+    ...[{ applicability: CURRENT.applicability, scoreConfidence: CURRENT.scoreConfidence }, loosest].map(gates => {
+      const { metrics } = findQuality('development', { relevance, ...gates });
+      return `${percent(metrics.relevant)} · ${percent(metrics.irrelevant)}`;
+    })])));
   sections.push('### Candidate quality policies', table(['Policy', 'Gates (relevance / applicability / score confidence)', 'Split', ...qualityHeader.slice(1)],
     qualityPolicies.flatMap(({ name, point }) => [
-      [name, `${point.relevance.toFixed(1)} / ${point.applicability.toFixed(1)} / ${point.scoreConfidence.toFixed(1)}`, ...qualityRow('Development', point.metrics)],
-      [name, `${point.relevance.toFixed(1)} / ${point.applicability.toFixed(1)} / ${point.scoreConfidence.toFixed(1)}`, ...qualityRow('Holdout', qualityHoldout(point))],
-    ])), 'Low noise: the most labeled-relevant dimensions scored on development data with at most 5% of labeled-irrelevant dimensions scored. Balanced: the largest gap between the two. Ties go to stricter gates.');
+      [name, gatesLabel(point), ...qualityRow('Development', point.metrics)],
+      [name, gatesLabel(point), ...qualityRow('Holdout', findQuality('holdout', point).metrics)],
+    ])), 'Moderate: the strictest gates that score at least half of the labeled-relevant dimensions on development data, with at most 5% of labeled-irrelevant dimensions scored. Permissive: the largest gap between the two shares. Ties go to stricter gates.');
   const median = (values: number[]) => values.length ? [...values].sort((a, b) => a - b)[Math.floor(values.length / 2)]!.toFixed(2) : 'n/a';
   sections.push('### Quality by dimension (all splits)', table(['Dimension', 'Labeled relevant', 'Labeled irrelevant', 'Median relevance', 'Median applicability', 'Median score confidence',
     ...qualityPolicies.map(policy => `Scored under ${policy.name}`)], dimensionKeys.map(dimension => {
@@ -530,10 +568,17 @@ async function replay(dir: string): Promise<string> {
       return [dimension, String(evaluations.filter(evaluation => evaluation.labels.relevant.includes(dimension)).length),
         String(evaluations.filter(evaluation => evaluation.labels.irrelevant.includes(dimension)).length), median(values.map(value => value.relevance)),
         median(values.map(value => value.applicability)), median(values.map(value => value.scoreConfidence)),
-        ...qualityPolicies.map(({ point }) => counted(ratio(values.map(value => value.relevance >= point.relevance && value.applicability >= point.applicability && value.scoreConfidence >= point.scoreConfidence))))];
+        ...qualityPolicies.map(({ point }) => counted(ratio(values.map(value => scoredUnder(value, point)))))];
     })), 'Labeled counts are reviews in which the dimension carries that label.');
-  const concernPolicy = qualityPolicies.find(policy => policy.name === 'Balanced') ?? qualityPolicies[0]!;
-  sections.push(`### Concern gates at the Balanced quality gates, development (priority on defect · priority on clean)`, table(['Concern probability \\ confidence', ...hundredths(30, 60, 10).map(value => `≥ ${value.toFixed(1)}`)],
+  const reviewsOf = (variant: VariantName) => evaluations.filter(evaluation => evaluation.variant === variant);
+  sections.push('### Actionable concerns by dimension (all splits, defect reviews · clean reviews)', table(['Dimension', ...qualityPolicies.map(policy => policy.name)],
+    dimensionKeys.flatMap(dimension => {
+      const cells = qualityPolicies.map(({ point }) => (['defect', 'clean'] as const)
+        .map(variant => reviewsOf(variant).filter(evaluation => actionableUnder(evaluation.dimensions[dimension]!, point)).length).join(' · '));
+      return cells.every(cell => cell === '0 · 0') ? [] : [[dimension, ...cells]];
+    })), `Each cell counts the reviews, of ${reviewsOf('defect').length} defect and ${reviewsOf('clean').length} clean, in which the dimension had an actionable concern (confidence ≥ ${CURRENT.concernConfidence}, probability ≥ ${CURRENT.concernProbability}). Dimensions with none are omitted.`);
+  const concernPolicy = qualityPolicies.at(-1)!;
+  sections.push(`### Concern gates at the ${concernPolicy.name} quality gates, development (priority on defect · priority on clean)`, table(['Concern probability \\ confidence', ...hundredths(30, 60, 10).map(value => `≥ ${value.toFixed(1)}`)],
     hundredths(50, 80, 10).reverse().map(concernProbability => [`≥ ${concernProbability.toFixed(1)}`, ...hundredths(30, 60, 10).map(concernConfidence => {
       const metrics = qualityMetrics(bySplit(evaluations, 'development'), { ...concernPolicy.point, concernConfidence, concernProbability });
       return `${percent(metrics.defectPriorities)} · ${percent(metrics.cleanPriorities)}`;
@@ -552,10 +597,8 @@ async function replay(dir: string): Promise<string> {
     }
     const evaluation = evaluations.find(item => item.caseId === report.caseId && item.variant === report.variant && item.repeat === report.repeat)!;
     for (const [dimension, metric] of Object.entries(report.quality?.metrics ?? {})) {
-      const values = evaluation.dimensions[dimension]!;
-      const replayed = values.relevance >= CURRENT.relevance && values.applicability >= CURRENT.applicability && values.scoreConfidence >= CURRENT.scoreConfidence;
       metricTotal++;
-      if (replayed === (metric.status === 'assessed')) metricMatches++;
+      if (scoredUnder(evaluation.dimensions[dimension]!, currentQuality) === (metric.status === 'assessed')) metricMatches++;
     }
   }
   sections.push('### Replay check', `Replaying the current policy from raw answers reproduces ${decisionMatches} of ${decisionTotal} live source-check decisions and ${metricMatches} of ${metricTotal} live quality assessed/unassessed outcomes.`);
