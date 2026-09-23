@@ -741,6 +741,46 @@ try {
     return `${using.length} of ${related.length} related files call alpha: ${using.join(', ')}; MCP preview has the same snapshot`;
   }, 64);
 
+  await step(OUTCOME, 'compare follows a finding into a file the user renames', async () => {
+    const repo = makeRepo('rename-history', baseline, { 'src/lib/money.ts': change['src/lib/money.ts'] });
+    const first = cli('review-before-rename', ['review', '--json', '--quiet', '--out', join(evidence, 'report-before-rename.json')], { cwd: repo });
+    exitsIn(first.code, live ? [0, 1, 3] : [1], 'review before the rename');
+    expect(gitIn(repo, 'mv', 'src/lib/money.ts', 'src/lib/split.ts').status === 0, 'git mv failed');
+    const second = cli('review-after-rename', ['review', '--json', '--quiet', '--out', join(evidence, 'report-after-rename.json')], { cwd: repo });
+    exitsIn(second.code, live ? [0, 1, 3] : [1], 'review after the rename');
+    const renamed = json(second.stdout).decisions.find(decision => decision.check === 'zero-divisor');
+    expect(renamed?.path === 'src/lib/split.ts' && renamed.previousPath === 'src/lib/money.ts', `the divisor decision after the rename is at ${renamed?.path} with previousPath ${renamed?.previousPath}`);
+    const compared = cli('compare-rename', ['compare', '--previous', join(evidence, 'report-before-rename.json'), '--current', join(evidence, 'report-after-rename.json')]);
+    exitsIn(compared.code, [0], 'compare across the rename');
+    const history = json(compared.stdout);
+    const states = history.map(item => `${item.path}${item.currentPath ? ` -> ${item.currentPath}` : ''}: ${item.status}`).join(', ') || 'no earlier supported findings';
+    const wasSupported = json(first.stdout).decisions.some(decision => decision.check === 'zero-divisor' && decision.status === 'supported');
+    expect(!wasSupported || history.some(item => item.path === 'src/lib/money.ts' && item.currentPath === 'src/lib/split.ts' && item.status !== 'not_reassessed'), states);
+    expect(!wasSupported || !history.some(item => item.status === 'newly_supported' && item.path === 'src/lib/split.ts'), states);
+    return states;
+  }, 63);
+
+  await step(OUTCOME, 'preview names a staged change the working tree undoes and a staged rename Git cannot pair, through the CLI and MCP', async () => {
+    const repo = makeRepo('staged-only', baseline);
+    writeFilesIn(repo, { 'src/lib/money.ts': change['src/lib/money.ts'] });
+    expect(gitIn(repo, 'add', 'src/lib/money.ts').status === 0 && gitIn(repo, 'mv', 'src/lib/format.ts', 'src/lib/currency.ts').status === 0, 'staging failed');
+    writeFilesIn(repo, { 'src/lib/money.ts': baseline['src/lib/money.ts'], 'src/lib/currency.ts': 'export const currency = (cents: number) => `${cents} cents`;\n' });
+    const reverted = note => /^1 staged change\(s\) .*: src\/lib\/money\.ts\./.test(note);
+    const unpaired = note => /^1 staged rename\(s\) .*: src\/lib\/format\.ts -> src\/lib\/currency\.ts\.$/.test(note);
+    const run = cli('preview-staged-only', ['preview', '--json'], { cwd: repo });
+    exitsIn(run.code, [0], 'preview');
+    const plan = json(run.stdout);
+    expect(plan.notes.some(reverted) && plan.notes.some(unpaired), `CLI preview notes: ${plan.notes.join(' | ')}`);
+    expect(!plan.packets.some(packet => packet.changedPaths.includes('src/lib/money.ts')), 'the undone staged change was reviewed');
+    const human = cli('preview-staged-only-text', ['preview'], { cwd: repo });
+    exitsIn(human.code, [0], 'human preview');
+    expect(human.stdout.includes('Note: 1 staged change(s)') && human.stdout.includes('Note: 1 staged rename(s)'), 'the human preview does not show the staged-change notes');
+    const mcp = await mcpSession('staged-only', boundServer(repo), call => call('tracecheck_preview', {}));
+    const mcpNotes = mcp.isError ? [] : mcp.structuredContent.notes;
+    expect(mcpNotes.some(reverted) && mcpNotes.some(unpaired), `MCP preview: ${mcp.isError ? mcp.text.join(' ').slice(0, 200) : mcpNotes.join(' | ')}`);
+    return `CLI JSON, human, and MCP preview: ${plan.notes.filter(note => reverted(note) || unpaired(note)).join(' | ')}`;
+  }, 63);
+
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------
   const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
   const serverLog = [];

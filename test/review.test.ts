@@ -1,10 +1,13 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { collect } from '../src/collector.js';
 import { estimateReview, isIncomplete, review, reviewAll, render } from '../src/review.js';
 import { compare } from '../src/history.js';
 import { reportSchema } from '../src/schema.js';
 import type { Report, ReviewPlan, TypedEvaluator } from '../src/domain.js';
-import { fixtureEvaluator, planFor, typedFixture } from './helpers.js';
+import { fixtureEvaluator, planFor, repository, typedFixture } from './helpers.js';
 import { cases, casePlan } from '../examples/cases.js';
 
 test('each live benchmark fixture exercises exactly one supported check candidate', () => {
@@ -158,6 +161,26 @@ test('history ignores model order and reports newly supported findings', async (
   before.models = ['model-a', 'model-b']; after.models = ['model-b', 'model-a'];
   assert.deepEqual(compare(before, after).map(item => item.status), ['newly_supported']);
   assert.deepEqual(compare(after, after).map(item => item.status), ['still_present']);
+});
+
+test('history follows a finding into a renamed file only while its site is unchanged', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const constants = Array.from({ length: 12 }, (_value, index) => `export const unit${index} = 'unit ${index}';\n`).join('');
+  const guarded = `export function mean(xs: number[]) {\n  if (!xs.length) return 0;\n  return xs.reduce((a, b) => a + b, 0) / xs.length;\n}\n${constants}`;
+  await writeFile(join(repo.root, 'stats.ts'), guarded);
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stats');
+  await writeFile(join(repo.root, 'stats.ts'), guarded.replace('  if (!xs.length) return 0;\n', ''));
+  const before = await review(await collect({ repo: repo.root }), fixtureEvaluator());
+  repo.git('mv', 'stats.ts', 'mean.ts');
+  const renamed = await review(await collect({ repo: repo.root }), fixtureEvaluator());
+  assert.equal(renamed.decisions[0]!.previousPath, 'stats.ts');
+  assert.deepEqual(compare(before, renamed).map(({ path, currentPath, status }) => ({ path, currentPath, status })),
+    [{ path: 'stats.ts', currentPath: 'mean.ts', status: 'still_present' }]);
+
+  await writeFile(join(repo.root, 'mean.ts'), guarded.replace('  if (!xs.length) return 0;\n', '').replace('/ xs.length', '/ Math.max(xs.length, 1)'));
+  const edited = await review(await collect({ repo: repo.root }), fixtureEvaluator());
+  assert.equal(edited.decisions[0]!.previousPath, 'stats.ts');
+  assert.deepEqual(compare(before, edited).map(item => [item.path, item.status]), [['stats.ts', 'not_reassessed'], ['mean.ts', 'newly_supported']]);
 });
 
 /** One changed file and one candidate per packet, so each packet is one provider request. */

@@ -18,6 +18,8 @@ export const reportSchema = z.object({
   // Change packets collected for the review, including any a failed request left unevaluated. Reports saved by 0.3.x have none.
   packetCount: z.number().int().nonnegative().optional(),
   decisions: z.array(candidateSchema.extend({
+    // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
+    previousPath: z.string().optional(),
     status: z.enum(['supported', 'uncertain', 'needs_context', 'not_supported']),
     confidence: z.number().min(0).max(1), probability: z.number().min(0).max(1),
     impact: z.enum(['high', 'medium', 'low', 'unknown']), impactConfidence: z.number().min(0).max(1),

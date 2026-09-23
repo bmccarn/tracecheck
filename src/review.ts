@@ -237,7 +237,8 @@ function reportStatus(decisions: Decision[], limitations: string[]): Report['sta
     : limitations.length || decisions.some(item => item.status !== 'not_supported') ? 'inconclusive' : 'no_findings';
 }
 
-function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candidate[]): Decision[] {
+/** A decision on a renamed file names the file's base path as `previousPath`, so history can follow the rename. */
+function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candidate[], sources: Source[]): Decision[] {
   return candidates.map(candidate => {
     const assessment = answers[`${candidate.id}_assessment`];
     const impact = answers[`${candidate.id}_impact`];
@@ -246,7 +247,8 @@ function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candida
     const certain = assessment.confidence >= 0.6 && probability >= 0.8;
     const status = assessment.choice === 'needs_context' ? 'needs_context'
       : !certain ? 'uncertain' : assessment.choice === 'supported' ? 'supported' : 'not_supported';
-    return { ...candidate, status, confidence: assessment.confidence, probability,
+    const previousPath = sources.find(source => source.path === candidate.path)?.previousPath;
+    return { ...candidate, ...(previousPath ? { previousPath } : {}), status, confidence: assessment.confidence, probability,
       impact: impact.confidence >= 0.6 ? impact.choice as Decision['impact'] : 'unknown',
       impactConfidence: impact.confidence, raw: { assessment, impact } };
   });
@@ -371,7 +373,7 @@ async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: R
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
       usage.requests++;
-      decided = decisionsFrom(response.answers, request.candidates);
+      decided = decisionsFrom(response.answers, request.candidates, request.evidence.sources);
       for (const key of request.broadKeys) {
         const answer = response.answers[key];
         if (!answer) throw new Error(`Missing typed quality decision: ${key}`);

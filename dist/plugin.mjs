@@ -21111,6 +21111,8 @@ var init_schema = __esm({
       // Change packets collected for the review, including any a failed request left unevaluated. Reports saved by 0.3.x have none.
       packetCount: external_exports.number().int().nonnegative().optional(),
       decisions: external_exports.array(candidateSchema.extend({
+        // The file's path at the base, for a finding in a renamed file. Reports saved by 0.3.x have none.
+        previousPath: external_exports.string().optional(),
         status: external_exports.enum(["supported", "uncertain", "needs_context", "not_supported"]),
         confidence: external_exports.number().min(0).max(1),
         probability: external_exports.number().min(0).max(1),
@@ -21306,7 +21308,7 @@ function estimateReview(plan) {
 function reportStatus(decisions, limitations) {
   return decisions.some((item) => item.status === "supported") ? "needs_attention" : limitations.length || decisions.some((item) => item.status !== "not_supported") ? "inconclusive" : "no_findings";
 }
-function decisionsFrom(answers, candidates) {
+function decisionsFrom(answers, candidates, sources) {
   return candidates.map((candidate) => {
     const assessment = answers[`${candidate.id}_assessment`];
     const impact = answers[`${candidate.id}_impact`];
@@ -21314,8 +21316,10 @@ function decisionsFrom(answers, candidates) {
     const probability = assessment.probabilities[assessment.choice] ?? 0;
     const certain = assessment.confidence >= 0.6 && probability >= 0.8;
     const status = assessment.choice === "needs_context" ? "needs_context" : !certain ? "uncertain" : assessment.choice === "supported" ? "supported" : "not_supported";
+    const previousPath = sources.find((source) => source.path === candidate.path)?.previousPath;
     return {
       ...candidate,
+      ...previousPath ? { previousPath } : {},
       status,
       confidence: assessment.confidence,
       probability,
@@ -21419,7 +21423,7 @@ async function orchestrate(plan, evaluator, broad, options) {
       usage.inputTokens += response.usage.input_tokens;
       usage.outputTokens += response.usage.output_tokens;
       usage.requests++;
-      decided = decisionsFrom(response.answers, request.candidates);
+      decided = decisionsFrom(response.answers, request.candidates, request.evidence.sources);
       for (const key of request.broadKeys) {
         const answer = response.answers[key];
         if (!answer) throw new Error(`Missing typed quality decision: ${key}`);
@@ -37025,6 +37029,18 @@ async function lookup(git, root, args) {
     throw error62;
   }
 }
+async function readNameStatus(root, args, signal, failure2) {
+  const fields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", ...args, "--"], signal, failure2);
+  const records = [];
+  for (let index = 0; index < fields.length; ) {
+    const status = fields[index++];
+    const count = /^[RC]/.test(status) ? 2 : 1;
+    const paths = fields.slice(index, index += count);
+    if (!status || paths.length !== count || paths.some((path) => !path)) throw new Error(failure2);
+    records.push({ status, paths });
+  }
+  return records;
+}
 async function resolveBase(git, root, ref) {
   const revParse = (name) => lookup(git, root, ["rev-parse", "--verify", "--quiet", "--end-of-options", name]);
   const head = await revParse("HEAD^{commit}");
@@ -37063,14 +37079,19 @@ async function collect(options) {
   const changed = [];
   const renames = /* @__PURE__ */ new Map();
   options.onPhase?.("Listing changed files");
-  const statusFields = await readGitRecords(root, ["diff", "--no-ext-diff", "--no-textconv", "--name-status", "-z", "--find-renames", base, "--"], signal, "Git change listing failed");
-  for (let index2 = 0; index2 < statusFields.length; ) {
-    const status = statusFields[index2++];
-    const recordPaths = statusFields.slice(index2, index2 += /^[RC]/.test(status) ? 2 : 1);
-    if (!status || recordPaths.length !== (/^[RC]/.test(status) ? 2 : 1) || recordPaths.some((path2) => !path2)) throw new Error("Git change listing failed");
-    const path = recordPaths.at(-1);
+  for (const { status, paths } of await readNameStatus(root, [base], signal, "Git change listing failed")) {
+    const path = paths.at(-1);
     changed.push(path);
-    if (status.startsWith("R")) renames.set(path, recordPaths[0]);
+    if (status.startsWith("R")) renames.set(path, paths[0]);
+  }
+  const listed = new Set(changed);
+  const inWorkingTree = /* @__PURE__ */ new Set([...listed, ...renames.values()]);
+  const stagedReverted = [];
+  const stagedRenamesUnpaired = [];
+  for (const { status, paths } of await readNameStatus(root, ["--cached", head], signal, "Git staged-change listing failed")) {
+    const [from, to] = paths;
+    if (paths.every((path) => !inWorkingTree.has(path))) stagedReverted.push(paths.join(" -> "));
+    else if (status.startsWith("R") && to !== void 0 && listed.has(to) && !renames.has(to)) stagedRenamesUnpaired.push(`${from} -> ${to}`);
   }
   const untracked = (await readGitRecords(root, ["ls-files", "--others", "--exclude-standard", "-z"], signal, "Git untracked-file listing failed")).filter(Boolean);
   const tracked = (await readGitRecords(root, ["ls-files", "-z"], signal, "Git tracked-file listing failed")).filter(Boolean);
@@ -37080,6 +37101,8 @@ async function collect(options) {
   const limitations = [];
   const notes = [];
   if (movedOn) notes.push(`${baseRef} has commits that HEAD does not; the review compares against their merge base ${base.slice(0, 12)}, so changes made only on ${baseRef} are left out.`);
+  if (stagedReverted.length) notes.push(`${stagedReverted.length} staged change(s) are undone in the working tree, so the review does not see them, although a commit would include them: ${stagedReverted.join(", ")}. The review compares ${baseRef} with the working tree, not the index.`);
+  if (stagedRenamesUnpaired.length) notes.push(`${stagedRenamesUnpaired.length} staged rename(s) differ too much in the working tree for Git to pair the files, so each is reviewed as a deleted file and a new file without a baseline: ${stagedRenamesUnpaired.join(", ")}.`);
   if (!changePaths.length) notes.push(`No changes against ${baseRef}; nothing to review.`);
   else notes.push("Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.");
   if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
@@ -51871,22 +51894,39 @@ import { access, readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
+var siteKey = (item) => JSON.stringify([item.previousPath ?? item.path, item.check, item.symbol, item.quote.replace(/\s+/g, " ")]);
 function compare(previous, current) {
   if (previous.root !== current.root || previous.base !== current.base || previous.checkVersion !== current.checkVersion || previous.policyVersion !== current.policyVersion || [...previous.models].sort().join("\n") !== [...current.models].sort().join("\n")) {
     throw new Error("Reports have different repositories, baselines, models, or policies and cannot be compared.");
   }
-  const supported = previous.decisions.filter((item) => item.status === "supported");
-  const previouslySupported = new Set(supported.map((item) => item.id));
-  const earlier = supported.map((item) => {
-    const next = current.decisions.find((candidate) => candidate.id === item.id);
+  const previousIds = new Set(previous.decisions.map((item) => item.id));
+  const currentById = new Map(current.decisions.map((item) => [item.id, item]));
+  const unmatched = /* @__PURE__ */ new Map();
+  for (const item of current.decisions) {
+    if (previousIds.has(item.id)) continue;
+    const key = siteKey(item);
+    const sites = unmatched.get(key);
+    if (sites) sites.push(item);
+    else unmatched.set(key, [item]);
+  }
+  const followed = /* @__PURE__ */ new Set();
+  const earlier = previous.decisions.filter((item) => item.status === "supported").map((item) => {
+    let next = currentById.get(item.id);
+    if (!next) {
+      const sites = unmatched.get(siteKey(item)) ?? [];
+      const index = sites.findIndex((site) => site.path !== item.path);
+      if (index >= 0) [next] = sites.splice(index, 1);
+    }
+    if (next) followed.add(next.id);
     return {
       id: item.id,
       path: item.path,
       check: item.check,
+      ...next && next.id !== item.id ? { currentId: next.id, currentPath: next.path } : {},
       status: !next ? "not_reassessed" : next.status === "not_supported" ? "no_longer_supported" : next.status === "supported" ? "still_present" : "unresolved"
     };
   });
-  const added = current.decisions.filter((item) => item.status === "supported" && !previouslySupported.has(item.id)).map((item) => ({ id: item.id, path: item.path, check: item.check, status: "newly_supported" }));
+  const added = current.decisions.filter((item) => item.status === "supported" && !followed.has(item.id)).map((item) => ({ id: item.id, path: item.path, check: item.check, status: "newly_supported" }));
   return [...earlier, ...added];
 }
 
