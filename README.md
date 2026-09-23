@@ -229,7 +229,7 @@ node dist/plugin.mjs compare \
 
 Keep the baseline fixed across commits by passing the same commit SHA with `--base` to both reviews. Quality comparisons require matching scope, model, and rubric; uncertain pairs do not produce numeric improvement claims. Source history additionally checks repository, baseline, and policy compatibility.
 
-A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a note that says why. Source-finding history still uses the combined decisions.
+A single-packet repository review returns `report.quality`. Larger changes return `report.packetQualities`, with the changed paths and assessment for each packet; these scores are not averaged into a repository-wide grade. `report.packetCount` counts every collected packet, including any whose review a failed request left incomplete. Previous-quality comparison is supported only for single-packet repository reviews; when a supplied previous evaluation cannot be compared, the report adds a note that says why. Source-finding history still uses the combined decisions.
 
 `--previous` takes either a report saved by `review --out` or an evaluation saved by `assess --out`, for both `review` and `assess`. Tracecheck reads the quality evaluation from it: a report's `quality`, or the evaluation itself. A multi-packet report has no single quality evaluation, so it is rejected, as is any other file. The comparison still requires the same scope, model, and rubric version; a review and an assessment usually have different scopes, so they are reported as not comparable unless the assessment `scope` matches.
 
@@ -335,7 +335,7 @@ Exit codes:
 | `4` | `review`: the reviewed files changed while the review ran. The report is still printed and saved, with a `Stale report: ...` limitation; run the review again. Not in 0.3.0. |
 | `130` | Interrupted with Ctrl-C (SIGINT). The command stops its collection and provider requests and prints `Tracecheck: interrupted.` Not in 0.3.0. |
 
-A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes` (not in 0.3.0), caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**.
+A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes` (not in 0.3.0), caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**, except `Review incomplete for packet ...` limitations, which appear near the top under **Incomplete review**.
 
 A zero exit does not prove correctness. Without `--fail-on-priorities`, `assess` exits `0` on any result. `--help` lists every flag for each command.
 

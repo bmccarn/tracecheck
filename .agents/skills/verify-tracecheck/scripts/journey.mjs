@@ -681,6 +681,66 @@ try {
     return 'CLI and MCP name the ref; the shallow clone is told to fetch origin main with fetch-depth: 0';
   }, 58);
 
+  const PARTIAL_REVIEW = 'a partial multi-packet review counts every packet, lists the unevaluated work first, and nests its headings';
+  if (live) skip(OUTCOME, PARTIAL_REVIEW, 'needs a stand-in that fails one packet\'s requests', 64);
+  else {
+    await step(OUTCOME, PARTIAL_REVIEW, async () => {
+      // Nine changed modules make two packets: eight, then ratio8.ts, whose requests the stand-in fails.
+      const ratios = guard => Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`src/ratios/ratio${index}.ts`,
+        `export function ratio${index}(a: number, b: number): number {\n${guard ? "  if (b === 0) throw new RangeError('b must not be zero');\n" : ''}  return a / b;\n}\n`]));
+      const repo = makeRepo('partial-review', { 'package.json': baseline['package.json'], ...ratios(true) }, ratios(false));
+      const failing = await startStandIn('partial', ['--latency-ms', '50', '--fail-path', 'ratio8']);
+      const env = userEnv({ TYPESAFE_BASE_URL: failing.url });
+      const run = cli('review-partial-markdown', ['review', '--quiet'], { cwd: repo, env });
+      expect(run.code === 3, `review exited ${run.code}: ${lastLine(run.stderr)}`);
+      const header = run.stdout.split('\n').find(line => line.startsWith('**'));
+      expect(header?.includes(' · 2 packets, 1 incomplete · '), `the header reads ${header}`);
+      const headings = [...run.stdout.matchAll(/^(#{1,6}) (.+)$/gm)].map(match => ({ level: match[1].length, text: match[2] }));
+      const skipped = headings.find((heading, index) => index > 0 && heading.level > headings[index - 1].level + 1);
+      expect(headings[0]?.level === 1 && !skipped, `heading "${skipped?.text}" skips a level`);
+      // Each packet's quality table sits under its packet heading, and each finding under the findings section.
+      const parent = index => headings.slice(0, index).findLast(heading => heading.level < headings[index].level)?.text ?? '';
+      const misnested = headings.find((heading, index) => heading.text === 'Quality dimensions' ? !parent(index).startsWith('Packet ')
+        : / — \w+$/.test(heading.text) && parent(index) !== 'Source-anchored findings');
+      expect(!misnested, `"${misnested?.text}" is not nested under its packet or section`);
+      const at = text => headings.findIndex(heading => heading.text === text);
+      const sections = headings.filter(heading => heading.level === 2).map(heading => heading.text).join(', ');
+      expect(at('Incomplete review') > 0 && at('Incomplete review') < at('Packet broad reviews') && at('Packet broad reviews') < at('Source-anchored findings'), `sections in order: ${sections}`);
+      const mcp = await mcpSession('partial-review', { ...boundServer(repo), env }, async call => {
+        const preview = await call('tracecheck_preview', {});
+        expect(!preview.isError, `MCP preview failed: ${preview.text.join(' ')}`);
+        return call('tracecheck_review', { snapshot: preview.structuredContent.snapshot });
+      });
+      const report = mcp.structuredContent?.report;
+      const incomplete = report?.limitations.filter(item => item.startsWith('Review incomplete for packet')).length;
+      expect(!mcp.isError && report.packetCount === 2 && incomplete === 1, `MCP review: ${mcp.isError ? mcp.text.join(' ').slice(0, 200) : `packetCount ${report.packetCount}, ${incomplete} incomplete`}`);
+      return `CLI exit 3, header "${header}", ${headings.length} headings with no skipped level, sections ${sections}; MCP packetCount ${report.packetCount} with ${incomplete} incomplete`;
+    }, 64);
+  }
+
+  await step(OUTCOME, 'preview picks related files that use the changed function before files that sort earlier', async () => {
+    const math = step => `export function alpha(x: number) {\n  return x + ${step};\n}\n\nexport function beta(x: number) {\n  return x * 2;\n}\n`;
+    const files = { 'package.json': baseline['package.json'], 'src/math.ts': math(1) };
+    // Twelve callers and twelve tests use only the unchanged beta and sort before the two that use alpha.
+    for (let index = 0; index < 12; index++) {
+      const name = `a${String(index).padStart(2, '0')}`;
+      files[`src/callers/${name}.ts`] = "import { beta } from '../math';\nexport const value = beta(1);\n";
+      files[`test/${name}.test.ts`] = "import { beta } from '../src/math';\nbeta(1);\n";
+    }
+    files['src/callers/zeta.ts'] = "import { alpha } from '../math';\nexport const value = alpha(1);\n";
+    files['test/zeta.test.ts'] = "import { alpha } from '../src/math';\nalpha(1);\n";
+    const repo = makeRepo('related-relevance', files, { 'src/math.ts': math(2) });
+    const run = cli('preview-related-relevance', ['preview', '--json'], { cwd: repo });
+    exitsIn(run.code, [0], 'preview');
+    const plan = json(run.stdout);
+    const related = plan.packets[0].sourcePaths.filter(path => path !== 'src/math.ts');
+    const using = related.filter(path => /\balpha\b/.test(files[path]));
+    expect(using.includes('src/callers/zeta.ts') && using.includes('test/zeta.test.ts'), `the ${related.length} related files ${related.join(', ')} leave out the files that call alpha`);
+    const mcp = await mcpSession('related-relevance', boundServer(repo), call => call('tracecheck_preview', {}));
+    expect(!mcp.isError && mcp.structuredContent.snapshot === plan.snapshot, `MCP preview: ${mcp.isError ? mcp.text.join(' ').slice(0, 200) : 'a different snapshot from the CLI preview'}`);
+    return `${using.length} of ${related.length} related files call alpha: ${using.join(', ')}; MCP preview has the same snapshot`;
+  }, 64);
+
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------
   const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
   const serverLog = [];

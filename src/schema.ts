@@ -15,6 +15,8 @@ export const reportSchema = z.object({
   baseRef: z.string().optional(),
   checkVersion: z.string(), policyVersion: z.string(), models: z.array(z.string()),
   status: z.enum(['needs_attention', 'inconclusive', 'no_findings']),
+  // Change packets collected for the review, including any a failed request left unevaluated. Reports saved by 0.3.x have none.
+  packetCount: z.number().int().nonnegative().optional(),
   decisions: z.array(candidateSchema.extend({
     status: z.enum(['supported', 'uncertain', 'needs_context', 'not_supported']),
     confidence: z.number().min(0).max(1), probability: z.number().min(0).max(1),

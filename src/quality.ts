@@ -157,13 +157,15 @@ export function compareQuality(evaluation: QualityEvaluation, previous?: Previou
   return qualityEvaluationSchema.parse(result);
 }
 
-export function renderQuality(evaluation: QualityEvaluation): string {
-  const lines = ['## Quality dimensions', '', '| Dimension | Score | Confidence | State |', '| --- | --- | --- | --- |'];
+/** Markdown for an evaluation, headed at `level` so it nests under the caller's heading; priorities sit one level below. */
+export function renderQuality(evaluation: QualityEvaluation, level = 2): string {
+  const heading = '#'.repeat(level);
+  const lines = [`${heading} Quality dimensions`, '', '| Dimension | Score | Confidence | State |', '| --- | --- | --- | --- |'];
   for (const dimension of dimensions) {
     const metric = evaluation.metrics[dimension.key]!;
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? '—'} | ${metric.confidence?.toFixed(2) ?? '—'} | ${metric.status} |`);
   }
-  if (evaluation.priorities.length) lines.push('', '### Quality priorities', '', ...evaluation.priorities.map(priority => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
+  if (evaluation.priorities.length) lines.push('', `${heading}# Quality priorities`, '', ...evaluation.priorities.map(priority => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
   if (evaluation.improvements.length) lines.push('', 'Improvements:', ...evaluation.improvements.map(value => `- ${markdownText(value)}`));
   if (evaluation.regressions.length) lines.push('', 'Regressions:', ...evaluation.regressions.map(value => `- ${markdownText(value)}`));
   if (evaluation.unresolvedWeaknesses.length) lines.push('', `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.map(markdownText).join(', ')}`);

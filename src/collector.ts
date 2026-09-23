@@ -3,7 +3,7 @@ import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
 import { gitOutput, gitRoot, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
-import { definedSymbols, FileTally, focusSource, isSource, isTest, symbolRanges } from './evidence.js';
+import { changedSymbols, declaredNames, definedSymbols, FileTally, focusSource, isSource, isTest, namePattern, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { failureReason, hasSecret, readSource } from './safety.js';
 import type { ProjectConfig } from './project-config.js';
@@ -17,6 +17,7 @@ const hasParser = (path: string) => /\.(?:[cm]?[jt]sx?)$/.test(path);
 const PRIMARY_TARGET_CHARS = 30_000;
 const PRIMARY_TARGET_BYTES = 40_000;
 const isImportable = (path: string) => /\.(?:[cm]?[jt]sx?|py)$/.test(path);
+const RANKING_READ_CONCURRENCY = 16;
 
 export type CollectOptions = {
   repo: string; base?: string; includeUntracked?: boolean; task?: string; repositoryContext?: string;
@@ -27,7 +28,12 @@ export type CollectOptions = {
   onPhase?: (message: string) => void;
 };
 
-type Loaded = { source: Source; names?: string[] };
+/**
+ * `names` are the names a changed file defines. `change` holds the names its change touches, before and after, and the
+ * text of its changed lines; both rank related files by relevance.
+ */
+type Loaded = { source: Source; names?: string[]; change?: { symbols: string[]; text: string } };
+type Related = { role: Exclude<Source['role'], 'changed'>; relevant: boolean };
 const sourceChars = (source: Source) => source.content.length + (source.before?.length ?? 0);
 const sourceBytes = (source: Source) => Buffer.byteLength(JSON.stringify(source));
 
@@ -201,8 +207,14 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
             complete: current.complete && (!old || old.complete), digest: hash([raw, before]) },
         };
       }
-      const names = role === 'changed' ? definedSymbols(raw) : undefined;
-      loaded.set(path, { source, names });
+      if (role === 'changed') {
+        const lines = raw.split('\n');
+        const beforeLines = before?.split('\n') ?? [];
+        const text = [...ranges.map(range => lines.slice(range.start - 1, range.end).join('\n')),
+          ...(before === undefined ? [] : beforeRanges.map(range => beforeLines.slice(range.start - 1, range.end).join('\n')))].join('\n');
+        const symbols = [...new Set([...changedSymbols(raw, ranges), ...(before === undefined ? [] : changedSymbols(before, beforeRanges))])];
+        loaded.set(path, { source, names: definedSymbols(raw), change: { symbols, text } });
+      } else loaded.set(path, { source });
       // A loaded changed file is never read again, so its full text need not stay in memory.
       if (role === 'changed') reads.delete(path);
       if (!source.evidence!.complete) noteSource(path, 'Focused excerpts only; omitted lines are not reviewed');
@@ -272,7 +284,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     entries.push(path); conventionalTests.set(match[1]!, entries);
   }
   for (const paths of conventionalTests.values()) paths.sort();
-  const relatedByChange = new Map<string, Map<string, Exclude<Source['role'], 'changed'>>>();
+  const relatedByChange = new Map<string, Map<string, Related>>();
   const supportNames = new Map<string, Set<string>>();
   const supportTargets = new Map<string, Range[] | undefined>();
   for (const path of [...changedSourcePaths].sort()) {
@@ -281,15 +293,28 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     const stem = posix.basename(path).replace(/\.[^.]+$/, '');
     for (const candidate of conventionalTests.get(stem) ?? []) if (!changedSourcePaths.has(candidate)) related.set(candidate, 'test');
     for (const candidate of index.imports.get(path) ?? []) if (!changedSourcePaths.has(candidate) && !related.has(candidate)) related.set(candidate, 'dependency');
-    const names = loaded.get(path)?.names ?? [];
+    const { names = [], change } = loaded.get(path) ?? {};
     for (const relatedPath of related.keys()) {
       const targetNames = supportNames.get(relatedPath) ?? new Set<string>();
       for (const name of names) targetNames.add(name);
       supportNames.set(relatedPath, targetNames);
     }
-    relatedByChange.set(path, related);
+    // A test or caller is relevant when it mentions a name the change touches, or any name the file defines when no
+    // touched name was found; a dependency is relevant when the changed lines use a name it declares.
+    const touched = namePattern(change?.symbols.length ? change.symbols : names);
+    const entries = [...related];
+    const relevance: boolean[] = [];
+    for (let start = 0; start < entries.length; start += RANKING_READ_CONCURRENCY) {
+      // The screened read is shared with packet assembly, so ranking reads no file twice; a file that fails it is not
+      // relevant here and reports its gap only if a packet selects it.
+      relevance.push(...await Promise.all(entries.slice(start, start + RANKING_READ_CONCURRENCY).map(async ([relatedPath, role]) => {
+        let text: string;
+        try { text = await screenedRead(relatedPath); } catch { signal.throwIfAborted(); return false; }
+        return (role === 'dependency' ? namePattern(declaredNames(text))?.test(change?.text ?? '') : touched?.test(text)) ?? false;
+      })));
+    }
+    relatedByChange.set(path, new Map(entries.map(([relatedPath, role], index) => [relatedPath, { role, relevant: relevance[index]! }])));
   }
-
 
   options.onPhase?.('Assembling change packets');
   const packets: ReviewPacket[] = [];
@@ -330,24 +355,28 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       if (!add(path, true)) throw new Error(`Focused changed evidence cannot fit packet: ${path}`);
       packetLimitations.push(...issueMessages(path));
     }
+    // Relevant files come first. Within each tier, changed files and roles take turns, and each queue is in path order.
     const relatedRoles = ['test', 'caller', 'dependency'] as const;
-    const relatedQueues = primary.map(path => relatedRoles.map(role => [...(relatedByChange.get(path) ?? [])]
-      .filter(([, relatedRole]) => relatedRole === role)
-      .sort(([left], [right]) => left.localeCompare(right))));
-    const related: Array<[string, Exclude<Source['role'], 'changed'>]> = [];
+    const related: Array<[string, Related['role']]> = [];
     const queuedRelated = new Set<string>();
-    for (let offset = 0;; offset++) {
-      let queuedAtOffset = false;
-      for (const queues of relatedQueues) for (const queue of queues) {
-        const entry = queue[offset];
-        if (!entry) continue;
-        queuedAtOffset = true;
-        if (!queuedRelated.has(entry[0])) {
-          queuedRelated.add(entry[0]);
-          related.push(entry);
+    for (const relevant of [true, false]) {
+      const relatedQueues = primary.map(path => relatedRoles.map(role => [...(relatedByChange.get(path) ?? [])]
+        .filter(([, entry]) => entry.role === role && entry.relevant === relevant)
+        .map(([relatedPath]): [string, Related['role']] => [relatedPath, role])
+        .sort(([left], [right]) => left.localeCompare(right))));
+      for (let offset = 0;; offset++) {
+        let queuedAtOffset = false;
+        for (const queues of relatedQueues) for (const queue of queues) {
+          const entry = queue[offset];
+          if (!entry) continue;
+          queuedAtOffset = true;
+          if (!queuedRelated.has(entry[0])) {
+            queuedRelated.add(entry[0]);
+            related.push(entry);
+          }
         }
+        if (!queuedAtOffset) break;
       }
-      if (!queuedAtOffset) break;
     }
     let attempted = 0;
     for (const [relatedPath, role] of related) {

@@ -261,6 +261,27 @@ test('a failed request leaves an inconclusive report that keeps other decisions 
   await assert.rejects(reviewAll(plan, { async evaluate() { throw new Error('Jev request failed (HTTP 401); no successful review was recorded.'); } }), /HTTP 401/);
 });
 
+test('a partial multi-packet report counts every packet, lists the unevaluated work first, and nests its headings', async () => {
+  const report = await reviewAll(packetPlan(3), { async evaluate(state, questions) {
+    if (packetOf(state) === 1) throw new Error('Jev request failed (HTTP 500); no successful review was recorded.');
+    return typedFixture(questions);
+  } });
+  const markdown = render(report);
+  assert.match(markdown, /^\*\*inconclusive\*\* · 3 packets, 1 incomplete · /m);
+  const headings = [...markdown.matchAll(/^(#+) (.+)$/gm)].map(match => ({ level: match[1]!.length, text: match[2]! }));
+  assert.equal(headings[0]!.level, 1);
+  for (const [index, heading] of headings.entries()) {
+    if (index) assert.ok(heading.level <= headings[index - 1]!.level + 1, `${heading.text} skips a level after ${headings[index - 1]!.text}`);
+  }
+  assert.deepEqual(headings.filter(heading => heading.text === 'Quality dimensions').map(heading => heading.level), [4, 4]);
+  const position = (text: string) => headings.findIndex(heading => heading.text === text);
+  assert.ok(position('Incomplete review') > 0 && position('Incomplete review') < position('Packet broad reviews'));
+  assert.ok(position('Packet broad reviews') < position('Source-anchored findings'));
+  // The unevaluated work is listed once, in its own section, not again among the coverage gaps.
+  assert.equal(markdown.split('Review incomplete for packet packet-1').length, 2);
+  assert.ok(markdown.indexOf('Review incomplete for packet packet-1') < markdown.indexOf('## Packet broad reviews'));
+});
+
 test('cancellation aborts every in-flight request and starts no further request', async () => {
   const controller = new AbortController();
   const signals: AbortSignal[] = [];

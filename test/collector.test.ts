@@ -74,7 +74,7 @@ test('borrows tracked dependencies and callers as packet-local support without e
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'helper.ts'), 'export const denominator = 2;');
   await writeFile(join(repo.root, 'caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
-  await writeFile(join(repo.root, 'average.test.ts'), 'throw new Error("this file must never execute");');
+  await writeFile(join(repo.root, 'average.test.ts'), 'import { average } from "./average.js";\nthrow new Error("this file must never execute");');
   repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add context');
   await writeFile(join(repo.root, 'average.ts'), 'import { denominator } from "./helper.js";\nexport function average(xs: number[]) { return xs.length / denominator; }');
   const plan = await collect({ repo: repo.root });
@@ -82,6 +82,24 @@ test('borrows tracked dependencies and callers as packet-local support without e
   assert.equal(plan.sources.find(source => source.path === 'caller.ts')!.role, 'caller');
   assert.equal(plan.sources.find(source => source.path === 'average.test.ts')!.role, 'test');
   assert.deepEqual(plan.packets[0]!.sourcePaths, ['average.ts', 'average.test.ts', 'caller.ts', 'helper.ts']);
+});
+
+test('prefers related files that use the changed function over earlier paths that do not', async t => {
+  const repo = await repository(); t.after(repo.cleanup);
+  const math = (step: number) => `export function alpha(x: number) {\n  return x + ${step};\n}\nexport function beta(x: number) {\n  return x * 2;\n}\n`;
+  await writeFile(join(repo.root, 'math.ts'), math(1));
+  // Twelve callers and twelve tests use only the unchanged function and sort before the two that use the changed one.
+  await writeSeries(repo.root, 'callers', 'a', '.ts', 12, 'import { beta } from "../math.js";\nexport const value = beta(1);\n');
+  await writeSeries(repo.root, 'tests', 'a', '.test.ts', 12, 'import { beta } from "../math.js";\nbeta(1);\n');
+  await writeFile(join(repo.root, 'callers/zeta.ts'), 'import { alpha } from "../math.js";\nexport const value = alpha(1);\n');
+  await writeFile(join(repo.root, 'tests/zeta.test.ts'), 'import { alpha } from "../math.js";\nalpha(1);\n');
+  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add math');
+  await writeFile(join(repo.root, 'math.ts'), math(2));
+  const [packet] = (await collect({ repo: repo.root })).packets;
+  assert.equal(packet!.sourcePaths.length, 16);
+  assert.deepEqual(packet!.sourcePaths.slice(0, 5), ['math.ts', 'tests/zeta.test.ts', 'callers/zeta.ts', 'tests/a000.test.ts', 'callers/a000.ts']);
+  assert.ok(packet!.limitations.includes('Additional related context omitted by packet file budget.'));
+  assert.deepEqual((await collect({ repo: repo.root })).packets[0]!.sourcePaths, packet!.sourcePaths);
 });
 
 test('focuses a large caller on call sites of const arrow and $-named exports', async t => {

@@ -158,11 +158,68 @@ export function definedSymbols(content: string): string[] {
   return [...new Set(Array.from(content.matchAll(DEFINED_SYMBOL), match => (match[1] ?? match[2])!))];
 }
 
-export function symbolRanges(content: string, names: string[]): Range[] {
+// A name bound on a line: the defined-symbol forms plus plain bindings and type declarations.
+const DECLARED_NAME = /\b(?:def|function|class|const|let|var|interface|type|enum)\s+([A-Za-z_$][\w$]*)/g;
+// A class or object method header, such as `async parse(input) {`; control-flow statements share the shape.
+const METHOD = /^\s*(?:(?:static|async|public|private|protected|override|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^<>]*>)?\([^()]*\)\s*(?::[^{;]*)?\{\s*$/;
+const NOT_METHODS = new Set(['if', 'for', 'while', 'switch', 'catch', 'function', 'return', 'with', 'else', 'do']);
+
+/**
+ * Names a change touches: names bound on the changed lines, and each definition that encloses a changed line, found by
+ * walking back through definitions indented less than the lines inside them. Indentation stands in for a parse, so an
+ * earlier nested helper can be named too.
+ */
+export function changedSymbols(content: string, ranges: Range[]): string[] {
+  const lines = content.split('\n');
+  const indents = lines.map(line => line.length - line.trimStart().length);
+  const definitions: Array<{ line: number; name: string }> = [];
+  let line = 0;
+  let nextLineStart = lines[0]!.length + 1;
+  for (const match of content.matchAll(DEFINED_SYMBOL)) {
+    while (line + 1 < lines.length && nextLineStart <= match.index) nextLineStart += lines[++line]!.length + 1;
+    definitions.push({ line, name: (match[1] ?? match[2])! });
+  }
+  lines.forEach((text, index) => {
+    const name = text.match(METHOD)?.[1];
+    if (name && !NOT_METHODS.has(name)) definitions.push({ line: index, name });
+  });
+  definitions.sort((left, right) => right.line - left.line);
+  const names = new Set<string>();
+  for (const range of ranges) {
+    const first = Math.max(range.start, 1) - 1;
+    const last = Math.min(range.end, lines.length);
+    let threshold = Infinity;
+    for (let index = first; index < last; index++) {
+      for (const match of lines[index]!.matchAll(DECLARED_NAME)) names.add(match[1]!);
+      if (lines[index]!.trim()) threshold = Math.min(threshold, indents[index]!);
+    }
+    for (const definition of definitions) {
+      if (threshold === 0 || threshold === Infinity) break;
+      if (definition.line >= first || indents[definition.line]! >= threshold) continue;
+      names.add(definition.name);
+      threshold = indents[definition.line]!;
+    }
+  }
+  return [...names];
+}
+
+/** Every name the file binds with a declaration keyword, used to tell whether changed lines use a dependency. */
+export function declaredNames(content: string): string[] {
+  return [...new Set(Array.from(content.matchAll(DECLARED_NAME), match => match[1]!))];
+}
+
+/** A pattern that matches any of `names` as a whole identifier, or undefined when none is a valid identifier. */
+export function namePattern(names: string[]): RegExp | undefined {
   const wanted = [...new Set(names.filter(name => /^[A-Za-z_$][\w$]*$/.test(name)))];
-  if (!wanted.length) return [];
+  if (!wanted.length) return undefined;
   // `$` is an identifier character, so `\b` cannot delimit names such as `$state`.
-  const pattern = new RegExp(`(?<![\\w$])(?:${wanted.map(name => name.replaceAll('$', '\\$')).join('|')})(?![\\w$])`);
+  return new RegExp(`(?<![\\w$])(?:${wanted.map(name => name.replaceAll('$', '\\$')).join('|')})(?![\\w$])`);
+}
+
+
+export function symbolRanges(content: string, names: string[]): Range[] {
+  const pattern = namePattern(names);
+  if (!pattern) return [];
   const lines = content.split('\n');
   const ranges: Range[] = [];
   for (let index = 0; index < lines.length; index++) {
