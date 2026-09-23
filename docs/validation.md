@@ -1,13 +1,20 @@
 # Validation
 
-## Current state — September 22, 2026
+## Current state — September 23, 2026
 
-- Version 0.3.0 is the current release. The `v0.3.0` release run published it to npm under `latest` through trusted publishing, and the registry lists a provenance attestation for it. The same run created the GitHub release with the npm and marketplace archives and published the plugin payload to `bmccarn/tracecheck-plugins`.
-- In isolated client profiles, the README's marketplace commands install Tracecheck 0.3.0 from `bmccarn/tracecheck-plugins`. Adding `bmccarn/tracecheck` as a marketplace installs the same version. `npx --yes @bmccarn/tracecheck@0.3.0 mcp` completes an MCP handshake as version 0.3.0 and lists the four tools.
-- `main` contains the changes listed under *Unreleased* in the [changelog](../CHANGELOG.md). They ship in the next release. On `main`, `npm test` passes 142 tests, and CI runs the bundle drift check, the offline demo, and `npm run release:check` on Node 22.18.0 and the latest Node 24.x release.
-- Not yet verified: a full agent turn inside a native client, because the isolated profiles have no client login; Cursor's discovery of the MCP server and skill in its editor; and accuracy on real projects beyond the [accuracy benchmark](accuracy.md).
+- Version 0.4.0 is the current release. The `v0.4.0` release run published it to npm under `latest` through trusted publishing with a provenance attestation, created the GitHub release with the npm and marketplace archives, and published the plugin payload to `bmccarn/tracecheck-plugins`. The candidate `0.4.0-rc.1` remains on npm under `next`.
+- The end-user journey against the published `@bmccarn/tracecheck@0.4.0` passes every outcome and plumbing check offline and live through OpenRouter. The live run reports one known issue, #70: a division defect that shares a review packet with a second defect stays `uncertain`.
+- In isolated client profiles for both plugin clients, installing from `bmccarn/tracecheck-plugins` gives 0.4.0, and updating from 0.3.0 moves to 0.4.0. The installed MCP server reports version 0.4.0, lists the four tools, and returns the no-repo and missing-key guidance. Adding `bmccarn/tracecheck` itself as a marketplace installs 0.4.0 over HTTPS, since both in-repo catalogs switched to an HTTPS source after the release.
+- Not yet verified: a full agent turn inside a native client, because the isolated profiles have no client login; Cursor's discovery of the MCP server and skill in its editor; and accuracy on real projects beyond the [accuracy benchmark](accuracy.md) and the synthetic [calibration](calibration.md).
 
 The sections below are dated records, newest first. When an older record says a step was pending, such as npm trusted publishing, it describes that date. This summary gives the current state.
+
+## Stable 0.4.0 publication — September 23, 2026
+
+- The `v0.4.0-rc.1` and `v0.4.0` release runs passed every step, including trusted npm publication with provenance. The candidate went to `next` and a GitHub prerelease, and the stable release went to `latest`, a GitHub release, and the marketplace repository.
+- The candidate's marketplace bundle installed as 0.4.0-rc.1 in isolated profiles for both plugin clients, byte-identical to the bundle, and each client updated an installed 0.3.0 to the candidate. The stable marketplace installed and updated to 0.4.0 the same way.
+- Adding `bmccarn/tracecheck` as a marketplace failed in a clean profile for one client, because it cloned the `github` catalog source over SSH without keys. Both catalogs now use an HTTPS `url` source, and the release gates reject other sources. A clean profile then installed 0.4.0 over HTTPS with no SSH attempt.
+- Running the journey against a freshly published version can fail its install step for a few minutes while the registry processes the upload. The journey now stops after a failed install instead of reporting every later step.
 
 ## Stable 0.4.0 preparation — September 23, 2026
 
