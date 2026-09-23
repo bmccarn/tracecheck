@@ -2,7 +2,9 @@
 
 Tracecheck turns Jev's typed answers into decisions through fixed gates. A source-check candidate is `supported` or `not_supported` only when the selected probability is at least 0.80 and the confidence is at least 0.60. A quality dimension gets a score only when relevance and applicability are both at least 0.8, and the score is published as `assessed` only when its confidence is at least 0.6. This document measures those gates against labeled cases and the live model, for [#70](https://github.com/bmccarn/tracecheck/issues/70) (source checks) and [#59](https://github.com/bmccarn/tracecheck/issues/59) (quality dimensions).
 
-**The thresholds in `src/` are unchanged.** A gate decides what counts as a finding, so the maintainer chooses the policy. The [recommendation](#recommendation) below is one input to that choice.
+**Adopted policy.** The maintainer adopted the recommended gates: source checks need probability of at least 0.70 and confidence of at least 0.60 (policy version 3), and quality scores need relevance of at least 0.8, applicability of at least 0.5, and score confidence of at least 0.4 (rubric version 3). Concern gates are unchanged at 0.6 and 0.8. The gates live in `src/policy.ts`, and `npm run calibrate -- replay` reports them as its baseline. The tables below were produced before the change, so their "current" or "baseline" rows show the earlier gates (0.80 and 0.60 for source checks; 0.8, 0.8, and 0.6 for quality).
+
+The evidence is limited: one agent wrote all 36 pairs as synthetic cases, one model version was tested, each variant was reviewed three times, and each split has 15 defect and 15 clean candidates, so zero false positives in a split still allows a true rate of up to about 20%.
 
 The run on September 23, 2026 used the model `typesafe/jev-1.13-20260917` through OpenRouter, 36 labeled pairs, and 3 reviews of each variant.
 

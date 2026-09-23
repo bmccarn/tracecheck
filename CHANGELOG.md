@@ -53,6 +53,7 @@
 - Partial reports count every collected packet in the header, list unevaluated work in an `Incomplete review` section near the top, and nest packet quality headings correctly. Related-file selection prefers callers and tests that use the changed functions.
 - Concurrent identical `tracecheck_review` calls share one in-flight review and one provider round. A server bound with `--repo` accepts subdirectories of its repository, and verify reports a missing or non-Git repository path without raw system errors.
 - Add `npm run calibrate`, a live calibration harness with 36 labeled defect and clean pairs that records raw provider answers and replays any threshold offline, and `docs/calibration.md` with the results.
+- Adopt calibrated decision gates. A source-check finding needs probability of at least 0.70 (was 0.80) and confidence of at least 0.60, and a quality score needs evidence sufficiency of at least 0.5 (was 0.8) and score confidence of at least 0.4 (was 0.6). Reports say which way an uncertain decision leaned and what it needed, and quality output states how many dimensions were scored. Policy and rubric versions are now 3, so `compare` does not compare new reports with older ones.
 
 ## 0.3.0 — 2026-09-18
 

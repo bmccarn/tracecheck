@@ -2,8 +2,9 @@ import { z } from 'zod';
 import { hash, type Question, type TypedEvaluator, type TypedResponse } from './domain.js';
 import { dimensions } from './quality/dimensions.js';
 import { markdownText } from './terminal.js';
+import { QUALITY_GATES } from './policy.js';
 
-export const RUBRIC_VERSION = '2';
+export const RUBRIC_VERSION = '3';
 const metricSchema = z.object({
   applicable: z.boolean(), status: z.enum(['assessed', 'not_applicable', 'insufficient_context', 'uncertain']),
   applicabilityProbability: z.number().min(0).max(1),
@@ -102,8 +103,8 @@ export function transformQuality(response: TypedResponse, scope: string, snapsho
     const weakness = response.answers[`quality_${dimension.key}_weakness`];
     if (relevance?.type !== 'noul' || applicability?.type !== 'noul' || score?.type !== 'score' || weakness?.type !== 'choice') throw new Error(`Incomplete typed quality result for ${dimension.key}.`);
     const evidenceSignals = { applicabilityProbability: Math.min(relevance.noul, applicability.noul), relevanceProbability: relevance.noul, evidenceProbability: applicability.noul };
-    if (relevance.noul < 0.8 || applicability.noul < 0.8) {
-      const status = relevance.noul <= 0.2 ? 'not_applicable' : relevance.noul < 0.8 ? 'uncertain'
+    if (relevance.noul < QUALITY_GATES.relevance || applicability.noul < QUALITY_GATES.applicability) {
+      const status = relevance.noul <= 0.2 ? 'not_applicable' : relevance.noul < QUALITY_GATES.relevance ? 'uncertain'
         : applicability.noul <= 0.2 ? 'insufficient_context' : 'uncertain';
       metrics[dimension.key] = { applicable: false, ...evidenceSignals, status,
         summary: status === 'not_applicable' ? 'This dimension is not relevant to the supplied task.'
@@ -113,12 +114,12 @@ export function transformQuality(response: TypedResponse, scope: string, snapsho
     }
     const concern = dimension.concerns[weakness.choice];
     if (weakness.choice !== 'none' && !concern) throw new Error(`Unknown quality concern for ${dimension.key}.`);
-    metrics[dimension.key] = { applicable: true, status: score.confidence >= 0.6 ? 'assessed' : 'uncertain',
+    metrics[dimension.key] = { applicable: true, status: score.confidence >= QUALITY_GATES.scoreConfidence ? 'assessed' : 'uncertain',
       ...evidenceSignals, score: Math.round((score.score + 1) * 10) / 10, confidence: score.confidence,
       summary: `${dimension.label} assessment of the supplied implementation; interpret with its confidence and supporting context.`,
       ...(concern ? { weakness: { code: weakness.choice, description: concern.description, suggestion: concern.action,
         confidence: weakness.confidence, probability: weakness.probabilities[weakness.choice] ?? 0,
-        actionable: weakness.confidence >= 0.6 && (weakness.probabilities[weakness.choice] ?? 0) >= 0.8 } } : {}) };
+        actionable: weakness.confidence >= QUALITY_GATES.concernConfidence && (weakness.probabilities[weakness.choice] ?? 0) >= QUALITY_GATES.concernProbability } } : {}) };
   }
   const priorities = dimensions.filter(dimension => metrics[dimension.key]?.weakness?.actionable)
     .sort((a, b) => b.importance - a.importance || (metrics[a.key]!.score ?? 10) - (metrics[b.key]!.score ?? 10))
@@ -160,7 +161,9 @@ export function compareQuality(evaluation: QualityEvaluation, previous?: Previou
 /** Markdown for an evaluation, headed at `level` so it nests under the caller's heading; priorities sit one level below. */
 export function renderQuality(evaluation: QualityEvaluation, level = 2): string {
   const heading = '#'.repeat(level);
-  const lines = [`${heading} Quality dimensions`, '', '| Dimension | Score | Confidence | State |', '| --- | --- | --- | --- |'];
+  const scored = dimensions.filter(dimension => evaluation.metrics[dimension.key]?.status === 'assessed').length;
+  const lines = [`${heading} Quality dimensions`, '', `${scored} of ${dimensions.length} dimensions scored. A dimension is scored only when it is relevant to the task and the evidence is sufficient.`, '',
+    '| Dimension | Score | Confidence | State |', '| --- | --- | --- | --- |'];
   for (const dimension of dimensions) {
     const metric = evaluation.metrics[dimension.key]!;
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? '—'} | ${metric.confidence?.toFixed(2) ?? '—'} | ${metric.status} |`);

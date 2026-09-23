@@ -20381,7 +20381,7 @@ var init_domain = __esm({
   "src/domain.ts"() {
     "use strict";
     CHECK_VERSION = "1";
-    POLICY_VERSION = "2";
+    POLICY_VERSION = "3";
     hash2 = (value) => createHash("sha256").update(JSON.stringify(value)).digest("hex");
   }
 });
@@ -21176,6 +21176,22 @@ var init_terminal = __esm({
   }
 });
 
+// src/policy.ts
+var SOURCE_GATES, QUALITY_GATES;
+var init_policy = __esm({
+  "src/policy.ts"() {
+    "use strict";
+    SOURCE_GATES = { probability: 0.7, confidence: 0.6, impactConfidence: 0.6 };
+    QUALITY_GATES = {
+      relevance: 0.8,
+      applicability: 0.5,
+      scoreConfidence: 0.4,
+      concernConfidence: 0.6,
+      concernProbability: 0.8
+    };
+  }
+});
+
 // src/quality.ts
 function qualityQuestions() {
   const questions = {};
@@ -21222,8 +21238,8 @@ function transformQuality(response, scope, snapshot, previous) {
     const weakness = response.answers[`quality_${dimension.key}_weakness`];
     if (relevance?.type !== "noul" || applicability?.type !== "noul" || score?.type !== "score" || weakness?.type !== "choice") throw new Error(`Incomplete typed quality result for ${dimension.key}.`);
     const evidenceSignals = { applicabilityProbability: Math.min(relevance.noul, applicability.noul), relevanceProbability: relevance.noul, evidenceProbability: applicability.noul };
-    if (relevance.noul < 0.8 || applicability.noul < 0.8) {
-      const status = relevance.noul <= 0.2 ? "not_applicable" : relevance.noul < 0.8 ? "uncertain" : applicability.noul <= 0.2 ? "insufficient_context" : "uncertain";
+    if (relevance.noul < QUALITY_GATES.relevance || applicability.noul < QUALITY_GATES.applicability) {
+      const status = relevance.noul <= 0.2 ? "not_applicable" : relevance.noul < QUALITY_GATES.relevance ? "uncertain" : applicability.noul <= 0.2 ? "insufficient_context" : "uncertain";
       metrics[dimension.key] = {
         applicable: false,
         ...evidenceSignals,
@@ -21236,7 +21252,7 @@ function transformQuality(response, scope, snapshot, previous) {
     if (weakness.choice !== "none" && !concern) throw new Error(`Unknown quality concern for ${dimension.key}.`);
     metrics[dimension.key] = {
       applicable: true,
-      status: score.confidence >= 0.6 ? "assessed" : "uncertain",
+      status: score.confidence >= QUALITY_GATES.scoreConfidence ? "assessed" : "uncertain",
       ...evidenceSignals,
       score: Math.round((score.score + 1) * 10) / 10,
       confidence: score.confidence,
@@ -21247,7 +21263,7 @@ function transformQuality(response, scope, snapshot, previous) {
         suggestion: concern.action,
         confidence: weakness.confidence,
         probability: weakness.probabilities[weakness.choice] ?? 0,
-        actionable: weakness.confidence >= 0.6 && (weakness.probabilities[weakness.choice] ?? 0) >= 0.8
+        actionable: weakness.confidence >= QUALITY_GATES.concernConfidence && (weakness.probabilities[weakness.choice] ?? 0) >= QUALITY_GATES.concernProbability
       } } : {}
     };
   }
@@ -21305,7 +21321,15 @@ function compareQuality(evaluation, previous) {
 }
 function renderQuality(evaluation, level = 2) {
   const heading = "#".repeat(level);
-  const lines = [`${heading} Quality dimensions`, "", "| Dimension | Score | Confidence | State |", "| --- | --- | --- | --- |"];
+  const scored = dimensions.filter((dimension) => evaluation.metrics[dimension.key]?.status === "assessed").length;
+  const lines = [
+    `${heading} Quality dimensions`,
+    "",
+    `${scored} of ${dimensions.length} dimensions scored. A dimension is scored only when it is relevant to the task and the evidence is sufficient.`,
+    "",
+    "| Dimension | Score | Confidence | State |",
+    "| --- | --- | --- | --- |"
+  ];
   for (const dimension of dimensions) {
     const metric = evaluation.metrics[dimension.key];
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? "\u2014"} | ${metric.confidence?.toFixed(2) ?? "\u2014"} | ${metric.status} |`);
@@ -21325,7 +21349,8 @@ var init_quality = __esm({
     init_domain();
     init_dimensions();
     init_terminal();
-    RUBRIC_VERSION = "2";
+    init_policy();
+    RUBRIC_VERSION = "3";
     metricSchema = external_exports.object({
       applicable: external_exports.boolean(),
       status: external_exports.enum(["assessed", "not_applicable", "insufficient_context", "uncertain"]),
@@ -21633,7 +21658,7 @@ function decisionsFrom(answers, candidates, sources) {
     const impact = answers[`${candidate.id}_impact`];
     if (assessment?.type !== "choice" || impact?.type !== "choice") throw new Error(`Missing source-check decision for candidate ${candidate.id}; review is incomplete.`);
     const probability = assessment.probabilities[assessment.choice] ?? 0;
-    const certain = assessment.confidence >= 0.6 && probability >= 0.8;
+    const certain = assessment.confidence >= SOURCE_GATES.confidence && probability >= SOURCE_GATES.probability;
     const status = assessment.choice === "needs_context" ? "needs_context" : !certain ? "uncertain" : assessment.choice === "supported" ? "supported" : "not_supported";
     const previousPath = sources.find((source) => source.path === candidate.path)?.previousPath;
     return {
@@ -21642,7 +21667,7 @@ function decisionsFrom(answers, candidates, sources) {
       status,
       confidence: assessment.confidence,
       probability,
-      impact: impact.confidence >= 0.6 ? impact.choice : "unknown",
+      impact: impact.confidence >= SOURCE_GATES.impactConfidence ? impact.choice : "unknown",
       impactConfidence: impact.confidence,
       raw: { assessment, impact }
     };
@@ -21882,7 +21907,8 @@ function render(report) {
       `Verify: ${markdownText(finding.verification)}`,
       "",
       `Decision confidence: ${finding.confidence.toFixed(2)} \xB7 selected probability: ${finding.probability.toFixed(2)}`,
-      ""
+      "",
+      ...finding.status === "uncertain" ? [`The model leaned toward ${markdownText(finding.raw.assessment.choice)}, but a decision needs probability of at least ${SOURCE_GATES.probability.toFixed(2)} and confidence of at least ${SOURCE_GATES.confidence.toFixed(2)}.`, ""] : []
     );
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
@@ -21896,6 +21922,7 @@ var init_review = __esm({
   "src/review.ts"() {
     "use strict";
     init_domain();
+    init_policy();
     init_jev();
     init_quality();
     init_terminal();

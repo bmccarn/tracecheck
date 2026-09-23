@@ -1,4 +1,5 @@
 import { CHECK_VERSION, POLICY_VERSION, hash } from './domain.js';
+import { SOURCE_GATES } from './policy.js';
 import type { Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedAnswer, TypedEvaluator, TypedResponse } from './domain.js';
 import { DEFAULT_CONCURRENCY } from './jev.js';
 import { comparableQuality, compareQuality, qualityQuestions, transformQuality, renderQuality } from './quality.js';
@@ -244,12 +245,12 @@ function decisionsFrom(answers: Record<string, TypedAnswer>, candidates: Candida
     const impact = answers[`${candidate.id}_impact`];
     if (assessment?.type !== 'choice' || impact?.type !== 'choice') throw new Error(`Missing source-check decision for candidate ${candidate.id}; review is incomplete.`);
     const probability = assessment.probabilities[assessment.choice] ?? 0;
-    const certain = assessment.confidence >= 0.6 && probability >= 0.8;
+    const certain = assessment.confidence >= SOURCE_GATES.confidence && probability >= SOURCE_GATES.probability;
     const status = assessment.choice === 'needs_context' ? 'needs_context'
       : !certain ? 'uncertain' : assessment.choice === 'supported' ? 'supported' : 'not_supported';
     const previousPath = sources.find(source => source.path === candidate.path)?.previousPath;
     return { ...candidate, ...(previousPath ? { previousPath } : {}), status, confidence: assessment.confidence, probability,
-      impact: impact.confidence >= 0.6 ? impact.choice as Decision['impact'] : 'unknown',
+      impact: impact.confidence >= SOURCE_GATES.impactConfidence ? impact.choice as Decision['impact'] : 'unknown',
       impactConfidence: impact.confidence, raw: { assessment, impact } };
   });
 }
@@ -498,7 +499,8 @@ export function render(report: Report): string {
     lines.push(`### ${markdownText(finding.check)} — ${finding.status}`, '',
       `**${markdownText(finding.path)}:${finding.range.start}-${finding.range.end}** · ${markdownText(finding.symbol)} · impact: ${finding.impact}`, '',
       `Hypothesis: ${markdownText(finding.hypothesis)}`, '', 'Evidence:', '', ...terminalLines(finding.quote).split('\n').map(line => `    ${line}`), '',
-      `Verify: ${markdownText(finding.verification)}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '');
+      `Verify: ${markdownText(finding.verification)}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '',
+      ...(finding.status === 'uncertain' ? [`The model leaned toward ${markdownText(finding.raw.assessment.choice)}, but a decision needs probability of at least ${SOURCE_GATES.probability.toFixed(2)} and confidence of at least ${SOURCE_GATES.confidence.toFixed(2)}.`, ''] : []));
   }
   if (!findings.length) lines.push('No findings from the checks performed. This is not a repository-wide correctness verdict.', '');
   if (report.notes.length) lines.push('## Notes', '', ...report.notes.map(item => `- ${markdownText(item)}`), '');
