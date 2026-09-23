@@ -1,17 +1,14 @@
-import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { posix, resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
-import { gitEnvironment, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
+import { gitOutput, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
 import { definedSymbols, FileTally, focusSource, isSource, isTest, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { failureReason, hasSecret, readSource } from './safety.js';
 import type { ProjectConfig } from './project-config.js';
 
-const exec = promisify(execFile);
 const MAX_PACKET_CHARS = 60_000;
 const MAX_PACKET_BYTES = 80_000;
 const MAX_PACKET_FILES = 16;
@@ -41,7 +38,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   // Every Git command runs under the collection signal, so its timeout is the remaining collection budget.
   const git = async (root: string, args: string[]) => {
     signal.throwIfAborted();
-    return (await exec('git', ['-C', root, ...args], { signal, env: gitEnvironment() })).stdout;
+    return gitOutput(root, args, { signal });
   };
   const root = await realpath((await git(resolve(options.repo), ['rev-parse', '--show-toplevel'])).trim());
   const base = (await git(root, ['rev-parse', '--verify', '--end-of-options', `${options.base ?? 'HEAD'}^{commit}`])).trim();

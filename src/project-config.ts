@@ -1,17 +1,14 @@
-import { execFile } from 'node:child_process';
 import { realpath } from 'node:fs/promises';
 import { resolve } from 'node:path';
-import { promisify } from 'node:util';
 import { z } from 'zod';
 import {
   DEFAULT_BASE, DEFAULT_COLLECTION_TIMEOUT_MS, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, DEFAULT_REVIEW_TIMEOUT_MS,
   maxRequestsSchema, reviewScopeFields, reviewTimeoutSchema, type CollectionOptions,
 } from './collection-options.js';
-import { gitEnvironment } from './git-context.js';
+import { gitOutput } from './git-context.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS, modelSchema, requestConcurrencySchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
 import { hasSecret, readSource } from './safety.js';
 
-const exec = promisify(execFile);
 /** Optional configuration file at the repository root. */
 export const CONFIG_FILE = '.tracecheck.json';
 const MAX_CONFIG_BYTES = 64_000;
@@ -113,8 +110,7 @@ export function parseProjectConfig(text: string): ProjectConfig {
 
 /** Finds the Git top level for `repo` and reads its configuration file, if one exists. */
 export async function loadProjectConfig(repo: string, signal?: AbortSignal): Promise<{ root: string; config?: ProjectConfig }> {
-  const { stdout } = await exec('git', ['-C', resolve(repo), 'rev-parse', '--show-toplevel'], { timeout: 10_000, signal, env: gitEnvironment() });
-  const root = await realpath(stdout.trim());
+  const root = await realpath((await gitOutput(resolve(repo), ['rev-parse', '--show-toplevel'], { timeout: 10_000, signal })).trim());
   let text: string;
   try {
     text = await readSource(root, CONFIG_FILE, signal, MAX_CONFIG_BYTES);

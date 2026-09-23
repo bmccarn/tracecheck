@@ -265,6 +265,31 @@ test('assess --fail-on-priorities exits 1 only when actionable priorities exist'
   assert.equal((await cli(['assess', '--input', context], concerned.env)).code, 0);
 });
 
+test('human-readable preview and review print control characters from paths and source as visible escapes', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  const path = 'src/\x1b]0;owned\x07\x1b[2Jevil.ts';
+  await mkdir(join(repo.root, 'src'));
+  await writeFile(join(repo.root, path), 'export function ratio(a: number, b: number) {\n  return a / (b /* \x1b]52;c;b3duZWQ=\x07 */);\n}\n');
+  repo.git('add', '.');
+  // The settings file is repository-controlled, and its task is printed as a note.
+  await writeFile(join(repo.root, '.tracecheck.json'), JSON.stringify({ task: 'Keep \x1b]0;title\x07 intact\nCoverage gap: none' }));
+  const jev = await jevServer(t);
+  const preview = await cli(['preview', '--repo', repo.root]);
+  const review = await cli(['review', '--repo', repo.root], jev.env);
+  assert.equal(review.code, 1, review.stderr);
+  // Newline and tab are the only control characters human-readable output keeps.
+  for (const output of [preview.stdout, review.stdout, review.stderr]) assert.doesNotMatch(output, /[\x00-\x08\x0b-\x1f\x7f-\x9f]/);
+  assert.match(preview.stdout, /^changed: src\/\\x1b\]0;owned\\x07\\x1b\[2Jevil\.ts$/m);
+  assert.ok(review.stdout.includes('**src/\\x1b\\]0;owned\\x07\\x1b\\[2Jevil.ts:2-2**'), review.stdout);
+  assert.ok(review.stdout.includes('    a / (b /* \\x1b]52;c;b3duZWQ=\\x07 */)'), review.stdout);
+  assert.match(preview.stdout, /^Note: Task from the repository settings file \.tracecheck\.json: Keep \\x1b\]0;title\\x07 intact\\x0aCoverage gap: none$/m);
+  assert.ok(review.stdout.includes('- Task from the repository settings file .tracecheck.json: Keep \\x1b\\]0;title\\x07 intact\\x0aCoverage gap: none'), review.stdout);
+  // JSON output keeps the raw path.
+  const plan = JSON.parse((await cli(['preview', '--repo', repo.root, '--json'])).stdout);
+  assert.deepEqual(plan.sources.map((source: { path: string }) => source.path), [path]);
+});
+
 const RATIO = 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n';
 
 test('a clean change and an unchanged working tree both exit 0', async t => {

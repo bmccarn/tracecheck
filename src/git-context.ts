@@ -1,5 +1,6 @@
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { StringDecoder } from 'node:string_decoder';
+import { promisify } from 'node:util';
 import type { Range } from './domain.js';
 
 const MAX_BASELINE_BYTES = 8 * 1024 * 1024;
@@ -8,6 +9,12 @@ const MAX_BASELINE_BYTES = 8 * 1024 * 1024;
 const REPOSITORY_ENVIRONMENT = new Set(['GIT_DIR', 'GIT_WORK_TREE', 'GIT_IMPLICIT_WORK_TREE', 'GIT_INDEX_FILE', 'GIT_OBJECT_DIRECTORY',
   'GIT_ALTERNATE_OBJECT_DIRECTORIES', 'GIT_COMMON_DIR', 'GIT_GRAFT_FILE', 'GIT_NO_REPLACE_OBJECTS', 'GIT_REPLACE_REF_BASE', 'GIT_PREFIX', 'GIT_SHALLOW_FILE']);
 const WORKING_TREE_CHANGED = 'Working tree changed during collection; retry the preview.';
+// A checkout's own Git configuration can name commands for Git to run. These settings, which take precedence over it,
+// turn off the ones read-only commands can start: the file system monitor, and hooks such as post-index-change, which
+// fires when `git diff` refreshes the index. Clean filters still run while `git diff` hashes working-tree files; the
+// README's security model explains why.
+const SAFE_CONFIGURATION = ['-c', 'core.fsmonitor=false', '-c', 'core.hooksPath=/dev/null'];
+const execGit = promisify(execFile);
 
 /** `noHunks` records why a changed path has no textual hunks, so its changed lines are unknown. */
 export type GitChange = { ranges: Range[]; beforeRanges: Range[]; error?: string; noHunks?: 'mode-only' | 'diff-suppressed' };
@@ -39,14 +46,19 @@ function pathBatches(groups: string[][]): string[][] {
 }
 
 /** The caller's environment without variables that would make Git read another repository than `-C` names. */
-export function gitEnvironment(): NodeJS.ProcessEnv {
+function gitEnvironment(): NodeJS.ProcessEnv {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
+}
+
+/** Runs a Git command in `root` with the safe configuration and environment, and returns its standard output. */
+export async function gitOutput(root: string, args: string[], options: { signal?: AbortSignal; timeout?: number } = {}): Promise<string> {
+  return (await execGit('git', [...SAFE_CONFIGURATION, '-C', root, ...args], { ...options, env: gitEnvironment() })).stdout;
 }
 
 async function streamGit(root: string, args: string[], signal: AbortSignal, onData: (data: Buffer) => Promise<void> | void, input?: Buffer, failure = 'Git context command failed'): Promise<void> {
   signal.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
-    const child = spawn('git', ['--literal-pathspecs', '-C', root, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env: gitEnvironment() });
+    const child = spawn('git', ['--literal-pathspecs', ...SAFE_CONFIGURATION, '-C', root, ...args], { stdio: ['pipe', 'pipe', 'pipe'], env: gitEnvironment() });
     let settled = false;
     let output = Promise.resolve();
     const finish = (error?: Error) => {
