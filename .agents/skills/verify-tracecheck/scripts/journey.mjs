@@ -391,6 +391,24 @@ try {
     return `status ${output.report.status}, next action ${output.nextAction}`;
   });
 
+  await step(OUTCOME, 'verify names a missing evidence file by ID and repository-relative path, before any provider request', async () => {
+    const missingInput = { ...evidenceInput, evidence: [{ ...evidenceInput.evidence[0], path: 'src/lib/missing.ts' }] };
+    writeFileSync(join(evidence, 'verify-missing-file.json'), JSON.stringify(missingInput, null, 2));
+    const expected = 'Evidence split (src/lib/missing.ts) was not found in the repository.';
+    const before = await providerRequests();
+    const run = cli('verify-missing-file', ['verify', '--input', join(evidence, 'verify-missing-file.json'), '--repo', project]);
+    expect(run.code === 2 && run.stderr.includes(expected), `CLI verify exited ${run.code}: ${lastLine(run.stderr)}`);
+    const mcp = await mcpSession('verify-missing-file', boundServer(project), call => call('tracecheck_verify', missingInput));
+    const text = mcp.text.join(' ');
+    expect(mcp.isError && text.includes(expected), `bound MCP verify returned ${text.slice(0, 200)}`);
+    // The scratch directory's own name also catches a resolved (realpath) form of the project path.
+    const leaked = [run.stderr, text].find(output => output.includes(relative(tmpdir(), scratch)) || /ENOENT|realpath/.test(output));
+    expect(!leaked, `an error quotes an absolute path or system error text: ${leaked}`);
+    const after = await providerRequests();
+    expect(after === before, `the stand-in received ${after - before} request(s)`);
+    return `CLI exit 2 and a bound MCP error, both: ${expected}${standIn ? ' The stand-in received no request.' : ''}`;
+  }, 50);
+
   const assessInput = { task: JSON.parse(baseline['.tracecheck.json']).task, files: [{ path: 'src/lib/money.ts', content: money }] };
   writeFileSync(join(evidence, 'assess-input.json'), JSON.stringify(assessInput, null, 2));
   await step(PLUMBING, 'assess evaluates supplied files and gates on priorities', async () => {

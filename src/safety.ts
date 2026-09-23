@@ -107,7 +107,10 @@ export function failureReason(error: unknown, fallback: string): string {
 /** The checked physical path of a file and the identity of its last observed state. */
 export type FileIdentity = { physical: string; dev: number; ino: number; size: number; mtimeMs: number; ctimeMs: number };
 
-export async function readSource(root: string, path: string, signal?: AbortSignal, maxBytes = 256_000): Promise<string> {
+/** Bytes `readSource` reads from one file unless the caller sets another limit. */
+export const MAX_SOURCE_BYTES = 256_000;
+
+export async function readSource(root: string, path: string, signal?: AbortSignal, maxBytes = MAX_SOURCE_BYTES): Promise<string> {
   return (await readSourceFile(root, path, signal, maxBytes)).content;
 }
 
@@ -115,7 +118,7 @@ export async function readSource(root: string, path: string, signal?: AbortSigna
  * Reads a regular file inside `root` without following symlinks, and rejects it if it changed during the read.
  * Returns the identity the final check observed, so a caller that stat'ed the file earlier need not stat it again.
  */
-export async function readSourceFile(root: string, path: string, signal?: AbortSignal, maxBytes = 256_000): Promise<{ content: string; identity: FileIdentity }> {
+export async function readSourceFile(root: string, path: string, signal?: AbortSignal, maxBytes = MAX_SOURCE_BYTES): Promise<{ content: string; identity: FileIdentity }> {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   const physical = await realpath(absolute);
@@ -124,7 +127,8 @@ export async function readSourceFile(root: string, path: string, signal?: AbortS
   const file = await open(physical, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const before = await file.stat();
-    if (!before.isFile() || before.size > maxBytes) throw new Error('Nonregular or oversized file');
+    if (!before.isFile()) throw new Error('Nonregular file');
+    if (before.size > maxBytes) throw new Error('Oversized file');
     const buffer = Buffer.alloc(before.size + 1);
     let size = 0;
     while (size < buffer.length) {
