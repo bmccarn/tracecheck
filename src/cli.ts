@@ -1,10 +1,12 @@
 #!/usr/bin/env node
-import { verify } from './verify.js';
+import { verify, verificationInputSchema } from './verify.js';
 import { parseArgs } from 'node:util';
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { access, readFile, stat, writeFile, mkdir } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
+import { z } from 'zod';
 import { collect } from './collector.js';
-import { Jev, jevFromEnv, jevSettings } from './jev.js';
+import { Jev, jevFromEnv, jevSettings, type JevSettings } from './jev.js';
 import { deadline } from './deadline.js';
 import { estimateReview, markStale, reviewAll, render } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, renderQuality, type PreviousEvaluation } from './quality.js';
@@ -21,6 +23,26 @@ import type { Report } from './domain.js';
 const EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 } as const satisfies Record<Report['status'], number>;
 /** A review whose evidence changed while it ran; the report is printed, marked stale. */
 const STALE_EXIT_CODE = 4;
+/** The conventional exit code for a command stopped by SIGINT: 128 plus the signal number 2. */
+const INTERRUPTED_EXIT_CODE = 130;
+/** Aborted by the first SIGINT, which stops the command's work; a second SIGINT ends the process at once. */
+const interrupt = new AbortController();
+
+/** Each command's usage, printed by --help and with an argument error. Continuation lines align under the options. */
+const USAGE = {
+  preview: `tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--max-requests N] [--json]`,
+  review: `tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--review-timeout-ms N]
+                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
+                     [--sarif FILE] [--quiet]`,
+  verify: 'tracecheck verify  --input FILE [--repo PATH] [--out FILE]',
+  assess: 'tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]',
+  compare: 'tracecheck compare --previous FILE --current FILE',
+  mcp: 'tracecheck mcp     [--repo PATH]',
+} as const;
+type Command = keyof typeof USAGE;
+const isCommand = (value: string): value is Command => Object.hasOwn(USAGE, value);
 
 function positiveSafeInteger(value: string | undefined, flag: string): number | undefined {
   if (value === undefined) return undefined;
@@ -28,6 +50,10 @@ function positiveSafeInteger(value: string | undefined, flag: string): number | 
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive safe integer.`);
   return parsed;
+}
+/** A millisecond flag; errors name the flag and its limit. */
+function timeoutFlag(value: string | undefined, flag: string): number | undefined {
+  return validate(reviewTimeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
 }
 function collectionOptions(values: {
   'index-max-files'?: string;
@@ -38,8 +64,8 @@ function collectionOptions(values: {
   return collectionOptionsSchema.parse({
     maxIndexFiles: positiveSafeInteger(values['index-max-files'], '--index-max-files'),
     maxIndexBytes: positiveSafeInteger(values['index-max-bytes'], '--index-max-bytes'),
-    indexTimeoutMs: positiveSafeInteger(values['index-timeout-ms'], '--index-timeout-ms'),
-    collectionTimeoutMs: positiveSafeInteger(values['collection-timeout-ms'], '--collection-timeout-ms'),
+    indexTimeoutMs: timeoutFlag(values['index-timeout-ms'], '--index-timeout-ms'),
+    collectionTimeoutMs: timeoutFlag(values['collection-timeout-ms'], '--collection-timeout-ms'),
   });
 }
 
@@ -50,11 +76,83 @@ async function writeJson(file: string, value: unknown): Promise<void> {
   await writeFile(destination, JSON.stringify(value, null, 2) + '\n', { mode: 0o600 });
 }
 
+const FILE_PROBLEMS: Record<string, string> = {
+  ENOENT: 'no such file or directory', EISDIR: 'it is a directory', ENOTDIR: 'a parent path is not a directory',
+  EACCES: 'permission denied', EPERM: 'permission denied', EROFS: 'read-only file system', ENOSPC: 'no space left on device',
+};
+/** Why a file operation failed, without the resolved absolute path that Node puts in its messages. */
+function fileProblem(error: unknown): string {
+  const code = (error as NodeJS.ErrnoException | undefined)?.code;
+  return (code && FILE_PROBLEMS[code]) || code || (error instanceof Error ? error.message : 'unexpected error');
+}
+
+/**
+ * Fails unless `file`, the destination of `flag`, can be written, so a paid-for result is not lost to a bad path.
+ * A missing parent directory is accepted when its nearest existing ancestor is a writable directory; writeJson creates it.
+ */
+async function checkWritable(flag: string, file: string | undefined): Promise<void> {
+  if (file === undefined) return;
+  const fail = (problem: string) => new Error(`${flag} ${file} cannot be written: ${problem}.`);
+  const existing = async (path: string) => {
+    try { return await stat(path); } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT' || code === 'ENOTDIR') return undefined;
+      throw fail(fileProblem(error));
+    }
+  };
+  let path = resolve(file);
+  const target = await existing(path);
+  if (target?.isDirectory()) throw fail('it is a directory');
+  if (!target) {
+    // The file system root always exists, so the walk ends.
+    for (path = dirname(path); ; path = dirname(path)) {
+      const ancestor = await existing(path);
+      if (!ancestor) continue;
+      if (!ancestor.isDirectory()) throw fail('a parent path is not a directory');
+      break;
+    }
+  }
+  try { await access(path, constants.W_OK); } catch (error) { throw fail(fileProblem(error)); }
+}
+
+/** Writes each requested output file after the result is printed; a failure names the file and exits 2. */
+async function writeOutputs(outputs: Array<[flag: string, file: string | undefined, value: () => unknown]>): Promise<void> {
+  const failures: string[] = [];
+  for (const [flag, file, value] of outputs) {
+    if (file === undefined) continue;
+    try { await writeJson(file, value()); } catch (error) { failures.push(`${flag} ${file} could not be written: ${fileProblem(error)}.`); }
+  }
+  if (failures.length) throw new Error(`${failures.join('\n')}\nThe result printed above is complete.`);
+}
+
+/** Reads the JSON file that `flag` names. Errors name the file as the user typed it. */
+async function readJsonFile(flag: string, file: string): Promise<unknown> {
+  let text: string;
+  try { text = await readFile(file, 'utf8'); } catch (error) { throw new Error(`${flag} ${file} cannot be read: ${fileProblem(error)}.`); }
+  try { return JSON.parse(text); } catch (error) {
+    throw new Error(`${flag} ${file} is not valid JSON: ${terminalText(error instanceof Error ? error.message : String(error))}`);
+  }
+}
+
+const MAX_ISSUES = 10;
+/** One indented line per validation issue, prefixed by its field when it has one, such as `evidence[0].startLine: Invalid input`. */
+function issueLines(error: z.ZodError): string {
+  const field = (path: PropertyKey[]) => path.map((key, index) => typeof key === 'number' ? `[${key}]` : `${index ? '.' : ''}${String(key)}`).join('');
+  const lines = error.issues.slice(0, MAX_ISSUES).map(issue => `  ${terminalText(`${issue.path.length ? `${field(issue.path)}: ` : ''}${issue.message}`)}`);
+  if (error.issues.length > MAX_ISSUES) lines.push(`  and ${error.issues.length - MAX_ISSUES} more.`);
+  return lines.join('\n');
+}
+
+/** Parses `value` with `schema`; `problem`, such as "--input x.json is not valid", introduces the list of issues. */
+function validate<S extends z.ZodType>(schema: S, value: unknown, problem: string): z.output<S> {
+  const result = schema.safeParse(value);
+  if (!result.success) throw new Error(`${problem}:\n${issueLines(result.error)}`);
+  return result.data;
+}
+
 /** Reads the quality evaluation to compare with from a saved review report or an assess evaluation. */
 async function readPrevious(file: string): Promise<PreviousEvaluation> {
-  let value: unknown;
-  try { value = JSON.parse(await readFile(file, 'utf8')); }
-  catch (error) { throw new Error(`--previous ${file} is not a readable JSON file.`, { cause: error }); }
+  const value = await readJsonFile('--previous', file);
   const report = reportSchema.safeParse(value);
   if (report.success) {
     if (report.data.quality) return report.data.quality;
@@ -84,16 +182,7 @@ async function main() {
     console.log(`Tracecheck: evidence-backed review powered by Jev
 
 Usage:
-  tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--max-requests N] [--json]
-  tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
-                     [--sarif FILE] [--quiet]
-  tracecheck verify  --input FILE [--repo PATH] [--out FILE]
-  tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
-  tracecheck compare --previous FILE --current FILE
-  tracecheck mcp     [--repo PATH]
+${Object.values(USAGE).map(usage => `  ${usage}`).join('\n')}
 
 Options:
   --repo PATH                 Git repository to collect; defaults to the current directory. verify
@@ -124,6 +213,10 @@ Collection limits (preview and review): --index-max-files N, --index-max-bytes N
 --index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
 All N values are positive safe integers.
 
+Commands take no positional arguments besides the command name. --out and --sarif paths are
+checked before any collection or provider request, and the result is printed before they are
+written, so a failed write still leaves the printed result and exits 2.
+
 Exit codes:
   0  Success. review and verify found nothing that needs attention; assess never fails on
      its results unless --fail-on-priorities is set.
@@ -133,10 +226,12 @@ Exit codes:
   3  review or verify is inconclusive.
   4  review: the reviewed files changed while the review ran. The report is still printed
      and saved, marked stale; run review again.
+  130  Interrupted with Ctrl-C (SIGINT).
 
 Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
-require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
-TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
+require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter); they
+check for a key after reading their input files and before collecting from the repository.
+Optional TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
 (default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
 Optional JEV_CONCURRENCY sets how many review requests run at once (default: 4, at most 16).
 Each change packet receives an individual bounded quality assessment. Automatic
@@ -154,6 +249,12 @@ JEV_CONCURRENCY override its model, requestTimeoutMs, and requestConcurrency. Th
 cannot hold credentials or the endpoint.`);
     return;
   }
+  if (!isCommand(command)) throw new Error(`Unknown command: ${command}`);
+  const extra = positionals.slice(1);
+  if (extra.length) {
+    const scope = command === 'preview' || command === 'review' ? ` It has no path filter; it covers every change in the repository that --repo names.` : '';
+    throw new Error(`Unexpected argument${extra.length > 1 ? 's' : ''}: ${extra.join(' ')}. tracecheck ${command} takes no positional arguments.${scope}\nUsage:\n  ${USAGE[command]}`);
+  }
   if (command === 'mcp') {
     const { serve } = await import('./mcp.js');
     await serve(values.repo ? resolve(values.repo) : undefined);
@@ -161,59 +262,67 @@ cannot hold credentials or the endpoint.`);
   }
   if (command === 'compare') {
     if (!values.previous || !values.current) throw new Error('compare requires --previous old.json --current current.json');
-    const previous = reportSchema.parse(JSON.parse(await readFile(values.previous, 'utf8')));
-    const current = reportSchema.parse(JSON.parse(await readFile(values.current, 'utf8')));
+    const previous = validate(reportSchema, await readJsonFile('--previous', values.previous), `--previous ${values.previous} is not a report saved by review --out`);
+    const current = validate(reportSchema, await readJsonFile('--current', values.current), `--current ${values.current} is not a report saved by review --out`);
     console.log(JSON.stringify(compare(previous, current), null, 2));
     return;
   }
+  process.once('SIGINT', () => interrupt.abort(new Error('Interrupted.')));
   if (command === 'verify') {
     if (!values.input) throw new Error('verify requires --input evidence.json');
-    const controller = new AbortController();
-    process.once('SIGINT', () => controller.abort());
-    const signal = AbortSignal.any([controller.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
-    const input = JSON.parse(await readFile(values.input, 'utf8'));
-    const output = await verify({ ...input, ...(values.repo ? { repo: values.repo } : {}) }, jevFromEnv(signal), signal);
-    if (values.out) await writeJson(values.out, output);
+    await checkWritable('--out', values.out);
+    const raw = await readJsonFile('--input', values.input);
+    const input = validate(verificationInputSchema, values.repo && typeof raw === 'object' && raw !== null && !Array.isArray(raw) ? { ...raw, repo: values.repo } : raw,
+      `--input ${values.input} is not valid verify evidence`);
+    const signal = AbortSignal.any([interrupt.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
+    const output = await verify(input, jevFromEnv(signal), signal);
     console.log(JSON.stringify(output, null, 2));
     process.exitCode = EXIT_CODES[output.report.status];
+    await writeOutputs([['--out', values.out, () => output]]);
     return;
   }
   if (command === 'assess') {
     if (!values.input) throw new Error('assess requires --input context.json');
-    const controller = new AbortController();
-    process.once('SIGINT', () => controller.abort());
-    const signal = AbortSignal.any([controller.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
-    const input = qualityInputSchema.parse(JSON.parse(await readFile(values.input, 'utf8')));
+    await checkWritable('--out', values.out);
+    const input = validate(qualityInputSchema, await readJsonFile('--input', values.input), `--input ${values.input} is not valid assess context`);
     if (values.previous) input.previousEvaluation = await readPrevious(values.previous);
+    const signal = AbortSignal.any([interrupt.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const evaluation = await assess(input, jevFromEnv(signal), signal);
-    if (values.out) await writeJson(values.out, evaluation);
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
     if (values['fail-on-priorities'] && evaluation.priorities.length) process.exitCode = 1;
+    await writeOutputs([['--out', values.out, () => evaluation]]);
     return;
   }
-  if (!['preview', 'review'].includes(command)) throw new Error(`Unknown command: ${command}`);
-  const controller = new AbortController();
-  process.once('SIGINT', () => controller.abort());
+  if (command === 'review') {
+    await checkWritable('--out', values.out);
+    await checkWritable('--sarif', values.sarif);
+    if (values.out !== undefined && values.sarif !== undefined && resolve(values.out) === resolve(values.sarif)) throw new Error('--out and --sarif name the same file; name two different files.');
+  }
   const settings = await resolveSettings(values.repo ?? '.', { base: values.base, includeUntracked: values['include-untracked'],
     task: values.task, repositoryContext: values.context, collection: collectionOptions(values),
-    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')),
-    maxRequests: positiveSafeInteger(values['max-requests'], '--max-requests') }, controller.signal);
+    reviewTimeoutMs: timeoutFlag(values['review-timeout-ms'], '--review-timeout-ms'),
+    maxRequests: positiveSafeInteger(values['max-requests'], '--max-requests') }, interrupt.signal);
   const { reviewTimeoutMs, maxRequests, settingsFileNotes: notes, request: collectionRequest } = settings;
-  const progress = command === 'review' && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : undefined;
-  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
-  if (command === 'preview') {
+  // Collection can take minutes, so review reads --previous and checks the provider key and endpoint first.
+  let live: { previous?: PreviousEvaluation; provider: JevSettings; jev: Jev } | undefined;
+  if (command === 'review') {
+    const previous = values.previous ? await readPrevious(values.previous) : undefined;
+    const provider = jevSettings(process.env, settings.provider);
+    live = { previous, provider, jev: new Jev({ ...provider, signal: interrupt.signal }) };
+  }
+  const progress = live && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : undefined;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: interrupt.signal, onPhase: progress?.phase });
+  if (!live) { // preview: only review sets live
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.map(terminalText).join(', ')}`).join('\n');
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : '';
     console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${[...plan.notes, ...notes].map(item => `Note: ${terminalText(item)}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
     return;
   }
-  const reviewSignal = AbortSignal.any([controller.signal,
+  const reviewSignal = AbortSignal.any([interrupt.signal,
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)]);
-  const previous = values.previous ? await readPrevious(values.previous) : undefined;
-  const provider = jevSettings(process.env, settings.provider);
-  const report = await reviewAll(plan, new Jev({ ...provider, signal: reviewSignal }),
-    { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests });
+  const report = await reviewAll(plan, live.jev,
+    { signal: reviewSignal, concurrency: live.provider.concurrency, maxRequests, previousEvaluation: live.previous, onProgress: progress?.requests });
   reviewSignal.throwIfAborted();
   report.notes.push(...notes);
   progress?.checking();
@@ -223,13 +332,19 @@ cannot hold credentials or the endpoint.`);
   if (stale) markStale(report);
   progress?.finished();
   if (stale) console.error('Tracecheck: the repository changed during the review, so the report is marked stale. Run review again.');
-  if (values.out) await writeJson(values.out, report);
-  if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
   process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
+  await writeOutputs([['--out', values.out, () => report], ['--sarif', values.sarif, () => toSarif(report)]]);
 }
 
 main().catch(error => {
-  console.error(`Tracecheck: ${error instanceof Error ? terminalLines(error.message) : 'Unexpected failure'}`);
+  if (interrupt.signal.aborted) {
+    console.error('Tracecheck: interrupted.');
+    process.exitCode = INTERRUPTED_EXIT_CODE;
+    return;
+  }
+  // A schema parse outside validate() still prints one line per issue, never the raw issue array.
+  const message = error instanceof z.ZodError ? `Invalid input:\n${issueLines(error)}` : error instanceof Error ? error.message : 'Unexpected failure';
+  console.error(`Tracecheck: ${terminalLines(message)}`);
   process.exitCode = 2;
 });

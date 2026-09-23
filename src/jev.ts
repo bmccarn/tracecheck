@@ -107,7 +107,7 @@ export class Jev implements Evaluator, TypedEvaluator {
   readonly model: string;
   readonly endpoint: string;
   constructor(private options: { apiKey: string; model?: string; baseUrl?: string; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number }) {
-    if (!options.apiKey.trim()) throw new Error('Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.');
+    if (!options.apiKey.trim()) throw new Error('Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY to run review, verify, or assess. Preview works without a key.');
     this.model = options.model ?? DEFAULT_MODEL;
     this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
   }

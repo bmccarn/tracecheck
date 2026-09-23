@@ -20639,7 +20639,7 @@ var init_jev = __esm({
     Jev = class {
       constructor(options) {
         this.options = options;
-        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY before running a live review. Preview and demo do not require a key.");
+        if (!options.apiKey.trim()) throw new Error("Set JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY to run review, verify, or assess. Preview works without a key.");
         this.model = options.model ?? DEFAULT_MODEL;
         this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
       }
@@ -42559,9 +42559,9 @@ var init_src_CX2iR2pK = __esm({
               const sendCodec = this._resolveOutboundCodec(r.method);
               this._assertOutboundRequestInEra(sendCodec, r.method);
               if (isStandardSchema(schemaOrOptions)) return sendRequest(r, schemaOrOptions, maybeOptions);
-              const validate2 = codecResultValidator(sendCodec, r.method);
-              if (validate2 === void 0) throw new TypeError(`'${r.method}' is not a spec method; pass a result schema as the second argument to ctx.mcpReq.send().`);
-              return sendRequest(r, validate2, schemaOrOptions);
+              const validate3 = codecResultValidator(sendCodec, r.method);
+              if (validate3 === void 0) throw new TypeError(`'${r.method}' is not a spec method; pass a result schema as the second argument to ctx.mcpReq.send().`);
+              return sendRequest(r, validate3, schemaOrOptions);
             }),
             notify: sendNotification
           },
@@ -42654,9 +42654,9 @@ var init_src_CX2iR2pK = __esm({
         const codec2 = this._resolveOutboundCodec(request.method);
         this._assertOutboundRequestInEra(codec2, request.method);
         if (isStandardSchema(schemaOrOptions)) return this._requestWithSchemaViaCodec(codec2, request, schemaOrOptions, maybeOptions);
-        const validate2 = codecResultValidator(codec2, request.method);
-        if (validate2 === void 0) throw new TypeError(`'${request.method}' is not a spec method; pass a result schema as the second argument to request().`);
-        return this._requestWithSchemaViaCodec(codec2, request, validate2, schemaOrOptions);
+        const validate3 = codecResultValidator(codec2, request.method);
+        if (validate3 === void 0) throw new TypeError(`'${request.method}' is not a spec method; pass a result schema as the second argument to request().`);
+        return this._requestWithSchemaViaCodec(codec2, request, validate3, schemaOrOptions);
       }
       /**
       * The wire codec for this instance's negotiated era — the phase-2 truth:
@@ -43438,9 +43438,9 @@ var init_ajvProvider_CEoC_sr = __esm({
           const rhs = this.rhs === void 0 ? "" : ` = ${this.rhs}`;
           return `${varKind} ${this.name}${rhs};` + _n;
         }
-        optimizeNames(names, constants2) {
+        optimizeNames(names, constants3) {
           if (!names[this.name.str]) return;
-          if (this.rhs) this.rhs = optimizeExpr(this.rhs, names, constants2);
+          if (this.rhs) this.rhs = optimizeExpr(this.rhs, names, constants3);
           return this;
         }
         get names() {
@@ -43457,9 +43457,9 @@ var init_ajvProvider_CEoC_sr = __esm({
         render({ _n }) {
           return `${this.lhs} = ${this.rhs};` + _n;
         }
-        optimizeNames(names, constants2) {
+        optimizeNames(names, constants3) {
           if (this.lhs instanceof code_1.Name && !names[this.lhs.str] && !this.sideEffects) return;
-          this.rhs = optimizeExpr(this.rhs, names, constants2);
+          this.rhs = optimizeExpr(this.rhs, names, constants3);
           return this;
         }
         get names() {
@@ -43518,8 +43518,8 @@ var init_ajvProvider_CEoC_sr = __esm({
         optimizeNodes() {
           return `${this.code}` ? this : void 0;
         }
-        optimizeNames(names, constants2) {
-          this.code = optimizeExpr(this.code, names, constants2);
+        optimizeNames(names, constants3) {
+          this.code = optimizeExpr(this.code, names, constants3);
           return this;
         }
         get names() {
@@ -43545,12 +43545,12 @@ var init_ajvProvider_CEoC_sr = __esm({
           }
           return nodes.length > 0 ? this : void 0;
         }
-        optimizeNames(names, constants2) {
+        optimizeNames(names, constants3) {
           const { nodes } = this;
           let i = nodes.length;
           while (i--) {
             const n = nodes[i];
-            if (n.optimizeNames(names, constants2)) continue;
+            if (n.optimizeNames(names, constants3)) continue;
             subtractNames(names, n.names);
             nodes.splice(i, 1);
           }
@@ -43597,11 +43597,11 @@ var init_ajvProvider_CEoC_sr = __esm({
           if (cond === false || !this.nodes.length) return void 0;
           return this;
         }
-        optimizeNames(names, constants2) {
+        optimizeNames(names, constants3) {
           var _a3;
-          this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants2);
-          if (!(super.optimizeNames(names, constants2) || this.else)) return;
-          this.condition = optimizeExpr(this.condition, names, constants2);
+          this.else = (_a3 = this.else) === null || _a3 === void 0 ? void 0 : _a3.optimizeNames(names, constants3);
+          if (!(super.optimizeNames(names, constants3) || this.else)) return;
+          this.condition = optimizeExpr(this.condition, names, constants3);
           return this;
         }
         get names() {
@@ -43623,9 +43623,9 @@ var init_ajvProvider_CEoC_sr = __esm({
         render(opts) {
           return `for(${this.iteration})` + super.render(opts);
         }
-        optimizeNames(names, constants2) {
-          if (!super.optimizeNames(names, constants2)) return;
-          this.iteration = optimizeExpr(this.iteration, names, constants2);
+        optimizeNames(names, constants3) {
+          if (!super.optimizeNames(names, constants3)) return;
+          this.iteration = optimizeExpr(this.iteration, names, constants3);
           return this;
         }
         get names() {
@@ -43660,9 +43660,9 @@ var init_ajvProvider_CEoC_sr = __esm({
         render(opts) {
           return `for(${this.varKind} ${this.name} ${this.loop} ${this.iterable})` + super.render(opts);
         }
-        optimizeNames(names, constants2) {
-          if (!super.optimizeNames(names, constants2)) return;
-          this.iterable = optimizeExpr(this.iterable, names, constants2);
+        optimizeNames(names, constants3) {
+          if (!super.optimizeNames(names, constants3)) return;
+          this.iterable = optimizeExpr(this.iterable, names, constants3);
           return this;
         }
         get names() {
@@ -43701,11 +43701,11 @@ var init_ajvProvider_CEoC_sr = __esm({
           (_b = this.finally) === null || _b === void 0 || _b.optimizeNodes();
           return this;
         }
-        optimizeNames(names, constants2) {
+        optimizeNames(names, constants3) {
           var _a3, _b;
-          super.optimizeNames(names, constants2);
-          (_a3 = this.catch) === null || _a3 === void 0 || _a3.optimizeNames(names, constants2);
-          (_b = this.finally) === null || _b === void 0 || _b.optimizeNames(names, constants2);
+          super.optimizeNames(names, constants3);
+          (_a3 = this.catch) === null || _a3 === void 0 || _a3.optimizeNames(names, constants3);
+          (_b = this.finally) === null || _b === void 0 || _b.optimizeNames(names, constants3);
           return this;
         }
         get names() {
@@ -43954,7 +43954,7 @@ var init_ajvProvider_CEoC_sr = __esm({
       function addExprNames(names, from) {
         return from instanceof code_1._CodeOrName ? addNames(names, from.names) : names;
       }
-      function optimizeExpr(expr, names, constants2) {
+      function optimizeExpr(expr, names, constants3) {
         if (expr instanceof code_1.Name) return replaceName(expr);
         if (!canOptimize(expr)) return expr;
         return new code_1._Code(expr._items.reduce((items, c) => {
@@ -43964,13 +43964,13 @@ var init_ajvProvider_CEoC_sr = __esm({
           return items;
         }, []));
         function replaceName(n) {
-          const c = constants2[n.str];
+          const c = constants3[n.str];
           if (c === void 0 || names[n.str] !== 1) return n;
           delete names[n.str];
           return c;
         }
         function canOptimize(e) {
-          return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants2[c.str] !== void 0);
+          return e instanceof code_1._Code && e._items.some((c) => c instanceof code_1.Name && names[c.str] === 1 && constants3[c.str] !== void 0);
         }
       }
       function subtractNames(names, from) {
@@ -45592,28 +45592,28 @@ var init_ajvProvider_CEoC_sr = __esm({
           const validateCode = gen.toString();
           sourceCode = `${gen.scopeRefs(names_1.default.scope)}return ${validateCode}`;
           if (this.opts.code.process) sourceCode = this.opts.code.process(sourceCode, sch);
-          const validate2 = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode)(this, this.scope.get());
-          this.scope.value(validateName, { ref: validate2 });
-          validate2.errors = null;
-          validate2.schema = sch.schema;
-          validate2.schemaEnv = sch;
-          if (sch.$async) validate2.$async = true;
-          if (this.opts.code.source === true) validate2.source = {
+          const validate3 = new Function(`${names_1.default.self}`, `${names_1.default.scope}`, sourceCode)(this, this.scope.get());
+          this.scope.value(validateName, { ref: validate3 });
+          validate3.errors = null;
+          validate3.schema = sch.schema;
+          validate3.schemaEnv = sch;
+          if (sch.$async) validate3.$async = true;
+          if (this.opts.code.source === true) validate3.source = {
             validateName,
             validateCode,
             scopeValues: gen._values
           };
           if (this.opts.unevaluated) {
             const { props, items } = schemaCxt;
-            validate2.evaluated = {
+            validate3.evaluated = {
               props: props instanceof codegen_1.Name ? void 0 : props,
               items: items instanceof codegen_1.Name ? void 0 : items,
               dynamicProps: props instanceof codegen_1.Name,
               dynamicItems: items instanceof codegen_1.Name
             };
-            if (validate2.source) validate2.source.evaluated = (0, codegen_1.stringify)(validate2.evaluated);
+            if (validate3.source) validate3.source.evaluated = (0, codegen_1.stringify)(validate3.evaluated);
           }
-          sch.validate = validate2;
+          sch.validate = validate3;
           return sch;
         } catch (e) {
           delete sch.validate;
@@ -48609,8 +48609,8 @@ var init_ajvProvider_CEoC_sr = __esm({
         const { gen, it } = cxt;
         it.schemaEnv.root.dynamicAnchors[anchor2] = true;
         const v = (0, codegen_1._)`${names_1.default.dynamicAnchors}${(0, codegen_1.getProperty)(anchor2)}`;
-        const validate2 = it.errSchemaPath === "#" ? it.validateName : _getValidate(cxt);
-        gen.if((0, codegen_1._)`!${v}`, () => gen.assign(v, validate2));
+        const validate3 = it.errSchemaPath === "#" ? it.validateName : _getValidate(cxt);
+        gen.if((0, codegen_1._)`!${v}`, () => gen.assign(v, validate3));
       }
       exports.dynamicAnchor = dynamicAnchor;
       function _getValidate(cxt) {
@@ -48657,11 +48657,11 @@ var init_ajvProvider_CEoC_sr = __esm({
             gen.if(v, _callRef(v, valid), _callRef(it.validateName, valid));
           } else _callRef(it.validateName, valid)();
         }
-        function _callRef(validate2, valid) {
+        function _callRef(validate3, valid) {
           return valid ? () => gen.block(() => {
-            (0, ref_1.callRef)(cxt, validate2);
+            (0, ref_1.callRef)(cxt, validate3);
             gen.let(valid, true);
-          }) : () => (0, ref_1.callRef)(cxt, validate2);
+          }) : () => (0, ref_1.callRef)(cxt, validate3);
         }
       }
       exports.dynamicRef = dynamicRef;
@@ -49702,9 +49702,9 @@ var init_ajvProvider_CEoC_sr = __esm({
     require_formats = /* @__PURE__ */ __commonJSMin(((exports) => {
       Object.defineProperty(exports, "__esModule", { value: true });
       exports.formatNames = exports.fastFormats = exports.fullFormats = void 0;
-      function fmtDef(validate2, compare2) {
+      function fmtDef(validate3, compare2) {
         return {
-          validate: validate2,
+          validate: validate3,
           compare: compare2
         };
       }
@@ -51705,13 +51705,15 @@ var init_mcp = __esm({
 
 // src/cli.ts
 init_verify();
+init_zod();
 init_collector();
 init_jev();
 init_deadline();
 init_review();
 init_quality();
 import { parseArgs } from "node:util";
-import { readFile, writeFile, mkdir } from "node:fs/promises";
+import { constants as constants2 } from "node:fs";
+import { access, readFile, stat, writeFile, mkdir } from "node:fs/promises";
 import { dirname, resolve as resolve5 } from "node:path";
 
 // src/history.ts
@@ -51808,6 +51810,21 @@ init_progress();
 init_terminal();
 var EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 };
 var STALE_EXIT_CODE = 4;
+var INTERRUPTED_EXIT_CODE = 130;
+var interrupt = new AbortController();
+var USAGE = {
+  preview: `tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--max-requests N] [--json]`,
+  review: `tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
+                     [--context TEXT] [collection limits] [--review-timeout-ms N]
+                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
+                     [--sarif FILE] [--quiet]`,
+  verify: "tracecheck verify  --input FILE [--repo PATH] [--out FILE]",
+  assess: "tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]",
+  compare: "tracecheck compare --previous FILE --current FILE",
+  mcp: "tracecheck mcp     [--repo PATH]"
+};
+var isCommand = (value) => Object.hasOwn(USAGE, value);
 function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
@@ -51815,12 +51832,15 @@ function positiveSafeInteger(value, flag) {
   if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive safe integer.`);
   return parsed;
 }
+function timeoutFlag(value, flag) {
+  return validate2(reviewTimeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
+}
 function collectionOptions(values) {
   return collectionOptionsSchema.parse({
     maxIndexFiles: positiveSafeInteger(values["index-max-files"], "--index-max-files"),
     maxIndexBytes: positiveSafeInteger(values["index-max-bytes"], "--index-max-bytes"),
-    indexTimeoutMs: positiveSafeInteger(values["index-timeout-ms"], "--index-timeout-ms"),
-    collectionTimeoutMs: positiveSafeInteger(values["collection-timeout-ms"], "--collection-timeout-ms")
+    indexTimeoutMs: timeoutFlag(values["index-timeout-ms"], "--index-timeout-ms"),
+    collectionTimeoutMs: timeoutFlag(values["collection-timeout-ms"], "--collection-timeout-ms")
   });
 }
 async function writeJson(file2, value) {
@@ -51828,13 +51848,89 @@ async function writeJson(file2, value) {
   await mkdir(dirname(destination), { recursive: true });
   await writeFile(destination, JSON.stringify(value, null, 2) + "\n", { mode: 384 });
 }
-async function readPrevious(file2) {
-  let value;
-  try {
-    value = JSON.parse(await readFile(file2, "utf8"));
-  } catch (error62) {
-    throw new Error(`--previous ${file2} is not a readable JSON file.`, { cause: error62 });
+var FILE_PROBLEMS = {
+  ENOENT: "no such file or directory",
+  EISDIR: "it is a directory",
+  ENOTDIR: "a parent path is not a directory",
+  EACCES: "permission denied",
+  EPERM: "permission denied",
+  EROFS: "read-only file system",
+  ENOSPC: "no space left on device"
+};
+function fileProblem(error62) {
+  const code2 = error62?.code;
+  return code2 && FILE_PROBLEMS[code2] || code2 || (error62 instanceof Error ? error62.message : "unexpected error");
+}
+async function checkWritable(flag, file2) {
+  if (file2 === void 0) return;
+  const fail = (problem) => new Error(`${flag} ${file2} cannot be written: ${problem}.`);
+  const existing = async (path2) => {
+    try {
+      return await stat(path2);
+    } catch (error62) {
+      const code2 = error62.code;
+      if (code2 === "ENOENT" || code2 === "ENOTDIR") return void 0;
+      throw fail(fileProblem(error62));
+    }
+  };
+  let path = resolve5(file2);
+  const target = await existing(path);
+  if (target?.isDirectory()) throw fail("it is a directory");
+  if (!target) {
+    for (path = dirname(path); ; path = dirname(path)) {
+      const ancestor = await existing(path);
+      if (!ancestor) continue;
+      if (!ancestor.isDirectory()) throw fail("a parent path is not a directory");
+      break;
+    }
   }
+  try {
+    await access(path, constants2.W_OK);
+  } catch (error62) {
+    throw fail(fileProblem(error62));
+  }
+}
+async function writeOutputs(outputs) {
+  const failures = [];
+  for (const [flag, file2, value] of outputs) {
+    if (file2 === void 0) continue;
+    try {
+      await writeJson(file2, value());
+    } catch (error62) {
+      failures.push(`${flag} ${file2} could not be written: ${fileProblem(error62)}.`);
+    }
+  }
+  if (failures.length) throw new Error(`${failures.join("\n")}
+The result printed above is complete.`);
+}
+async function readJsonFile(flag, file2) {
+  let text;
+  try {
+    text = await readFile(file2, "utf8");
+  } catch (error62) {
+    throw new Error(`${flag} ${file2} cannot be read: ${fileProblem(error62)}.`);
+  }
+  try {
+    return JSON.parse(text);
+  } catch (error62) {
+    throw new Error(`${flag} ${file2} is not valid JSON: ${terminalText(error62 instanceof Error ? error62.message : String(error62))}`);
+  }
+}
+var MAX_ISSUES = 10;
+function issueLines(error62) {
+  const field = (path) => path.map((key, index) => typeof key === "number" ? `[${key}]` : `${index ? "." : ""}${String(key)}`).join("");
+  const lines = error62.issues.slice(0, MAX_ISSUES).map((issue2) => `  ${terminalText(`${issue2.path.length ? `${field(issue2.path)}: ` : ""}${issue2.message}`)}`);
+  if (error62.issues.length > MAX_ISSUES) lines.push(`  and ${error62.issues.length - MAX_ISSUES} more.`);
+  return lines.join("\n");
+}
+function validate2(schema, value, problem) {
+  const result = schema.safeParse(value);
+  if (!result.success) throw new Error(`${problem}:
+${issueLines(result.error)}`);
+  return result.data;
+}
+async function readPrevious(file2) {
+  const value = await readJsonFile("--previous", file2);
   const report = reportSchema.safeParse(value);
   if (report.success) {
     if (report.data.quality) return report.data.quality;
@@ -51872,16 +51968,7 @@ async function main() {
     console.log(`Tracecheck: evidence-backed review powered by Jev
 
 Usage:
-  tracecheck preview [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--max-requests N] [--json]
-  tracecheck review  [--repo PATH] [--base REF] [--[no-]include-untracked] [--task TEXT]
-                     [--context TEXT] [collection limits] [--review-timeout-ms N]
-                     [--max-requests N] [--previous FILE] [--json] [--out FILE]
-                     [--sarif FILE] [--quiet]
-  tracecheck verify  --input FILE [--repo PATH] [--out FILE]
-  tracecheck assess  --input FILE [--previous FILE] [--json] [--out FILE] [--fail-on-priorities]
-  tracecheck compare --previous FILE --current FILE
-  tracecheck mcp     [--repo PATH]
+${Object.values(USAGE).map((usage) => `  ${usage}`).join("\n")}
 
 Options:
   --repo PATH                 Git repository to collect; defaults to the current directory. verify
@@ -51912,6 +51999,10 @@ Collection limits (preview and review): --index-max-files N, --index-max-bytes N
 --index-timeout-ms N (default 20000), --collection-timeout-ms N (default 120000).
 All N values are positive safe integers.
 
+Commands take no positional arguments besides the command name. --out and --sarif paths are
+checked before any collection or provider request, and the result is printed before they are
+written, so a failed write still leaves the printed result and exits 2.
+
 Exit codes:
   0  Success. review and verify found nothing that needs attention; assess never fails on
      its results unless --fail-on-priorities is set.
@@ -51921,10 +52012,12 @@ Exit codes:
   3  review or verify is inconclusive.
   4  review: the reviewed files changed while the review ran. The report is still printed
      and saved, marked stale; run review again.
+  130  Interrupted with Ctrl-C (SIGINT).
 
 Preview and compare are local. Review, verify, and assess send bounded evidence to Jev and
-require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter). Optional
-TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
+require JEV_API_KEY or TYPESAFE_API_KEY (TypeSafe), or OPENROUTER_API_KEY (OpenRouter); they
+check for a key after reading their input files and before collecting from the repository.
+Optional TYPESAFE_BASE_URL overrides the endpoint base URL. Optional JEV_MODEL selects the model
 (default: jev-latest). Optional JEV_TIMEOUT_MS limits each Jev request (default: 45000).
 Optional JEV_CONCURRENCY sets how many review requests run at once (default: 4, at most 16).
 Each change packet receives an individual bounded quality assessment. Automatic
@@ -51942,6 +52035,14 @@ JEV_CONCURRENCY override its model, requestTimeoutMs, and requestConcurrency. Th
 cannot hold credentials or the endpoint.`);
     return;
   }
+  if (!isCommand(command)) throw new Error(`Unknown command: ${command}`);
+  const extra = positionals.slice(1);
+  if (extra.length) {
+    const scope = command === "preview" || command === "review" ? ` It has no path filter; it covers every change in the repository that --repo names.` : "";
+    throw new Error(`Unexpected argument${extra.length > 1 ? "s" : ""}: ${extra.join(" ")}. tracecheck ${command} takes no positional arguments.${scope}
+Usage:
+  ${USAGE[command]}`);
+  }
   if (command === "mcp") {
     const { serve: serve2 } = await Promise.resolve().then(() => (init_mcp(), mcp_exports));
     await serve2(values.repo ? resolve5(values.repo) : void 0);
@@ -51949,52 +52050,64 @@ cannot hold credentials or the endpoint.`);
   }
   if (command === "compare") {
     if (!values.previous || !values.current) throw new Error("compare requires --previous old.json --current current.json");
-    const previous2 = reportSchema.parse(JSON.parse(await readFile(values.previous, "utf8")));
-    const current2 = reportSchema.parse(JSON.parse(await readFile(values.current, "utf8")));
-    console.log(JSON.stringify(compare(previous2, current2), null, 2));
+    const previous = validate2(reportSchema, await readJsonFile("--previous", values.previous), `--previous ${values.previous} is not a report saved by review --out`);
+    const current2 = validate2(reportSchema, await readJsonFile("--current", values.current), `--current ${values.current} is not a report saved by review --out`);
+    console.log(JSON.stringify(compare(previous, current2), null, 2));
     return;
   }
+  process.once("SIGINT", () => interrupt.abort(new Error("Interrupted.")));
   if (command === "verify") {
     if (!values.input) throw new Error("verify requires --input evidence.json");
-    const controller2 = new AbortController();
-    process.once("SIGINT", () => controller2.abort());
-    const signal = AbortSignal.any([controller2.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
-    const input2 = JSON.parse(await readFile(values.input, "utf8"));
-    const output2 = await verify({ ...input2, ...values.repo ? { repo: values.repo } : {} }, jevFromEnv(signal), signal);
-    if (values.out) await writeJson(values.out, output2);
+    await checkWritable("--out", values.out);
+    const raw = await readJsonFile("--input", values.input);
+    const input2 = validate2(
+      verificationInputSchema,
+      values.repo && typeof raw === "object" && raw !== null && !Array.isArray(raw) ? { ...raw, repo: values.repo } : raw,
+      `--input ${values.input} is not valid verify evidence`
+    );
+    const signal = AbortSignal.any([interrupt.signal, deadline(VERIFY_TIMEOUT_MS, `Verification timed out after ${VERIFY_TIMEOUT_MS} ms.`)]);
+    const output2 = await verify(input2, jevFromEnv(signal), signal);
     console.log(JSON.stringify(output2, null, 2));
     process.exitCode = EXIT_CODES[output2.report.status];
+    await writeOutputs([["--out", values.out, () => output2]]);
     return;
   }
   if (command === "assess") {
     if (!values.input) throw new Error("assess requires --input context.json");
-    const controller2 = new AbortController();
-    process.once("SIGINT", () => controller2.abort());
-    const signal = AbortSignal.any([controller2.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
-    const input2 = qualityInputSchema.parse(JSON.parse(await readFile(values.input, "utf8")));
+    await checkWritable("--out", values.out);
+    const input2 = validate2(qualityInputSchema, await readJsonFile("--input", values.input), `--input ${values.input} is not valid assess context`);
     if (values.previous) input2.previousEvaluation = await readPrevious(values.previous);
+    const signal = AbortSignal.any([interrupt.signal, deadline(ASSESS_TIMEOUT_MS, `Assessment timed out after ${ASSESS_TIMEOUT_MS} ms.`)]);
     const evaluation = await assess(input2, jevFromEnv(signal), signal);
-    if (values.out) await writeJson(values.out, evaluation);
     console.log(values.json ? JSON.stringify(evaluation, null, 2) : renderQuality(evaluation));
     if (values["fail-on-priorities"] && evaluation.priorities.length) process.exitCode = 1;
+    await writeOutputs([["--out", values.out, () => evaluation]]);
     return;
   }
-  if (!["preview", "review"].includes(command)) throw new Error(`Unknown command: ${command}`);
-  const controller = new AbortController();
-  process.once("SIGINT", () => controller.abort());
+  if (command === "review") {
+    await checkWritable("--out", values.out);
+    await checkWritable("--sarif", values.sarif);
+    if (values.out !== void 0 && values.sarif !== void 0 && resolve5(values.out) === resolve5(values.sarif)) throw new Error("--out and --sarif name the same file; name two different files.");
+  }
   const settings = await resolveSettings(values.repo ?? ".", {
     base: values.base,
     includeUntracked: values["include-untracked"],
     task: values.task,
     repositoryContext: values.context,
     collection: collectionOptions(values),
-    reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values["review-timeout-ms"], "--review-timeout-ms")),
+    reviewTimeoutMs: timeoutFlag(values["review-timeout-ms"], "--review-timeout-ms"),
     maxRequests: positiveSafeInteger(values["max-requests"], "--max-requests")
-  }, controller.signal);
+  }, interrupt.signal);
   const { reviewTimeoutMs, maxRequests, settingsFileNotes: notes, request: collectionRequest } = settings;
-  const progress = command === "review" && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : void 0;
-  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
-  if (command === "preview") {
+  let live;
+  if (command === "review") {
+    const previous = values.previous ? await readPrevious(values.previous) : void 0;
+    const provider = jevSettings(process.env, settings.provider);
+    live = { previous, provider, jev: new Jev({ ...provider, signal: interrupt.signal }) };
+  }
+  const progress = live && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : void 0;
+  const plan = await collect({ repo: settings.root, ...collectionRequest, signal: interrupt.signal, onPhase: progress?.phase });
+  if (!live) {
     const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.map(terminalText).join(", ")}`).join("\n");
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : "";
@@ -52010,15 +52123,13 @@ ${plan.limitations.map((item) => `Coverage gap: ${terminalText(item)}`).join("\n
     return;
   }
   const reviewSignal = AbortSignal.any([
-    controller.signal,
+    interrupt.signal,
     deadline(reviewTimeoutMs, `Review timed out after ${reviewTimeoutMs} ms. Raise --review-timeout-ms to allow more time.`)
   ]);
-  const previous = values.previous ? await readPrevious(values.previous) : void 0;
-  const provider = jevSettings(process.env, settings.provider);
   const report = await reviewAll(
     plan,
-    new Jev({ ...provider, signal: reviewSignal }),
-    { signal: reviewSignal, concurrency: provider.concurrency, maxRequests, previousEvaluation: previous, onProgress: progress?.requests }
+    live.jev,
+    { signal: reviewSignal, concurrency: live.provider.concurrency, maxRequests, previousEvaluation: live.previous, onProgress: progress?.requests }
   );
   reviewSignal.throwIfAborted();
   report.notes.push(...notes);
@@ -52028,13 +52139,19 @@ ${plan.limitations.map((item) => `Coverage gap: ${terminalText(item)}`).join("\n
   if (stale) markStale(report);
   progress?.finished();
   if (stale) console.error("Tracecheck: the repository changed during the review, so the report is marked stale. Run review again.");
-  if (values.out) await writeJson(values.out, report);
-  if (values.sarif) await writeJson(values.sarif, toSarif(report));
   console.log(values.json ? JSON.stringify(report, null, 2) : render(report));
   process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
+  await writeOutputs([["--out", values.out, () => report], ["--sarif", values.sarif, () => toSarif(report)]]);
 }
 main().catch((error62) => {
-  console.error(`Tracecheck: ${error62 instanceof Error ? terminalLines(error62.message) : "Unexpected failure"}`);
+  if (interrupt.signal.aborted) {
+    console.error("Tracecheck: interrupted.");
+    process.exitCode = INTERRUPTED_EXIT_CODE;
+    return;
+  }
+  const message = error62 instanceof external_exports.ZodError ? `Invalid input:
+${issueLines(error62)}` : error62 instanceof Error ? error62.message : "Unexpected failure";
+  console.error(`Tracecheck: ${terminalLines(message)}`);
   process.exitCode = 2;
 });
 /*! Bundled license information:
