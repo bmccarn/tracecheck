@@ -5,7 +5,8 @@
 //   node .agents/skills/verify-tracecheck/scripts/mcp-call.mjs --out DIR --list
 // FILE is a JSON array of { "tool": "tracecheck_preview", "arguments": { ... } }, or "-" for stdin.
 // A step { "run": ["git", "-C", "/path", "..."] } runs a local command between tool calls, in the same
-// server session, for example to edit the fixture after a preview.
+// server session, for example to edit the fixture after a preview. A step { "parallel": [call, ...] } sends its
+// calls at once in the same session and waits for all of them; they are written to DIR/NNa-<tool>.json, NNb-...
 // The string "$snapshot" anywhere in arguments is replaced with the snapshot from the latest
 // successful tracecheck_preview call. Each call is written to DIR/NN-<tool>.json.
 // With --progress, every call carries a progress token, and the record lists each progress notification
@@ -52,12 +53,8 @@ try {
     const calls = JSON.parse(readFileSync(values.calls === '-' ? 0 : values.calls, 'utf8'));
     let snapshot;
     const summary = [];
-    for (const [index, call] of calls.entries()) {
-      if (call.run) {
-        execFileSync(call.run[0], call.run.slice(1), { stdio: 'pipe' });
-        summary.push({ run: call.run.join(' ') });
-        continue;
-      }
+    /** Sends one call, writes its record to DIR/<name>.json, and returns its summary line. */
+    const send = async (call, name) => {
       const argumentsJson = JSON.stringify(call.arguments ?? {}).replaceAll('"$snapshot"', JSON.stringify(snapshot ?? null));
       const started = Date.now();
       const progress = [];
@@ -68,15 +65,26 @@ try {
         structuredContent: result.structuredContent ?? null, text: result.content?.filter(item => item.type === 'text').map(item => item.text) ?? [],
         ...(values.progress ? { progress } : {})
       };
-      const file = join(out, `${String(index + 1).padStart(2, '0')}-${call.tool}.json`);
+      const file = join(out, `${name}.json`);
       writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
       if (call.tool === 'tracecheck_preview' && !result.isError) snapshot = result.structuredContent?.snapshot;
       failed ||= record.isError;
-      summary.push({
+      return {
         tool: call.tool, isError: record.isError, elapsedMs: record.elapsedMs, file,
         ...(record.isError ? { error: record.text.join(' ').slice(0, 500) } : {}),
         ...(values.progress ? { progressNotifications: progress.length } : {})
-      });
+      };
+    };
+    for (const [index, call] of calls.entries()) {
+      const number = String(index + 1).padStart(2, '0');
+      if (call.run) {
+        execFileSync(call.run[0], call.run.slice(1), { stdio: 'pipe' });
+        summary.push({ run: call.run.join(' ') });
+      } else if (call.parallel) {
+        summary.push(...await Promise.all(call.parallel.map((each, position) => send(each, `${number}${String.fromCharCode(97 + position)}-${each.tool}`))));
+      } else {
+        summary.push(await send(call, `${number}-${call.tool}`));
+      }
     }
     console.log(JSON.stringify(summary, null, 2));
   }

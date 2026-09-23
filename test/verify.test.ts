@@ -115,3 +115,26 @@ test('an evidence file deleted during inference is reported by evidence ID and p
     return typedFixture(questions);
   } }), { message: 'Evidence body (decode.py) was not found in the repository. Correct the path, or omit the repository binding to verify caller-supplied evidence.' });
 });
+
+test('a repository path that does not exist or is outside Git fails before inference, named as given, through verify and MCP', async t => {
+  const plain = await mkdtemp(join(tmpdir(), 'tracecheck-plain-')); t.after(() => rm(plain, { recursive: true, force: true }));
+  const bound = await repository(); t.after(bound.cleanup);
+  const never = { async evaluate(): Promise<never> { throw new Error('Inference must not run'); } };
+  const cases: Array<[string, RegExp]> = [[join(plain, 'missing'), /: cannot change to .+: No such file or directory\.$/], [plain, /: not a git repository/]];
+  for (const [repo, reason] of cases) {
+    const error = await verify({ ...input(), repo }, never).then(() => assert.fail(`${repo} was accepted`), (caught: Error) => caught);
+    assert.ok(error.message.startsWith(`Cannot open ${repo} as a Git working tree: `), error.message);
+    assert.match(error.message, reason);
+    assert.doesNotMatch(error.message, /ENOENT|realpath|Command failed/);
+    // An unbound server and one bound to another repository report the same message.
+    for (const server of [createServer(undefined, () => never), createServer(bound.root, () => never)]) {
+      const client = new Client({ name: 'verify-test', version: '1' });
+      const [a, b] = InMemoryTransport.createLinkedPair();
+      t.after(async () => { await client.close(); await server.close(); });
+      await server.connect(b); await client.connect(a);
+      const response = await client.callTool({ name: 'tracecheck_verify', arguments: { ...input(), repo } });
+      assert.equal(response.isError, true, JSON.stringify(response));
+      assert.deepEqual((response.content as { text: string }[]).map(item => item.text), [error.message]);
+    }
+  }
+});
