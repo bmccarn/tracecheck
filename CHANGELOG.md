@@ -44,6 +44,7 @@
 - Preview reports an estimate of provider requests and input bytes, and review refuses before sending anything when the estimate exceeds `--max-requests` or the MCP `maxRequests` argument (default 50).
 - Human-readable output shows control characters from paths, source, provider responses, and errors as visible escapes, so a reviewed file cannot send terminal escape sequences.
 - Every Git command sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, and the README documents which repository-local settings, such as clean filters, can still run commands in a checkout that was not freshly cloned.
+- The end-user journey now separates outcome checks from plumbing checks. It covers clean exits, untracked-file churn, stale reports, terminal control characters, repository fsmonitor settings, settings-file limits, the request budget, the installed bin shim and `npx`, and launching the MCP server as the plugin manifests do. The stand-in provider accepts `--verdict REGEX=STATUS`.
 
 ## 0.3.0 — 2026-09-18
 
