@@ -4,6 +4,7 @@ import { execFile } from 'node:child_process';
 import { once } from 'node:events';
 import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { writeFileSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -11,7 +12,7 @@ import { promisify } from 'node:util';
 import type { Question, TypedResponse } from '../src/domain.js';
 import { reportSchema } from '../src/schema.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
-import { repository, typedFixture } from './helpers.js';
+import { judgeNotSupported, repository, typedFixture } from './helpers.js';
 
 const checkout = fileURLToPath(new URL('..', import.meta.url));
 
@@ -149,7 +150,7 @@ test('--previous accepts a review report or an assess evaluation, even for a mul
   const reviewWithReport = reportSchema.parse(JSON.parse((await cli(['review', '--repo', repo.root, '--json', '--previous', reportPath], jev.env)).stdout));
   assert.equal(reviewWithReport.quality?.comparison.length, 19);
   const reviewWithEvaluation = reportSchema.parse(JSON.parse((await cli(['review', '--repo', repo.root, '--json', '--previous', evaluationPath], jev.env)).stdout));
-  assert.match(reviewWithEvaluation.limitations.join('\n'), /Previous evaluation was not compared because its scope/);
+  assert.match(reviewWithEvaluation.notes.join('\n'), /Previous evaluation was not compared because its scope/);
   const assessWithReport = await cli(['assess', '--input', context, '--json', '--previous', reportPath], jev.env);
   assert.equal(assessWithReport.code, 0, assessWithReport.stderr);
   assert.match(qualityEvaluationSchema.parse(JSON.parse(assessWithReport.stdout)).warnings.join('\n'), /Comparison skipped/);
@@ -169,7 +170,7 @@ test('--previous accepts a review report or an assess evaluation, even for a mul
   const multiReport = reportSchema.parse(JSON.parse(multi.stdout));
   assert.equal(multiReport.packetQualities?.length, 2);
   assert.ok(jev.requests() > before);
-  assert.match(multiReport.limitations.join('\n'), /Previous evaluation was not compared because this review has multiple packet scopes/);
+  assert.match(multiReport.notes.join('\n'), /Previous evaluation was not compared because this review has multiple packet scopes/);
 
   const multiReportPath = join(files, 'multi.json');
   await writeFile(multiReportPath, multi.stdout);
@@ -198,4 +199,57 @@ test('assess --fail-on-priorities exits 1 only when actionable priorities exist'
   assert.equal(gated.code, 1, gated.stderr);
   assert.deepEqual(qualityEvaluationSchema.parse(JSON.parse(gated.stdout)).priorities.map(priority => priority.metric), ['correctness']);
   assert.equal((await cli(['assess', '--input', context], concerned.env)).code, 0);
+});
+
+const RATIO = 'export function ratio(a: number, b: number) {\n  return a / b;\n}\n';
+
+test('a clean change and an unchanged working tree both exit 0', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), RATIO);
+  await writeFile(join(repo.root, 'scratch.txt'), 'untracked and not reviewed\n');
+  const jev = await jevServer(t, judgeNotSupported);
+  const clean = await cli(['review', '--repo', repo.root, '--json', '--quiet'], jev.env);
+  assert.equal(clean.code, 0, clean.stdout);
+  const report = reportSchema.parse(JSON.parse(clean.stdout));
+  assert.equal(report.status, 'no_findings');
+  assert.deepEqual(report.decisions.map(decision => decision.status), ['not_supported']);
+  assert.deepEqual(report.limitations, []);
+  assert.match(report.notes.join('\n'), /Import\/caller discovery is heuristic/);
+  assert.match(report.notes.join('\n'), /1 untracked file\(s\) excluded/);
+
+  repo.git('checkout', '--', 'average.ts');
+  const requests = jev.requests();
+  const reportPath = join(repo.root, '.out', 'unchanged.json');
+  const unchanged = await cli(['review', '--repo', repo.root, '--quiet', '--out', reportPath], jev.env);
+  assert.equal(unchanged.code, 0, unchanged.stdout);
+  assert.match(unchanged.stdout, /No changes against HEAD; nothing to review\./);
+  const empty = reportSchema.parse(JSON.parse(await readFile(reportPath, 'utf8')));
+  assert.equal(empty.status, 'no_findings');
+  assert.deepEqual(empty.limitations, []);
+  assert.equal(empty.usage.requests, 0); assert.equal(jev.requests(), requests);
+});
+
+test('an untracked file created during review keeps the report; a reviewed edit marks it stale', async t => {
+  const repo = await repository();
+  t.after(repo.cleanup);
+  await writeFile(join(repo.root, 'average.ts'), RATIO);
+  // Runs inside the provider request, after collection and before the CLI checks the repository again.
+  let duringReview = () => {};
+  const jev = await jevServer(t, response => { judgeNotSupported(response); duringReview(); });
+
+  duringReview = () => writeFileSync(join(repo.root, '.average.ts.swp'), 'editor swap file');
+  const untracked = await cli(['review', '--repo', repo.root, '--json', '--quiet'], jev.env);
+  assert.equal(untracked.code, 0, untracked.stderr);
+  assert.equal(reportSchema.parse(JSON.parse(untracked.stdout)).status, 'no_findings');
+
+  duringReview = () => writeFileSync(join(repo.root, 'average.ts'), RATIO.replace('a / b', 'b ? a / b : 0'));
+  const reportPath = join(repo.root, '.out', 'stale.json');
+  const edited = await cli(['review', '--repo', repo.root, '--json', '--quiet', '--out', reportPath], jev.env);
+  assert.equal(edited.code, 4, edited.stderr);
+  assert.match(edited.stderr, /report is marked stale/);
+  const stale = reportSchema.parse(JSON.parse(edited.stdout));
+  assert.equal(stale.status, 'inconclusive');
+  assert.ok(stale.limitations.some(value => value.startsWith('Stale report:')), stale.limitations.join('\n'));
+  assert.deepEqual(reportSchema.parse(JSON.parse(await readFile(reportPath, 'utf8'))), stale);
 });

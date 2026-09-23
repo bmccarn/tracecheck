@@ -99,7 +99,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
       snapshot: z.string(),
       packets: z.array(z.object({ id: z.string(), changedPaths: z.array(z.string()) })),
       files: z.array(z.object({ path: z.string(), previousPath: z.string().optional(), role: z.string(), characters: z.number() })),
-      candidates: z.number(), limitations: z.array(z.string()),
+      candidates: z.number(), limitations: z.array(z.string()), notes: z.array(z.string()),
     }),
     annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
   }, async (args, ctx) => {
@@ -109,7 +109,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
     previewScopes.set(plan.snapshot, plan.discovery);
     const output = { snapshot: plan.snapshot, packets: plan.packets.map(packet => ({ id: packet.id, changedPaths: packet.changedPaths })),
       files: plan.sources.map(source => ({ path: source.path, ...(source.previousPath ? { previousPath: source.previousPath } : {}), role: source.role, characters: source.content.length + (source.before?.length ?? 0) })),
-      candidates: plan.candidates.length, limitations: plan.limitations };
+      candidates: plan.candidates.length, limitations: plan.limitations, notes: plan.notes };
     return toolResult(output);
   });
   server.registerTool('tracecheck_review', {
