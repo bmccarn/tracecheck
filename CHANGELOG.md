@@ -48,6 +48,7 @@
 - `verify` and `tracecheck_verify` with a bound repository report a missing, symlinked, out-of-repository, directory, oversized, or unreadable evidence file by its evidence ID and repository-relative path, before inference and without an absolute path or system error text.
 - `--base` and the MCP `base` argument now compare against the merge base of the named ref and `HEAD`, so a base branch that has moved on no longer shows its newer work as your changes. Reports record the requested ref in `baseRef`.
 - Unknown refs, shallow clones without enough history, repositories with no commits, and directories that are not Git working trees give plain errors instead of raw Git command lines.
+- The CLI checks the provider key and the `--out` and `--sarif` destinations before collecting, prints the result before writing files, rejects unexpected positional arguments, names the flag and file in input errors, prints validation problems as one line per field, and exits 130 on Ctrl-C.
 
 ## 0.3.0 — 2026-09-18
 
