@@ -73,8 +73,9 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const candidates: ReviewPlan['candidates'] = [];
   const candidateIds = new Set<string>();
   const changedSourcePaths = new Set<string>();
-  // Name every credential omission so each flagged file can be inspected.
-  const omissions = new FileTally(reason => reason.includes('potential credential'));
+  // Name every file flagged for a potential credential so each one can be inspected.
+  const namesCredential = (reason: string) => reason.includes('potential credential');
+  const omissions = new FileTally(namesCredential);
   // Reasons per path; each is reported as `${reason}: ${path}`, and counts group by reason.
   const sourceIssues = new Map<string, string[]>();
   const label = (path: string) => renames.has(path) ? `${renames.get(path)} -> ${path}` : path;
@@ -125,7 +126,11 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
       let beforeRanges = ranges;
       if (role === 'changed') {
         if (change?.error) throw new Error(change.error);
-        if (before && hasSecret(before)) throw new Error('Base version with a potential credential');
+        // The current text passed screening, so the change is still reviewed, only without the flagged baseline.
+        if (before && hasSecret(before)) {
+          before = undefined;
+          noteSource(path, 'Base version with a potential credential omitted; reviewed without a baseline');
+        }
         ranges = untrackedPaths.has(path) ? [{ start: 1, end: raw.split('\n').length }] : change?.ranges ?? [];
         beforeRanges = change?.beforeRanges ?? ranges;
         if (change?.noHunks === 'mode-only') noteSource(path, 'File mode changed without a content change; no changed lines to review');
@@ -329,7 +334,7 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     packets.push({ id: hash({ primary, paths, packetLimitations }).slice(0, 24), changedPaths: primary, sourcePaths: paths, candidateIds: packetCandidates, limitations: packetLimitations });
   }
 
-  const sourceIssueCounts = new FileTally();
+  const sourceIssueCounts = new FileTally(namesCredential);
   for (const path of sourceByPath.keys()) {
     for (const reason of sourceIssues.get(path) ?? []) sourceIssueCounts.add(reason, path);
   }
