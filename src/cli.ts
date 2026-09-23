@@ -14,6 +14,7 @@ import { toSarif } from './sarif.js';
 import { collectionOptionsSchema, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { ReviewProgress } from './progress.js';
+import { terminalLines, terminalText } from './terminal.js';
 import type { Report } from './domain.js';
 
 /** Exit codes for review and verify statuses, as the help text documents them. */
@@ -186,11 +187,11 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
     task: values.task, repositoryContext: values.context, collection: collectionOptions(values),
     reviewTimeoutMs: reviewTimeoutSchema.optional().parse(positiveSafeInteger(values['review-timeout-ms'], '--review-timeout-ms')) }, controller.signal);
   const { reviewTimeoutMs, request: collectionRequest } = settings;
-  const progress = command === 'review' && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${update.message}`)) : undefined;
+  const progress = command === 'review' && !values.quiet ? new ReviewProgress(update => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : undefined;
   const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === 'preview') {
-    const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.join(', ')}`).join('\n');
-    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${item}`).join('\n')}`);
+    const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.map(terminalText).join(', ')}`).join('\n');
+    console.log(values.json ? JSON.stringify(plan, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview implication: ${plan.packets.length} independently scoped assessment packet(s); each nonempty packet may require multiple quality requests, and empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
     return;
   }
   const reviewSignal = AbortSignal.any([controller.signal,
@@ -211,6 +212,6 @@ requestConcurrency. The file cannot hold credentials or the endpoint.`);
 }
 
 main().catch(error => {
-  console.error(`Tracecheck: ${error instanceof Error ? error.message : 'Unexpected failure'}`);
+  console.error(`Tracecheck: ${error instanceof Error ? terminalLines(error.message) : 'Unexpected failure'}`);
   process.exitCode = 2;
 });

@@ -3,6 +3,7 @@ import type { Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPa
 import { DEFAULT_CONCURRENCY } from './jev.js';
 import { comparableQuality, compareQuality, qualityQuestions, transformQuality, renderQuality } from './quality.js';
 import type { PreviousEvaluation } from './quality.js';
+import { markdownText, terminalLines } from './terminal.js';
 
 const MAX_PROVIDER_REQUEST_BYTES = 160_000;
 const MAX_CANDIDATES_PER_REQUEST = 10;
@@ -428,24 +429,24 @@ export function render(report: Report): string {
   const packetCount = report.packetQualities?.length ?? (report.quality ? 1 : undefined);
   const packetSummary = packetCount === undefined ? '' : ` · ${packetCount} packet${packetCount === 1 ? '' : 's'}`;
   const lines = [`# Tracecheck`, '', `**${report.status.replaceAll('_', ' ')}**${packetSummary} · ${report.decisions.length} checks · ${report.usage.requests} Jev request(s)`, '',
-    `Snapshot: ${report.snapshot.slice(0, 12)} · Models: ${report.models.join(', ') || 'not called'}`, '',
+    `Snapshot: ${report.snapshot.slice(0, 12)} · Models: ${report.models.map(markdownText).join(', ') || 'not called'}`, '',
     `${report.quality || report.packetQualities ? 'Broad review: all 19 quality dimensions per packet. ' : ''}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`, ''];
   if (report.quality) lines.push(renderQuality(report.quality), '', '## Source-anchored findings', '');
   if (report.packetQualities) {
     lines.push('## Packet broad reviews', '');
     for (const packet of report.packetQualities) {
-      lines.push(`### Packet ${packet.packetId}`, '', `Changed paths: ${packet.changedPaths.join(', ') || 'none recorded'}`, '',
+      lines.push(`### Packet ${markdownText(packet.packetId)}`, '', `Changed paths: ${packet.changedPaths.map(markdownText).join(', ') || 'none recorded'}`, '',
         renderQuality(packet.evaluation), '');
     }
     lines.push('## Source-anchored findings', '');
   }
   for (const finding of findings) {
-    lines.push(`## ${finding.check} — ${finding.status}`, '',
-      `**${finding.path}:${finding.range.start}-${finding.range.end}** · ${finding.symbol} · impact: ${finding.impact}`, '',
-      `Hypothesis: ${finding.hypothesis}`, '', 'Evidence:', '', ...finding.quote.split('\n').map(line => `    ${line}`), '',
-      `Verify: ${finding.verification}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '');
+    lines.push(`## ${markdownText(finding.check)} — ${finding.status}`, '',
+      `**${markdownText(finding.path)}:${finding.range.start}-${finding.range.end}** · ${markdownText(finding.symbol)} · impact: ${finding.impact}`, '',
+      `Hypothesis: ${markdownText(finding.hypothesis)}`, '', 'Evidence:', '', ...terminalLines(finding.quote).split('\n').map(line => `    ${line}`), '',
+      `Verify: ${markdownText(finding.verification)}`, '', `Decision confidence: ${finding.confidence.toFixed(2)} · selected probability: ${finding.probability.toFixed(2)}`, '');
   }
   if (!findings.length) lines.push('No findings from the checks performed. This is not a repository-wide correctness verdict.', '');
-  if (report.limitations.length) lines.push('## Coverage gaps', '', ...report.limitations.map(item => `- ${item}`), '');
+  if (report.limitations.length) lines.push('## Coverage gaps', '', ...report.limitations.map(item => `- ${markdownText(item)}`), '');
   return lines.join('\n');
 }
