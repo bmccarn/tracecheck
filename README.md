@@ -16,7 +16,7 @@ Your agent investigates the code. Tracecheck checks its hypotheses against the e
 
 Tracecheck helps your coding agent challenge suspected defects against source evidence. The agent discovers concerns, follows callers, checks contracts and counterevidence, and decides what to fix. Tracecheck validates references and asks Jev for typed support, impact, and missing-evidence judgments. Optional broad assessments cover 19 quality dimensions and local checkpoint comparisons.
 
-Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context to TypeSafe using your API key. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
+Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context, using your API key, to the configured provider: TypeSafe or OpenRouter. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
 
 > **Status:** Version 0.3.0 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.3.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
 
