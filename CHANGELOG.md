@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Both in-repo marketplace catalogs use an HTTPS Git URL, so adding `bmccarn/tracecheck` as a marketplace installs without GitHub SSH keys. The release gates now reject a catalog source that clients may clone over SSH.
+
 ## 0.4.0 — 2026-09-23
 
 - Promote 0.4.0-rc.1 to the stable release. The 0.4.0-rc.1 entry below lists every change and its upgrade notes.
