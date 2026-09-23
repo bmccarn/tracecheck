@@ -777,6 +777,7 @@ export function toPixelY(value, min, max, height) {
   pair({
     id: 'sf-settings-save', family: 'swallowed-failure', split: 'development',
     task: 'Log storage failures when saving settings, including the storage key. saveSettings must still resolve false when the write fails, so the panel shows the retry banner; true means the settings were persisted.',
+    quality: { relevant: ['correctness', 'reliability', 'observability'] },
     base: {
       'src/settings.ts': code`
 export interface SettingsStore { write(key: string, value: string): Promise<void> }
@@ -848,6 +849,7 @@ export async function saveSettings(store: SettingsStore, settings: Settings, log
   pair({
     id: 'sf-payment-capture', family: 'swallowed-failure', split: 'development',
     task: "Count gateway errors in the payments.capture_error metric and report them as { status: 'failed', reason } instead of throwing. Orders ship only after a real capture, so a gateway error must never produce status 'captured'.",
+    quality: { relevant: ['correctness', 'reliability', 'observability'] },
     base: {
       'src/payments.ts': code`
 export interface Gateway { capture(orderId: string, amountCents: number): Promise<{ id: string }> }
@@ -998,6 +1000,7 @@ export async function getProfile(deps: ProfileDeps, id: string): Promise<Profile
   pair({
     id: 'sf-migrations', family: 'swallowed-failure', split: 'development',
     task: 'Log the name of any migration that fails. The contract is unchanged: the first failing migration stops the run, nothing after it is applied, and migrate rejects so the deploy command exits non-zero.',
+    quality: { relevant: ['correctness', 'reliability', 'observability'] },
     base: {
       'src/migrate.ts': code`
 export interface Db { applied(): Promise<Set<string>>; markApplied(name: string): Promise<void> }
@@ -1260,6 +1263,7 @@ export async function exportReport(files: Files, path: string, rows: string[][])
   pair({
     id: 'sf-feature-flags', family: 'swallowed-failure', split: 'holdout',
     task: "Make flag lookups best-effort: when the flag service fails, count flags.fallback and use the flag's compiled-in default from DEFAULTS, which is false for unknown flags. An outage must not turn on unreleased features.",
+    quality: { relevant: ['correctness', 'reliability', 'observability'] },
     base: {
       'src/flags.ts': code`
 export interface FlagService { isEnabled(flag: string, userId: string): Promise<boolean> }
