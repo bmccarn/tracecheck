@@ -298,8 +298,9 @@ try {
     return `${plan.packets.length} packet(s), ${plan.sources.length} sources, candidates ${checks.join(', ')}`;
   });
 
-  await step(OUTCOME, 'the installed bin shim and npx run the CLI in the project', async () => {
-    if (!values.install) return 'skipped by --no-install; there is no installed package';
+  const INSTALLED_ENTRY_POINTS = 'the installed bin shim and npx run the CLI in the project';
+  if (!values.install) skip(OUTCOME, INSTALLED_ENTRY_POINTS, 'needs an installed package; --no-install uses dist/plugin.mjs');
+  else await step(OUTCOME, INSTALLED_ENTRY_POINTS, async () => {
     const help = execute('bin-help', binShim, ['--help'], { shown: 'node_modules/.bin/tracecheck --help' });
     expect(help.code === 0 && help.stdout.includes('tracecheck review'), `node_modules/.bin/tracecheck --help exited ${help.code}: ${lastLine(help.stderr)}`);
     // A private npm cache keeps npx from reading or filling the user's cache.
