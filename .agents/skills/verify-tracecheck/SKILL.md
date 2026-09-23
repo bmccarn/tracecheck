@@ -14,6 +14,20 @@ Proof means the built bundle ran the user's path and the result was observed: co
 
 All paths below are relative to the checkout root. Run every command from there.
 
+## End-user journey
+
+Run the scripted journey before approving any change, and again with `--provider live` before a release:
+
+```sh
+npm run journey                       # stand-in provider: deterministic, no key, runs in CI
+npm run journey -- --provider live    # real provider from the environment; asserts structure and exit codes only
+npm run journey -- --package @bmccarn/tracecheck@0.3.0   # the same journey against a published release
+```
+
+It packs the checkout and installs the tarball offline into a temporary prefix, as a user would, then works in a realistic TypeScript project with path aliases, a committed `.tracecheck.json`, and an uncommitted change that removes a divisor guard, removes JSON error handling, and renames a file. It drives `--help`, `preview`, `review` (JSON, Markdown, SARIF, progress, `--quiet`), a fix followed by `compare`, `verify` against local files, `assess --fail-on-priorities`, the missing-key and plain-HTTP errors, and then the four MCP tools through a real stdio client, including progress notifications, a cached repeat review, and a stale-snapshot rejection. Every step has assertions. Evidence goes to `.tracecheck/journey/<timestamp>-<provider>/`: `JOURNEY.md` with a pass/fail table, `summary.json`, and one record per CLI command and MCP call. The script exits 1 when any step fails. In live mode it also fails if a key value appears in the evidence.
+
+When a change adds or alters a user-visible behavior, extend the journey with a step that asserts it, alongside the targeted proof below.
+
 ## Launch
 
 1. Install and build the checkout under test: `npm ci && npm run build`. The build writes `dist/plugin.mjs`; source edits have no effect until it runs again.
@@ -72,6 +86,7 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 
 | Helper | Invocation | Output |
 | --- | --- | --- |
+| `journey.mjs` | `npm run journey -- [--provider stand-in\|live] [--no-install \| --package SPEC] [--out DIR]` | The end-user journey above; exit 1 when any step fails |
 | `doctor.mjs` | `node $S/doctor.mjs` | Readiness JSON; exit 1 when not ready |
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
 | `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |

@@ -36,5 +36,7 @@ jobs:
         run: node scripts/build.mjs --check
       - name: Run the offline demo
         run: npm run demo
+      - name: Run the end-user journey against the packed package
+        run: npm run journey
       - name: Type-check, test, and verify the package
         run: npm run release:check

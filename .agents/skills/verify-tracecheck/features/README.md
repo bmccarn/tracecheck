@@ -28,6 +28,10 @@ This directory is the maintained source for verifying Tracecheck's user-facing b
 
 Each feature file starts with an H1 title and one paragraph describing the user-visible behavior, followed by exactly four H2 sections: `Sub-features`, `How to get to it (user POV)`, `Driving it with capture.sh and mcp-call.mjs`, and `Gotchas`.
 
+## Journey coverage
+
+`scripts/journey.mjs` drives one realistic path through preview, review, compare, verify, assess, provider errors, and all four MCP tools. It proves those features work together for a typical user. A feature file below is still the recipe for exercising a feature's other entry points and edge cases.
+
 ## Features
 
 - [Preview](./preview.md): local collection of change packets, sources, candidates, and coverage gaps. Offline.
