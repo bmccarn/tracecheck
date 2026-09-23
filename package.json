@@ -1,6 +1,6 @@
 {
   "name": "@bmccarn/tracecheck",
-  "version": "0.4.0-rc.1",
+  "version": "0.4.0",
   "description": "Evidence-backed code review powered by Jev",
   "type": "module",
   "packageManager": "npm@11.5.1",

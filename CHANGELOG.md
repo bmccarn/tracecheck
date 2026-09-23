@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.4.0 — 2026-09-23
+
+- Promote 0.4.0-rc.1 to the stable release. The 0.4.0-rc.1 entry below lists every change and its upgrade notes.
+- `npm run journey` now stops when the package fails to install. It reports the install failure, writes its summary, and exits `1` instead of reporting dozens of failures in the steps that need the installed bundle.
+
 ## 0.4.0-rc.1 — 2026-09-23
 
 ### Upgrade notes

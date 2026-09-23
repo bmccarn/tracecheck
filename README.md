@@ -18,7 +18,7 @@ Tracecheck helps your coding agent challenge suspected defects against source ev
 
 Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context, using your API key, to the configured provider: TypeSafe or OpenRouter. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
 
-> **Status:** Version 0.3.0 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.3.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
+> **Status:** Version 0.4.0 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.4.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
 
 ## What you get
 
@@ -56,7 +56,7 @@ The division of work is deliberate: code extracts locations and computes compari
 
 ### Install
 
-Version 0.3.0 is published to npm as `@bmccarn/tracecheck` and to the `bmccarn/tracecheck-plugins` plugin marketplace. Choose one of these installation paths. Each one needs a provider key in the environment that launches Tracecheck; see [set a provider key](#set-a-provider-key).
+Version 0.4.0 is published to npm as `@bmccarn/tracecheck` and to the `bmccarn/tracecheck-plugins` plugin marketplace. Choose one of these installation paths. Each one needs a provider key in the environment that launches Tracecheck; see [set a provider key](#set-a-provider-key).
 
 #### Install the agent plugin
 
@@ -80,19 +80,19 @@ codex plugin add tracecheck@tracecheck-plugins
 
 Start a new task and ask to use the Tracecheck skill.
 
-You can also add `bmccarn/tracecheck` itself as a marketplace. Its in-repo catalogs pin the latest stable release tag, currently `v0.3.0`, and never a release candidate. If you added this marketplace while its catalogs pinned `v0.2.0`, refresh the marketplace and update or reinstall the plugin to get 0.3.0.
+You can also add `bmccarn/tracecheck` itself as a marketplace. Its in-repo catalogs pin the latest stable release tag, currently `v0.4.0`, and never a release candidate. If you added this marketplace while its catalogs pinned `v0.2.0`, refresh the marketplace and update or reinstall the plugin to get 0.4.0.
 
 #### Run the CLI from npm
 
 ```sh
-npx --yes @bmccarn/tracecheck@0.3.0 --help
+npx --yes @bmccarn/tracecheck@0.4.0 --help
 ```
 
 The package contains the bundled runtime and the complete skill directory, `skills/tracecheck/`. Installing it registers neither the MCP server nor the skill with any client. To connect another MCP client, follow [MCP and agent setup](#mcp-and-agent-setup).
 
 #### Build from source
 
-Build a checkout to use changes on `main` that are not in 0.3.0:
+Build a checkout to use changes on `main` that are not in 0.4.0:
 
 ```sh
 git clone https://github.com/bmccarn/tracecheck.git
@@ -109,13 +109,13 @@ The built `dist/plugin.mjs` includes its runtime dependencies and runs without `
 # Set one of these in the environment that launches Tracecheck.
 export TYPESAFE_API_KEY="your-key"
 # JEV_API_KEY is also supported and takes precedence if both are set.
-# Not in 0.3.0: without a TypeSafe key, an OpenRouter key routes requests through OpenRouter.
+# Without a TypeSafe key, an OpenRouter key routes requests through OpenRouter.
 # export OPENROUTER_API_KEY="your-openrouter-key"
 ```
 
 ### Run a first review
 
-The examples in this README run the source checkout's `node dist/plugin.mjs`. With the npm package, run `npx --yes @bmccarn/tracecheck@0.3.0` in its place.
+The examples in this README run the source checkout's `node dist/plugin.mjs`. With the npm package, run `npx --yes @bmccarn/tracecheck@0.4.0` in its place.
 
 Try the scripted example without an API call. It runs from a source checkout:
 
@@ -140,9 +140,9 @@ Paths to the runtime above are relative to the Tracecheck checkout. `--repo` sel
 
 Collection compares **the base with the working tree**. The base is HEAD unless you pass `--base REF`. Tracked changes appear whether or not they are staged, but collection does not read the index: a change that is staged and then undone in the working tree is not reviewed, although a commit would include it. Use `--include-untracked` to include supported new files. Already committed changes need an earlier baseline to appear in the review.
 
-Not in 0.3.0: preview and review add a note naming each file whose staged change the working tree undoes, and each staged rename whose working-tree file differs too much from its source for Git to pair them. Such a rename is reviewed as a deleted file and a new file without a baseline. To review exactly what you are about to commit, make the working tree match the index first, for example with `git stash --keep-index`.
+Preview and review add a note naming each file whose staged change the working tree undoes, and each staged rename whose working-tree file differs too much from its source for Git to pair them. Such a rename is reviewed as a deleted file and a new file without a baseline. To review exactly what you are about to commit, make the working tree match the index first, for example with `git stash --keep-index`.
 
-Not in 0.3.0: the working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`. 0.3.0 compared with the tip of REF.
+The working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`. 0.3.0 compared with the tip of REF.
 
 ## How it works
 
@@ -213,7 +213,7 @@ node dist/plugin.mjs verify --input evidence.json --repo /path/to/project \
   --out .tracecheck/verification.json
 ```
 
-The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. `--repo` and the MCP `repo` argument name a directory in a Git working tree, and evidence paths are relative to that directory. A path that does not exist or is outside Git stops verification before inference with an error that names the path as given (not in 0.3.0, which showed the system error). Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
+The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. `--repo` and the MCP `repo` argument name a directory in a Git working tree, and evidence paths are relative to that directory. A path that does not exist or is outside Git stops verification before inference with an error that names the path as given (0.3.0 showed the system error). Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
 
 ### Compare implementation checkpoints
 
@@ -237,7 +237,7 @@ A single-packet repository review returns `report.quality`. Larger changes retur
 
 Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
 
-Not in 0.3.0: a finding keeps its history when its file is renamed. A candidate ID includes the file path, so the finding gets a new ID at the new path. A decision on a renamed file records the file's path at the base as `previousPath`, and `compare` matches an earlier finding to that decision when both name the same base file, check, symbol, and quoted code, ignoring whitespace. The entry then adds `currentId` and `currentPath`. 0.3.0 reported such a finding as `not_reassessed` and again as `newly_supported`.
+A finding keeps its history when its file is renamed. A candidate ID includes the file path, so the finding gets a new ID at the new path. A decision on a renamed file records the file's path at the base as `previousPath`, and `compare` matches an earlier finding to that decision when both name the same base file, check, symbol, and quoted code, ignoring whitespace. The entry then adds `currentId` and `currentPath`. 0.3.0 reported such a finding as `not_reassessed` and again as `newly_supported`.
 
 ### Supply context directly
 
@@ -267,11 +267,11 @@ node dist/plugin.mjs assess --input revised-context.json \
 
 A `diff` string is also supported. At least one current context field is required. Use a stable `scope` to identify the same review subject across checkpoints. `assess` evaluates only what you provide and performs no repository reads or parser-based source checks.
 
-`assess` exits `0` whatever it finds. Add `--fail-on-priorities` (not in 0.3.0) to exit `1` when the evaluation lists quality priorities; a priority is a concern judged with confidence of at least 0.6 and probability of at least 0.8, so uncertain concerns do not fail the command.
+`assess` exits `0` whatever it finds. Add `--fail-on-priorities` to exit `1` when the evaluation lists quality priorities; a priority is a concern judged with confidence of at least 0.6 and probability of at least 0.8, so uncertain concerns do not fail the command.
 
 ### Upload findings to code scanning
 
-Not in 0.3.0. `review --sarif FILE` writes the supported source-anchored findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log, in addition to the normal output and exit code:
+`review --sarif FILE` writes the supported source-anchored findings as a [SARIF 2.1.0](https://docs.oasis-open.org/sarif/sarif/v2.1.0/sarif-v2.1.0.html) log, in addition to the normal output and exit code:
 
 ```sh
 node dist/plugin.mjs review --repo . --base origin/main --sarif tracecheck.sarif
@@ -292,7 +292,7 @@ A smaller `fetch-depth` works when it reaches that commit, but a long-lived bran
 - Each `supported` decision is one result. Its location is the repository-relative path and line range, with the quoted source as the snippet; its message is the hypothesis. The level follows the judged impact: `high` is `error`, `medium` and `unknown` are `warning`, and `low` is `note`. Result properties carry `impact`, `impactConfidence`, `confidence`, `probability`, and `verification`.
 - `uncertain`, `needs_context`, and `not_supported` decisions are not results. The run's `omittedDecisions` property counts them; the JSON report keeps them in full.
 - Quality priorities have no source location and are not SARIF results. The run's `status` property still reflects them, and the exit code is unchanged.
-- The run's `limitations` property lists coverage gaps and its `notes` property (not in 0.3.0) lists caveats that do not affect the status.
+- The run's `limitations` property lists coverage gaps and its `notes` property lists caveats that do not affect the status.
 
 Paths are relative to the `SRCROOT` base, which the log maps to the reviewed repository root. The file holds source excerpts and is written with owner-only permissions.
 
@@ -301,32 +301,32 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 | Option | Purpose |
 | --- | --- |
 | `--repo PATH` | Git repository to collect; preview and review default to the current directory. verify matches excerpts against it; mcp uses it when a tool call names no repository. |
-| `--base REF` | Git ref to review changes against; defaults to `HEAD`. The working tree is compared with the merge base of REF and HEAD (not in 0.3.0, which compared with REF itself). |
-| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` (not in 0.3.0) states the default explicitly. |
+| `--base REF` | Git ref to review changes against; defaults to `HEAD`. The working tree is compared with the merge base of REF and HEAD (0.3.0 compared with REF itself). |
+| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` states the default explicitly. |
 | `--task TEXT` | Requested behavior or acceptance criteria. |
 | `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
 | `--json` | Emit full JSON for preview, review, or assess. |
 | `--out FILE` | Save a review report, verification result, or quality assessment as JSON. |
-| `--sarif FILE` | Also write review's supported findings as SARIF 2.1.0. Not in 0.3.0. |
+| `--sarif FILE` | Also write review's supported findings as SARIF 2.1.0. |
 | `--previous FILE` | For review and assess, a report saved by `review --out` or an evaluation saved by `assess --out` to compare quality with. For compare, the earlier report. |
 | `--current FILE` | For compare, the later report. |
 | `--input FILE` | Evidence JSON for verify; context JSON for assess. |
-| `--fail-on-priorities` | Make assess exit `1` when the evaluation lists actionable quality priorities. Not in 0.3.0. |
+| `--fail-on-priorities` | Make assess exit `1` when the evaluation lists actionable quality priorities. |
 | `--index-max-files N` | Optional local import-index file budget; unset by default. |
 | `--index-max-bytes N` | Optional local import-index byte budget; unset by default. |
 | `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
 | `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
 | `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
-| `--max-requests N` | Most provider requests one review may make; defaults to 50. Not in 0.3.0. |
-| `-q`, `--quiet` | Do not print review progress to stderr. Not in 0.3.0. |
+| `--max-requests N` | Most provider requests one review may make; defaults to 50. |
+| `-q`, `--quiet` | Do not print review progress to stderr. |
 
-`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file), which is not in 0.3.0. A flag always overrides the file.
+`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
 
-Not in 0.3.0. `preview` estimates the review's cost: the human output prints `Review estimate: N provider request(s) carrying B bytes of evidence and questions`, and `preview --json` and `tracecheck_preview` return `estimate.requests` and `estimate.inputBytes`. The estimate comes from the same planner that review uses, so a completed review's `usage.requests` equals `estimate.requests`; retries after a failed request are not counted. `review` refuses a plan with more requests than the budget, exiting `2` with `Review would make N provider requests, over the budget of M` before it sends any request. Raise the budget with `--max-requests N` or the MCP `maxRequests` argument.
+`preview` estimates the review's cost: the human output prints `Review estimate: N provider request(s) carrying B bytes of evidence and questions`, and `preview --json` and `tracecheck_preview` return `estimate.requests` and `estimate.inputBytes`. The estimate comes from the same planner that review uses, so a completed review's `usage.requests` equals `estimate.requests`; retries after a failed request are not counted. `review` refuses a plan with more requests than the budget, exiting `2` with `Review would make N provider requests, over the budget of M` before it sends any request. Raise the budget with `--max-requests N` or the MCP `maxRequests` argument.
 
-Not in 0.3.0. While `review` runs, it prints one progress line per step to stderr: each collection phase, the number of provider requests planned, each finished request (`Tracecheck progress: Completed provider request 3 of 7`), and the final check that the repository did not change. Stdout, `--json`, `--out`, and `--sarif` output are the same as with `--quiet`.
+While `review` runs, it prints one progress line per step to stderr: each collection phase, the number of provider requests planned, each finished request (`Tracecheck progress: Completed provider request 3 of 7`), and the final check that the repository did not change. Stdout, `--json`, `--out`, and `--sarif` output are the same as with `--quiet`.
 
-Not in 0.3.0. Commands take no positional arguments after the command name, so `review src/foo.ts` exits `2` with the command's usage instead of reviewing every change. Before `review`, `verify`, or `assess` collects from the repository or calls the provider, it checks that the `--out` and `--sarif` destinations can be written, reads and validates its input files, and checks for a provider key. It prints the result before it writes those files, so if a write still fails, the result is on stdout and the command exits `2`. An input file error names the flag, the file as you typed it, and each invalid field, for example `--input evidence.json is not valid verify evidence:` followed by `evidence[0].startLine: Invalid input: expected number, received string`.
+Commands take no positional arguments after the command name, so `review src/foo.ts` exits `2` with the command's usage instead of reviewing every change. Before `review`, `verify`, or `assess` collects from the repository or calls the provider, it checks that the `--out` and `--sarif` destinations can be written, reads and validates its input files, and checks for a provider key. It prints the result before it writes those files, so if a write still fails, the result is on stdout and the command exits `2`. An input file error names the flag, the file as you typed it, and each invalid field, for example `--input evidence.json is not valid verify evidence:` followed by `evidence[0].startLine: Invalid input: expected number, received string`.
 
 Exit codes:
 
@@ -336,10 +336,10 @@ Exit codes:
 | `1` | `review`: supported source findings or quality priorities. `verify`: the hypothesis is supported. `assess --fail-on-priorities`: actionable quality priorities. |
 | `2` | Execution or input error. |
 | `3` | `review` or `verify` is inconclusive because of uncertainty, coverage gaps, or a provider request that failed after its retries. |
-| `4` | `review`: the reviewed files changed while the review ran. The report is still printed and saved, with a `Stale report: ...` limitation; run the review again. Not in 0.3.0. |
-| `130` | Interrupted with Ctrl-C (SIGINT). The command stops its collection and provider requests and prints `Tracecheck: interrupted.` Not in 0.3.0. |
+| `4` | `review`: the reviewed files changed while the review ran. The report is still printed and saved, with a `Stale report: ...` limitation; run the review again. |
+| `130` | Interrupted with Ctrl-C (SIGINT). The command stops its collection and provider requests and prints `Tracecheck: interrupted.` |
 
-A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes` (not in 0.3.0), caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**, except `Review incomplete for packet ...` limitations, which appear near the top under **Incomplete review**.
+A report separates `limitations`, the coverage gaps that keep a review from exit `0`, from `notes`, caveats that never change the status: heuristic import discovery, the number of excluded untracked files, packets covered only by the broad quality review, and a previous evaluation that could not be compared. Markdown output lists them under **Notes** and **Coverage gaps**, except `Review incomplete for packet ...` limitations, which appear near the top under **Incomplete review**.
 
 A zero exit does not prove correctness. Without `--fail-on-priorities`, `assess` exits `0` on any result. `--help` lists every flag for each command.
 
@@ -354,18 +354,18 @@ Tracecheck uses the **MCP v2 SDK over stdio** and exposes four tools:
 | `tracecheck_review` | Review that snapshot with Jev; optionally compare a supplied `previousEvaluation`. Refuses a review over its `maxRequests` budget (default 50) before any provider request. |
 | `tracecheck_assess` | Assess caller-supplied context in any language, with optional previous-evaluation comparison. Times out after 90 seconds. |
 
-Not in 0.3.0. When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A call that joins an identical review already running receives that review's progress, including the updates sent before it joined. A client that resets its request timeout on progress can wait out a long review.
+When a `tracecheck_review` call carries a progress token, the server sends `notifications/progress` for each collection phase and for each provider request as it finishes, whether it succeeded or failed. Progress never decreases. Once the review has planned its requests, each notification carries a `total`, and the last one reaches it. A cached result sends only the collection phases. A call that joins an identical review already running receives that review's progress, including the updates sent before it joined. A client that resets its request timeout on progress can wait out a long review.
 
 Configure your MCP client with one of these launch commands:
 
 | Setting | npm package | Source checkout |
 | --- | --- | --- |
 | Command | `npx` | `node` |
-| Arguments | `--yes`, `@bmccarn/tracecheck@0.3.0`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
+| Arguments | `--yes`, `@bmccarn/tracecheck@0.4.0`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
 
-Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. A source checkout also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`; 0.3.0 does not.
+Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. The server also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`; 0.3.0 does not.
 
-Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. A bound server accepts a `repo` argument that names its repository or any directory in it (not in 0.3.0, which accepted only the exact path) and rejects any other repository, including one nested inside it. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
+Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. A bound server accepts a `repo` argument that names its repository or any directory in it (0.3.0 accepted only the exact path) and rejects any other repository, including one nested inside it. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
 The package includes portable plugin manifests, client compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The skill supplies the review cadence; the MCP server alone only exposes its tools. For a client without a plugin marketplace, load the complete `skills/tracecheck/` directory, not only `SKILL.md`, through the client's skill support. The [Cursor setup](docs/integrations.md#cursor-manual-mcp--skill) shows both steps.
 
@@ -403,11 +403,11 @@ The [publishing guide](docs/publishing.md) covers release-candidate testing, sta
 | --- | --- | --- |
 | `TYPESAFE_API_KEY` | Required unless `JEV_API_KEY` or `OPENROUTER_API_KEY` is set | TypeSafe authentication. |
 | `JEV_API_KEY` | Unset | Alternative key name; takes precedence. |
-| `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. Not in 0.3.0. |
-| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. Not in 0.3.0. |
+| `OPENROUTER_API_KEY` | Unset | OpenRouter authentication. Used only when no TypeSafe key is set, and then requests go to OpenRouter. |
+| `TYPESAFE_BASE_URL` | `https://api.typesafe.ai`, or `https://openrouter.ai/api` when only an OpenRouter key is set | Base URL of a System One API. Tracecheck appends `/v1/systemone`. It must use HTTPS unless the host is loopback, and it must not contain credentials, a query, or a fragment. |
 | `JEV_MODEL` | `jev-latest` | Model selection. Use an available concrete version for repeatable evaluations. |
-| `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. Not in 0.3.0. |
-| `JEV_CONCURRENCY` | `4` | Most review requests in flight at once. A whole number from 1 to 16. Lower it if the provider rate-limits your account. Reports do not depend on it. Not in 0.3.0. |
+| `JEV_TIMEOUT_MS` | `45000` | Time limit for one Jev request, in milliseconds, including its retries. A whole number from 1 to 3,600,000. The overall review deadline still applies. |
+| `JEV_CONCURRENCY` | `4` | Most review requests in flight at once. A whole number from 1 to 16. Lower it if the provider rate-limits your account. Reports do not depend on it. |
 
 Tracecheck does not load `.env` files automatically or persist your API key. To keep keys in a file, pass the file to Node when you run a source checkout, for example `node --env-file=.env dist/plugin.mjs review --repo /path/to/repo`, and keep the file out of Git. Review requests are authenticated directly to the [TypeSafe API](https://docs.typesafe.ai/api), or to OpenRouter's System One API when it is configured. The selected source, baseline versions, dependencies, tests, and supplied task/context may leave your machine during live assessment. Local execution is not offline inference.
 
@@ -415,11 +415,11 @@ Tracecheck does not load `.env` files automatically or persist your API key. To 
 - The collector skips generated paths, symlinks, binary files, and files that contain a potential credential. The same screening runs on every string in a provider request, including supplied task, diff, file, and context text. It detects private key blocks (including PGP, DSA, and encrypted keys), common provider token formats (AWS, GitHub, OpenAI-style, Slack, Google, Stripe, npm), passwords in URLs, and credential-named assignments (`password`, `token`, `secret`, `api_key`, and similar) whose quoted or unquoted value looks random. Values that read as identifiers, such as `'StringLiteralToken'`, and references such as `${API_TOKEN}` are not flagged. A skipped file is named in the collection limitations, and a blocked request names the file path or input field. Neither message includes the matched value. This is not comprehensive secret detection.
 - Saved reports contain code excerpts and repository metadata. Treat them as source-bearing artifacts. This checkout ignores `.tracecheck/` and `.env` files.
 - Repository review results are cached in the MCP process for up to five minutes, with at most 16 entries. Cache hits retain the original timestamp and include an explicit cache flag. Prior assessments are compared locally without repeating inference. This cache does not apply to CLI runs or supplied-context assessments.
-- Not in 0.3.0. Identical `tracecheck_review` calls made while a review is running wait for that review instead of calling the provider again, and all but the first report `cached: true`. A call that is cancelled or times out stops waiting and fails on its own. The review stops only when every call waiting for it has stopped, so a retry after the only waiting call was cancelled starts a new review.
+- Identical `tracecheck_review` calls made while a review is running wait for that review instead of calling the provider again, and all but the first report `cached: true`. A call that is cancelled or times out stops waiting and fails on its own. The review stops only when every call waiting for it has stopped, so a retry after the only waiting call was cancelled starts a new review.
 
 ### Project configuration file
 
-Not in 0.3.0. To avoid repeating flags, commit a `.tracecheck.json` file at the repository root. CLI `preview` and `review`, and the MCP `tracecheck_preview` and `tracecheck_review` tools, read it from the repository they collect. An MCP server launched with `--repo` reads that repository's file. `verify` and `assess` do not read it. Every key is optional:
+To avoid repeating flags, commit a `.tracecheck.json` file at the repository root. CLI `preview` and `review`, and the MCP `tracecheck_preview` and `tracecheck_review` tools, read it from the repository they collect. An MCP server launched with `--repo` reads that repository's file. `verify` and `assess` do not read it. Every key is optional:
 
 ```json
 {
@@ -466,7 +466,7 @@ The preview snapshot covers the file's validated content. Editing the file betwe
 
 ### Using Jev through OpenRouter
 
-Not in 0.3.0. OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts TypeSafe's request format. Set `OPENROUTER_API_KEY` to use it. The setup from OpenRouter's TypeSafe SDK guide also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
+OpenRouter serves Jev through a [System One API](https://openrouter.ai/docs/guides/community/typesafe-sdk) that accepts TypeSafe's request format. Set `OPENROUTER_API_KEY` to use it. The setup from OpenRouter's TypeSafe SDK guide also works: set `TYPESAFE_API_KEY` to your OpenRouter key and `TYPESAFE_BASE_URL` to `https://openrouter.ai/api`.
 
 `JEV_MODEL` takes the same bare IDs as TypeSafe, such as `jev-latest`, and OpenRouter routes them to its `typesafe/` models. Reports record the model ID that OpenRouter returns, for example `typesafe/jev-1.13-20260917`. OpenRouter bills these requests to your OpenRouter account, and review context passes through OpenRouter on its way to TypeSafe.
 
@@ -498,7 +498,7 @@ Tracecheck reads a repository. It never runs the repository's code, tests, or bu
 
 ### Untrusted checkouts
 
-Collection runs `git rev-parse`, `diff`, `ls-files`, `ls-tree`, and `cat-file` in the checkout, and Git reads the checkout's own `.git/config`, which can name commands for Git to run. Its diff commands pass `--no-ext-diff` and `--no-textconv`, so external diff and textconv drivers never run. Not in 0.3.0: every Git command also sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, so a file system monitor or a hook, such as `post-index-change` when `git diff` refreshes the index, does not run either. The same settings reach the Git commands that check submodules.
+Collection runs `git rev-parse`, `diff`, `ls-files`, `ls-tree`, and `cat-file` in the checkout, and Git reads the checkout's own `.git/config`, which can name commands for Git to run. Its diff commands pass `--no-ext-diff` and `--no-textconv`, so external diff and textconv drivers never run. Every Git command also sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, so a file system monitor or a hook, such as `post-index-change` when `git diff` refreshes the index, does not run either. The same settings reach the Git commands that check submodules.
 
 Clean filters still run. To compare a working-tree file with the baseline, `git diff` passes it through the filter that `.gitattributes` or `.git/info/attributes` selects, through `filter.<driver>.clean` or `filter.<driver>.process`, as `git status` does. This happens for each changed file and for each file whose timestamps no longer match the index. Tracecheck cannot turn filters off without changing the comparison: files stored through a filter, such as Git LFS or git-crypt files, would no longer match their stored form and would appear changed.
 
@@ -506,7 +506,7 @@ A fresh clone is not exposed to this. `git clone` does not copy `.git/config`, `
 
 ### Terminal output
 
-Not in 0.3.0. Human-readable output prints control characters from file paths, source excerpts, provider responses, and error messages as visible escapes such as `\x1b`. A reviewed file therefore cannot send terminal escape sequences that clear the screen, set the window title, or write to the clipboard. Source excerpts keep tabs and line breaks. Markdown output also backslash-escapes Markdown-significant characters in the text it quotes, such as paths, symbols, and coverage gaps. JSON and SARIF output keep the original strings, so a program that prints their fields to a terminal must escape them itself.
+Human-readable output prints control characters from file paths, source excerpts, provider responses, and error messages as visible escapes such as `\x1b`. A reviewed file therefore cannot send terminal escape sequences that clear the screen, set the window title, or write to the clipboard. Source excerpts keep tabs and line breaks. Markdown output also backslash-escapes Markdown-significant characters in the text it quotes, such as paths, symbols, and coverage gaps. JSON and SARIF output keep the original strings, so a program that prints their fields to a terminal must escape them itself.
 
 ## Coverage and validation
 
@@ -548,7 +548,7 @@ GitHub Actions runs CI on every pull request and on every push to `main`. The wo
 
 ## Roadmap
 
-Version 0.3.0 added a real-project benchmark, separate relevance and evidence judgments, focused collection with callers and tests, and stronger cache and request boundaries. It is the current release; `0.2.0` was the previous one.
+Version 0.4.0 added OpenRouter as a provider, SARIF output, a request budget with a preview estimate, concurrent review requests, and the `.tracecheck.json` project settings file. It also recalibrated the decision gates against the live model. It is the current release; 0.3.0 was the previous one.
 
 The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
 

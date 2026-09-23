@@ -37497,7 +37497,7 @@ var releaseVersion;
 var init_version = __esm({
   "src/version.ts"() {
     "use strict";
-    releaseVersion = true ? "0.4.0-rc.1" : createRequire(import.meta.url)("../package.json").version;
+    releaseVersion = true ? "0.4.0" : createRequire(import.meta.url)("../package.json").version;
   }
 });
 
