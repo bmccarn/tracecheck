@@ -26,7 +26,8 @@
     "release:prepare": "node scripts/release-prepare.mjs",
     "release:gates": "node scripts/release-gates.mjs",
     "accuracy": "tsx benchmarks/run.ts",
-    "accuracy:paired": "tsx benchmarks/paired.ts"
+    "accuracy:paired": "tsx benchmarks/paired.ts",
+    "calibrate": "tsx benchmarks/calibrate.ts"
   },
   "engines": {
     "node": "^22.18.0 || >=24.11.0"
