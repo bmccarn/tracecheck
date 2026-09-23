@@ -4,17 +4,22 @@
 // Usage (from the checkout root, after `npm ci && npm run build`):
 //   node .agents/skills/verify-tracecheck/scripts/journey.mjs [--provider stand-in|live] [--no-install | --package SPEC] [--out DIR]
 // --provider stand-in (default) answers through the loopback stand-in provider: deterministic, no key, no cost.
-// --provider live uses the provider variables already in the environment (see doctor.mjs) and asserts only
-//   on structure and exit-code contracts, because model judgments vary.
+// --provider live uses the provider variables already in the environment (see doctor.mjs). Most steps accept any
+//   judgment there, because model judgments vary; the live outcome steps assert the planted defects and scoring.
 // --no-install drives dist/plugin.mjs from the checkout instead of an installed tarball.
 // --package SPEC installs a published version from the registry instead, for example @bmccarn/tracecheck@0.3.0,
 //   to compare a release with the checkout. This install needs network access.
+// Every step is one of three kinds. An outcome check asserts a result the user acts on: an exit code, a refusal, or a
+// side effect that must not happen. A plumbing check shows that the parts connect and the output has the expected
+// shape; with the stand-in, its judgments are scripted, so it says nothing about review quality. A known-issue check
+// asserts the correct outcome for an open issue; its failure is reported and does not fail the journey.
 // Evidence goes to .tracecheck/journey/<timestamp>-<provider>/ (JOURNEY.md, summary.json, one record per step)
-// and survives cleanup. Exit 0 only when every step passes.
+// and survives cleanup. Exit 0 only when every outcome and plumbing check passes.
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync, appendFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 import { Client } from '@modelcontextprotocol/client';
 import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
@@ -29,6 +34,7 @@ const { values } = parseArgs({
 if (!['stand-in', 'live'].includes(values.provider)) throw new Error('--provider must be stand-in or live.');
 const live = values.provider === 'live';
 const checkout = process.cwd();
+const scripts = dirname(fileURLToPath(import.meta.url));
 const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
 const evidence = resolve(values.out ?? join('.tracecheck', 'journey', `${stamp}-${values.provider}`));
 mkdirSync(evidence, { recursive: true });
@@ -37,18 +43,28 @@ const project = join(scratch, 'invoice-service');
 const results = [];
 const cleanups = [];
 
+// ---- steps ----------------------------------------------------------------------------------------------------
+const OUTCOME = 'outcome';
+const PLUMBING = 'plumbing';
+const KNOWN = 'known issue';
 class Check extends Error { }
 const expect = (condition, message) => { if (!condition) throw new Check(message); };
-async function step(name, fn) {
+const label = (kind, issue) => `[${kind}${issue ? ` #${issue}` : ''}]`;
+/** Runs one step of `kind`; `issue` names the issue whose fix the step checks. */
+async function step(kind, name, fn, issue) {
   const started = Date.now();
   try {
     const detail = await fn();
-    results.push({ step: name, ok: true, ms: Date.now() - started, detail: detail ?? '' });
-    console.log(`PASS ${name}${detail ? `: ${detail}` : ''}`);
+    results.push({ kind, step: name, issue, ok: true, ms: Date.now() - started, detail: detail ?? '' });
+    console.log(`PASS ${label(kind, issue)} ${name}${detail ? `: ${visible(detail)}` : ''}${kind === KNOWN ? ' (the issue appears fixed; make this an outcome check)' : ''}`);
   } catch (error) {
-    results.push({ step: name, ok: false, ms: Date.now() - started, detail: error.message });
-    console.log(`FAIL ${name}: ${error.message}`);
+    results.push({ kind, step: name, issue, ok: false, ms: Date.now() - started, detail: error.message });
+    console.log(`${kind === KNOWN ? 'KNOWN' : 'FAIL'} ${label(kind, issue)} ${name}: ${visible(error.message)}`);
   }
+}
+function skip(kind, name, reason, issue) {
+  results.push({ kind, step: name, issue, ok: true, skipped: true, ms: 0, detail: reason });
+  console.log(`SKIP ${label(kind, issue)} ${name}: ${reason}`);
 }
 
 // ---- project -------------------------------------------------------------------------------------------------
@@ -86,24 +102,50 @@ const change = {
   'src/routes/invoice.ts': baseline['src/routes/invoice.ts'].replace("'@/lib/format'", "'@/lib/currency'"),
   'notes/scratch.md': 'Local notes that must not leave this machine.\n',
 };
+// A change the stand-in judges clean: its only candidate's path gets a not_supported verdict (see startStandIn).
+const CLEAN_FILE = 'src/lib/average.ts';
+const averageShare = guard => `export function averageShare(totalCents: number, payers: number): number {\n${guard ? "  if (payers <= 0) throw new RangeError('An invoice needs at least one payer.');\n" : ''}  return Math.round(totalCents / ${guard ? 'payers' : 'Math.max(payers, 1)'});\n}\n`;
 const gitEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !name.startsWith('GIT_')));
-const git = (...args) => spawnSync('git', ['-C', project, ...args], { encoding: 'utf8', env: gitEnv });
-const writeFiles = files => { for (const [path, content] of Object.entries(files)) { mkdirSync(dirname(join(project, path)), { recursive: true }); writeFileSync(join(project, path), content); } };
+const gitIn = (dir, ...args) => spawnSync('git', ['-C', dir, ...args], { encoding: 'utf8', env: gitEnv });
+const git = (...args) => gitIn(project, ...args);
+const writeFilesIn = (dir, files) => { for (const [path, content] of Object.entries(files)) { mkdirSync(dirname(join(dir, path)), { recursive: true }); writeFileSync(join(dir, path), content); } };
+const writeFiles = files => writeFilesIn(project, files);
+function initRepo(dir) {
+  mkdirSync(dir, { recursive: true });
+  gitIn(dir, '-c', 'init.defaultBranch=main', 'init', '-q');
+  for (const [key, value] of [['user.name', 'Journey user'], ['user.email', 'journey@example.invalid'], ['core.hooksPath', '/dev/null'], ['commit.gpgsign', 'false']]) gitIn(dir, 'config', key, value);
+}
+function commitAll(dir, message) {
+  gitIn(dir, 'add', '-A');
+  const commit = gitIn(dir, 'commit', '-q', '-m', message);
+  expect(commit.status === 0, `git commit failed in ${relative(scratch, dir)}: ${commit.stderr.trim()}`);
+}
+/** Creates a repository under the scratch directory with `files` committed on main and `edits` left uncommitted. */
+function makeRepo(name, files, edits = {}) {
+  const dir = join(scratch, name);
+  initRepo(dir);
+  writeFilesIn(dir, files);
+  commitAll(dir, 'Baseline');
+  writeFilesIn(dir, edits);
+  return dir;
+}
 
 // ---- provider -------------------------------------------------------------------------------------------------
-async function startStandIn() {
-  const child = spawn(process.execPath, [join(checkout, '.agents/skills/verify-tracecheck/scripts/stand-in-provider.mjs'), '--port', '0', '--latency-ms', '50'], { stdio: ['ignore', 'pipe', 'pipe'] });
+/** Starts a stand-in provider logging to stand-in-<name>.log; `stats()` reads its request count as requests arrive. */
+async function startStandIn(name, args) {
+  const child = spawn(process.execPath, [join(scripts, 'stand-in-provider.mjs'), '--port', '0', ...args], { stdio: ['ignore', 'pipe', 'pipe'] });
   cleanups.push(() => child.kill('SIGTERM'));
-  return new Promise((done, fail) => {
+  const url = await new Promise((done, fail) => {
     let buffer = '';
     child.stdout.on('data', chunk => {
-      appendFileSync(join(evidence, 'stand-in-provider.log'), chunk);
+      appendFileSync(join(evidence, `stand-in-${name}.log`), chunk);
       buffer += chunk;
       const port = buffer.match(/listening (\d+)/)?.[1];
       if (port) done(`http://127.0.0.1:${port}`);
     });
     child.once('exit', code => fail(new Error(`stand-in provider exited with ${code}`)));
   });
+  return { url, stats: async () => (await fetch(`${url}/stats`)).json() };
 }
 const providerEnv = {};
 const secrets = [];
@@ -113,48 +155,115 @@ if (live) {
   if (!secrets.length) { console.error('--provider live needs JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY in the environment.'); process.exit(2); }
 }
 const userEnv = extra => ({ PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...providerEnv, ...extra });
+// Stand-in providers, set once the project exists: `standIn` answers quickly, `slowStandIn` leaves time to change the
+// repository while a review waits on it. In live mode both stay undefined and the live provider answers.
+let standIn;
+let slowStandIn;
+const slowEnv = () => userEnv(slowStandIn ? { TYPESAFE_BASE_URL: slowStandIn.url } : {});
+const providerRequests = async () => standIn ? (await standIn.stats()).received : undefined;
 
 // ---- CLI runner -----------------------------------------------------------------------------------------------
 let bundle;
+let packageRoot;
+let tarball;
+let binShim;
 let runs = 0;
-function cli(name, args, { env = userEnv(), cwd = project } = {}) {
-  const result = spawnSync(process.execPath, [bundle, ...args], { cwd, env, encoding: 'utf8', timeout: 600_000 });
+const EXIT_CODES = { no_findings: 0, needs_attention: 1, inconclusive: 3 };
+function record(name, shown, { status, stdout, stderr }) {
   const file = join(evidence, 'cli', `${String(++runs).padStart(2, '0')}-${name}`);
   mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(`${file}.cmd`, `tracecheck ${args.join(' ')}\n`);
-  writeFileSync(`${file}.stdout`, result.stdout ?? '');
-  writeFileSync(`${file}.stderr`, result.stderr ?? '');
-  writeFileSync(`${file}.exit`, `${result.status}\n`);
-  return { code: result.status, stdout: result.stdout ?? '', stderr: result.stderr ?? '' };
+  writeFileSync(`${file}.cmd`, `${shown}\n`);
+  writeFileSync(`${file}.stdout`, stdout ?? '');
+  writeFileSync(`${file}.stderr`, stderr ?? '');
+  writeFileSync(`${file}.exit`, `${status}\n`);
+  return { code: status, stdout: stdout ?? '', stderr: stderr ?? '' };
+}
+function execute(name, command, args, { env = userEnv(), cwd = project, shown = [command, ...args].join(' ') } = {}) {
+  return record(name, shown, spawnSync(command, args, { cwd, env, encoding: 'utf8', timeout: 600_000 }));
+}
+const cli = (name, args, options = {}) => execute(name, process.execPath, [bundle, ...args], { shown: `tracecheck ${args.join(' ')}`, ...options });
+/** Runs a CLI review and calls `during` once, when its progress says it is sending provider requests. */
+async function reviewWhile(name, args, { env = userEnv(), cwd = project, during }) {
+  let acted = false;
+  let failure;
+  const result = await new Promise((done, fail) => {
+    const child = spawn(process.execPath, [bundle, ...args], { cwd, env, stdio: ['ignore', 'pipe', 'pipe'] });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 600_000);
+    let stdout = '';
+    let stderr = '';
+    child.stdout.setEncoding('utf8').on('data', chunk => { stdout += chunk; });
+    child.stderr.setEncoding('utf8').on('data', chunk => {
+      stderr += chunk;
+      if (acted || !stderr.includes('Tracecheck progress: Sending')) return;
+      acted = true;
+      try { during(); } catch (error) { failure = error; }
+    });
+    child.once('error', error => { clearTimeout(timer); fail(error); });
+    child.once('close', status => { clearTimeout(timer); done({ status, stdout, stderr }); });
+  });
+  if (failure) throw failure;
+  const outcome = record(name, `tracecheck ${args.join(' ')}`, result);
+  expect(acted, `the review never sent provider requests: ${lastLine(outcome.stderr)}`);
+  return outcome;
 }
 const json = text => { try { return JSON.parse(text); } catch { throw new Check('stdout is not JSON'); } };
+const lastLine = text => text.trim().split('\n').pop() ?? '';
 const exitsIn = (actual, allowed, what) => expect(allowed.includes(actual), `${what} exited ${actual}, expected ${allowed.join(' or ')}`);
+// C0 and C1 control characters other than tab and newline: what a terminal acts on instead of printing.
+const CONTROL = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/;
+const visible = text => text.replace(/[\u0000-\u001f\u007f-\u009f]/g, char => `\\x${char.charCodeAt(0).toString(16).padStart(2, '0')}`);
+
+// ---- MCP ------------------------------------------------------------------------------------------------------
+let mcpCalls = 0;
+/** Calls `tool` through `client` and saves the call as mcp/NN-<session>-<tool>.json. */
+async function callTool(client, session, tool, args, options = {}) {
+  const result = await client.callTool({ name: tool, arguments: args }, { timeout: 600_000, ...options });
+  const call = { tool, arguments: args, isError: Boolean(result.isError), structuredContent: result.structuredContent ?? null, text: result.content?.map(item => item.text) ?? [] };
+  mkdirSync(join(evidence, 'mcp'), { recursive: true });
+  writeFileSync(join(evidence, 'mcp', `${String(++mcpCalls).padStart(2, '0')}-${session}-${tool}.json`), JSON.stringify(call, null, 2));
+  return call;
+}
+/** Starts an MCP server over stdio as `launch` describes, passes `use` a call function and the client, then closes it. */
+async function mcpSession(session, launch, use) {
+  const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
+  const log = [];
+  const transport = new StdioClientTransport({ env: userEnv(), stderr: 'pipe', ...launch });
+  transport.stderr?.on('data', chunk => log.push(String(chunk)));
+  try {
+    await client.connect(transport);
+    return await use((tool, args, options) => callTool(client, session, tool, args, options), client);
+  } finally {
+    await client.close().catch(() => { });
+    writeFileSync(join(evidence, `mcp-${session}-stderr.log`), log.join(''));
+  }
+}
+const boundServer = repo => ({ command: process.execPath, args: [bundle, 'mcp', '--repo', repo] });
 
 try {
-  await step('install the package', async () => {
-    if (!values.install) { bundle = join(checkout, 'dist/plugin.mjs'); return 'skipped by --no-install; using dist/plugin.mjs'; }
+  await step(PLUMBING, 'install the package', async () => {
+    if (!values.install) { bundle = join(checkout, 'dist/plugin.mjs'); packageRoot = checkout; return 'skipped by --no-install; using dist/plugin.mjs'; }
     const prefix = join(scratch, 'user');
-    let source = values.package;
-    if (!source) {
+    tarball = values.package;
+    if (!tarball) {
       const pack = spawnSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', scratch], { cwd: checkout, encoding: 'utf8' });
       expect(pack.status === 0, `npm pack failed: ${pack.stderr.slice(-300)}`);
-      source = join(scratch, JSON.parse(pack.stdout)[0].filename);
+      tarball = join(scratch, JSON.parse(pack.stdout)[0].filename);
     }
-    const install = spawnSync('npm', ['install', '--prefix', prefix, ...(values.package ? [] : ['--offline']), '--ignore-scripts', '--no-audit', '--no-fund', source], { encoding: 'utf8' });
+    const install = spawnSync('npm', ['install', '--prefix', prefix, ...(values.package ? [] : ['--offline']), '--ignore-scripts', '--no-audit', '--no-fund', tarball], { encoding: 'utf8' });
     expect(install.status === 0, `install failed: ${install.stderr.slice(-300)}`);
-    bundle = join(prefix, 'node_modules/@bmccarn/tracecheck/dist/plugin.mjs');
+    packageRoot = join(prefix, 'node_modules/@bmccarn/tracecheck');
+    bundle = join(packageRoot, 'dist/plugin.mjs');
+    binShim = join(prefix, 'node_modules/.bin/tracecheck');
     const help = spawnSync(process.execPath, [bundle, '--help'], { encoding: 'utf8', env: userEnv() });
     expect(help.status === 0 && help.stdout.includes('tracecheck review'), '--help from the installed package failed');
-    const version = JSON.parse(readFileSync(join(prefix, 'node_modules/@bmccarn/tracecheck/package.json'), 'utf8')).version;
+    const version = JSON.parse(readFileSync(join(packageRoot, 'package.json'), 'utf8')).version;
     return values.package ? `installed ${values.package} (${version}) from the registry` : `installed the packed checkout (${version}) with no network and no dependencies`;
   });
 
-  await step('create the project and the working-tree change', async () => {
-    mkdirSync(project, { recursive: true });
-    git('-c', 'init.defaultBranch=main', 'init', '-q');
-    for (const [key, value] of [['user.name', 'Journey user'], ['user.email', 'journey@example.invalid'], ['core.hooksPath', '/dev/null'], ['commit.gpgsign', 'false']]) git('config', key, value);
+  await step(PLUMBING, 'create the project and the working-tree change', async () => {
+    initRepo(project);
     writeFiles(baseline);
-    git('add', '-A'); git('commit', '-q', '-m', 'Invoice service baseline');
+    commitAll(project, 'Invoice service baseline');
     expect(git('mv', 'src/lib/format.ts', 'src/lib/currency.ts').status === 0, 'git mv failed');
     writeFiles(change);
     const status = git('status', '--porcelain').stdout.trim().split('\n');
@@ -162,12 +271,13 @@ try {
   });
 
   if (!live) {
-    const url = await startStandIn();
-    Object.assign(providerEnv, { TYPESAFE_API_KEY: 'stand-in-placeholder', TYPESAFE_BASE_URL: url });
+    standIn = await startStandIn('provider', ['--latency-ms', '50', '--verdict', `^${CLEAN_FILE.replaceAll('.', '\\.')}$=not_supported`]);
+    slowStandIn = await startStandIn('slow', ['--latency-ms', '1500']);
+    Object.assign(providerEnv, { TYPESAFE_API_KEY: 'stand-in-placeholder', TYPESAFE_BASE_URL: standIn.url });
   }
 
   let snapshot;
-  await step('preview shows the change, its baseline, and related files', async () => {
+  await step(OUTCOME, 'preview shows the change, its baseline, and related files', async () => {
     const run = cli('preview', ['preview', '--json']);
     exitsIn(run.code, [0], 'preview');
     const plan = json(run.stdout);
@@ -188,8 +298,21 @@ try {
     return `${plan.packets.length} packet(s), ${plan.sources.length} sources, candidates ${checks.join(', ')}`;
   });
 
+  await step(OUTCOME, 'the installed bin shim and npx run the CLI in the project', async () => {
+    if (!values.install) return 'skipped by --no-install; there is no installed package';
+    const help = execute('bin-help', binShim, ['--help'], { shown: 'node_modules/.bin/tracecheck --help' });
+    expect(help.code === 0 && help.stdout.includes('tracecheck review'), `node_modules/.bin/tracecheck --help exited ${help.code}: ${lastLine(help.stderr)}`);
+    // A private npm cache keeps npx from reading or filling the user's cache.
+    const npxEnv = userEnv({ npm_config_cache: join(scratch, 'npm-cache'), npm_config_update_notifier: 'false' });
+    const args = [...(values.package ? [] : ['--offline']), '--package', tarball, 'tracecheck', 'preview', '--json'];
+    const npx = execute('npx-preview', 'npx', args, { env: npxEnv, shown: `npx ${args.join(' ').replace(tarball, values.package ?? '<packed tarball>')}` });
+    expect(npx.code === 0, `npx tracecheck preview exited ${npx.code}: ${lastLine(npx.stderr)}`);
+    expect(json(npx.stdout).snapshot === snapshot, 'npx preview reported a different snapshot from the installed CLI');
+    return `bin shim --help exit 0; npx ${values.package ? '' : '--offline '}preview matches snapshot ${snapshot.slice(0, 12)}`;
+  });
+
   let firstReport;
-  await step('review reports findings, writes SARIF, and shows progress', async () => {
+  await step(PLUMBING, 'review reports findings, writes SARIF, and shows progress', async () => {
     const run = cli('review', ['review', '--json', '--out', join(evidence, 'report-1.json'), '--sarif', join(evidence, 'report-1.sarif')]);
     exitsIn(run.code, live ? [0, 1, 3] : [1], 'review');
     firstReport = json(run.stdout);
@@ -208,21 +331,44 @@ try {
     return `status ${firstReport.status}, ${supported}/2 supported, ${firstReport.usage.requests} request(s), models ${firstReport.models.join(', ')}`;
   });
 
-  await step('after the user fixes the JSON handling, compare tracks the finding', async () => {
+  let fixedReport;
+  await step(PLUMBING, 'after the user fixes the JSON handling, compare tracks the finding', async () => {
     writeFileSync(join(project, 'src/api/parse.ts'), baseline['src/api/parse.ts']);
     const run = cli('review-after-fix', ['review', '--json', '--quiet', '--out', join(evidence, 'report-2.json')]);
     exitsIn(run.code, live ? [0, 1, 3] : [1], 'review after fix');
-    const after = json(run.stdout);
-    expect(!after.decisions.some(decision => decision.check === 'unhandled-json'), 'the fixed JSON.parse is still a candidate');
+    fixedReport = json(run.stdout);
+    expect(!fixedReport.decisions.some(decision => decision.check === 'unhandled-json'), 'the fixed JSON.parse is still a candidate');
     const compared = cli('compare', ['compare', '--previous', join(evidence, 'report-1.json'), '--current', join(evidence, 'report-2.json')]);
     exitsIn(compared.code, [0], 'compare');
     const history = json(compared.stdout);
-    const jsonFinding = history.find(item => item.check === 'unhandled-json');
-    const earlierJson = firstReport.decisions.find(decision => decision.check === 'unhandled-json')?.status === 'supported';
-    expect(!earlierJson || jsonFinding?.status === 'not_reassessed', `JSON finding state is ${jsonFinding?.status}`);
+    const state = check => history.find(item => item.check === check)?.status;
+    const earlier = check => firstReport.decisions.find(decision => decision.check === check)?.status;
+    expect(earlier('unhandled-json') !== 'supported' || state('unhandled-json') === 'not_reassessed', `JSON finding state is ${state('unhandled-json')}`);
+    const divisorNow = fixedReport.decisions.find(decision => decision.check === 'zero-divisor')?.status;
+    expect(earlier('zero-divisor') !== 'supported' || divisorNow !== 'supported' || state('zero-divisor') === 'still_present', `the divisor finding supported in both reports is ${state('zero-divisor')}`);
     expect(!history.some(item => /fixed/.test(item.status)), 'compare claimed a verified fix');
     return history.map(item => `${item.check}: ${item.status}`).join(', ') || 'no earlier supported findings';
   });
+
+  if (live) {
+    await step(OUTCOME, 'live: the planted defects are supported, and the unfixed one stays supported', async () => {
+      const status = (report, check) => report?.decisions.find(decision => decision.check === check)?.status ?? 'missing';
+      const observed = `first review: zero-divisor ${status(firstReport, 'zero-divisor')}, unhandled-json ${status(firstReport, 'unhandled-json')}; after the JSON fix: zero-divisor ${status(fixedReport, 'zero-divisor')}`;
+      expect(status(firstReport, 'zero-divisor') === 'supported' && status(firstReport, 'unhandled-json') === 'supported'
+        && status(fixedReport, 'zero-divisor') === 'supported', observed);
+      return observed;
+    });
+    await step(OUTCOME, 'live: the review scores at least one quality dimension', async () => {
+      const metrics = Object.values(firstReport?.quality?.metrics ?? firstReport?.packetQualities?.[0]?.evaluation.metrics ?? {});
+      const counts = Object.entries(Object.groupBy(metrics, metric => metric.status)).map(([state, items]) => `${items.length} ${state}`).join(', ');
+      const scored = metrics.filter(metric => metric.status === 'assessed').length;
+      expect(scored > 0, `${scored}/${metrics.length} dimensions scored (${counts || 'no quality result'})`);
+      return `${scored}/${metrics.length} dimensions scored (${counts})`;
+    }, 59);
+  } else {
+    skip(OUTCOME, 'live: the planted defects are supported, and the unfixed one stays supported', 'needs --provider live');
+    skip(OUTCOME, 'live: the review scores at least one quality dimension', 'needs --provider live', 59);
+  }
 
   const money = readFileSync(join(project, 'src/lib/money.ts'), 'utf8');
   const evidenceInput = {
@@ -232,7 +378,7 @@ try {
     target: { evidenceId: 'split', start: 2, end: 2, quote: money.split('\n')[1] },
   };
   writeFileSync(join(evidence, 'verify-input.json'), JSON.stringify(evidenceInput, null, 2));
-  await step('verify checks agent evidence against local files', async () => {
+  await step(PLUMBING, 'verify checks agent evidence against local files', async () => {
     const run = cli('verify', ['verify', '--input', join(evidence, 'verify-input.json'), '--repo', project]);
     exitsIn(run.code, live ? [0, 1, 3] : [1], 'verify');
     const output = json(run.stdout);
@@ -246,7 +392,7 @@ try {
 
   const assessInput = { task: JSON.parse(baseline['.tracecheck.json']).task, files: [{ path: 'src/lib/money.ts', content: money }] };
   writeFileSync(join(evidence, 'assess-input.json'), JSON.stringify(assessInput, null, 2));
-  await step('assess evaluates supplied files and gates on priorities', async () => {
+  await step(PLUMBING, 'assess evaluates supplied files and gates on priorities', async () => {
     const run = cli('assess', ['assess', '--input', join(evidence, 'assess-input.json'), '--json', '--fail-on-priorities', '--out', join(evidence, 'evaluation.json')]);
     const evaluation = json(run.stdout);
     expect(Object.keys(evaluation.metrics).length === 19, 'expected 19 quality dimensions');
@@ -254,7 +400,7 @@ try {
     return `${evaluation.priorities.length} priorit${evaluation.priorities.length === 1 ? 'y' : 'ies'}, exit ${run.code}`;
   });
 
-  await step('clear errors without a key or with an insecure endpoint', async () => {
+  await step(OUTCOME, 'clear errors without a key or with an insecure endpoint', async () => {
     const noKey = cli('no-key', ['assess', '--input', join(evidence, 'assess-input.json')], { env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' } });
     expect(noKey.code === 2 && noKey.stderr.includes('OPENROUTER_API_KEY'), 'missing-key error is unclear');
     const insecure = cli('insecure-endpoint', ['assess', '--input', join(evidence, 'assess-input.json')], { env: userEnv({ TYPESAFE_API_KEY: 'placeholder', TYPESAFE_BASE_URL: 'http://example.com/api' }) });
@@ -262,28 +408,188 @@ try {
     return 'exit 2 with actionable messages';
   });
 
+  // ---- outcomes a user relies on beyond the main path --------------------------------------------------------
+  const CLEAN_CHANGE = 'a change the provider judges clean exits 0 with no findings through the CLI and MCP';
+  if (live) skip(OUTCOME, CLEAN_CHANGE, 'needs the stand-in verdicts; a live model judges the change itself', 52);
+  else {
+    await step(OUTCOME, CLEAN_CHANGE, async () => {
+      const repo = makeRepo('clean-change', { ...baseline, [CLEAN_FILE]: averageShare(false) }, { [CLEAN_FILE]: averageShare(true) });
+      const run = cli('review-clean-change', ['review', '--json', '--quiet'], { cwd: repo });
+      const report = run.stdout.trim() ? json(run.stdout) : undefined;
+      const decisions = report?.decisions.map(decision => `${decision.check} ${decision.status}`).join(', ') || 'none';
+      expect(run.code === 0 && report?.status === 'no_findings', `review exited ${run.code} with status ${report?.status ?? 'none'}; decisions ${decisions}; limitations: ${report?.limitations.join(' | ') || 'none'}`);
+      expect(report.decisions.length > 0 && report.decisions.every(decision => decision.status === 'not_supported'), `decisions ${decisions}`);
+      const mcpStatus = await mcpSession('clean-change', boundServer(repo), async call => {
+        const preview = await call('tracecheck_preview', {});
+        expect(!preview.isError, `MCP preview failed: ${preview.text.join(' ')}`);
+        const review = await call('tracecheck_review', { snapshot: preview.structuredContent.snapshot });
+        expect(!review.isError, `MCP review failed: ${review.text.join(' ').slice(0, 300)}`);
+        return review.structuredContent.report.status;
+      });
+      expect(mcpStatus === 'no_findings', `MCP review status ${mcpStatus}`);
+      return `CLI exit 0 and MCP status ${mcpStatus}; decisions ${decisions}; ${report.notes?.length ?? 0} note(s), ${report.limitations.length} limitation(s)`;
+    }, 52);
+  }
+
+  await step(OUTCOME, 'a review with nothing to review exits 0 and says so', async () => {
+    const repo = makeRepo('no-changes', baseline);
+    const run = cli('review-no-changes', ['review', '--json', '--quiet'], { cwd: repo });
+    const report = run.stdout.trim() ? json(run.stdout) : undefined;
+    expect(run.code === 0 && report?.status === 'no_findings', `review exited ${run.code} with status ${report?.status ?? 'none'}: ${report?.limitations.join(' | ') || lastLine(run.stderr)}`);
+    expect(report.usage.requests === 0, `a review with no changes made ${report.usage.requests} provider request(s)`);
+    expect(/nothing to review/i.test(run.stdout), 'the report does not say there is nothing to review');
+    return `exit 0, 0 requests: ${[...(report.notes ?? []), ...report.limitations].find(item => /nothing to review/i.test(item))}`;
+  }, 52);
+
+  await step(OUTCOME, 'an untracked file created during a CLI review does not discard the report', async () => {
+    const swap = join(project, 'src/lib/.money.ts.swp');
+    try {
+      const run = await reviewWhile('review-untracked-during', ['review', '--json'], { env: slowEnv(), during: () => writeFileSync(swap, 'editor swap file\n') });
+      expect(run.code !== 2 && run.stdout.trim(), `review exited ${run.code} and printed no report: ${lastLine(run.stderr)}`);
+      const report = json(run.stdout);
+      exitsIn(run.code, [EXIT_CODES[report.status]], `review with status ${report.status}`);
+      return `exit ${run.code}, status ${report.status}, report printed`;
+    } finally {
+      rmSync(swap, { force: true });
+    }
+  }, 53);
+
+  await step(OUTCOME, 'a reviewed file edited during a CLI review yields a report marked stale', async () => {
+    const path = join(project, 'src/lib/money.ts');
+    const original = readFileSync(path, 'utf8');
+    try {
+      const run = await reviewWhile('review-edited-during', ['review', '--json'], { env: slowEnv(), during: () => writeFileSync(path, `${original}// edited during the review\n`) });
+      expect(run.stdout.trim(), `review exited ${run.code} and printed no report: ${lastLine(run.stderr)}`);
+      const report = json(run.stdout);
+      const stale = report.limitations.find(item => item.startsWith('Stale report:'));
+      expect(run.code === 4 && stale, `review exited ${run.code}${stale ? '' : ' with no "Stale report:" limitation'}`);
+      expect(/marked stale/.test(run.stderr), 'stderr does not say the report is marked stale');
+      return `exit 4, status ${report.status}: ${stale}`;
+    } finally {
+      writeFileSync(path, original);
+    }
+  }, 53);
+
+  await step(OUTCOME, 'a file name and source with terminal control sequences print no control characters', async () => {
+    const hostile = 'src/\u001b]0;owned\u0007\u001b[2Jratio.ts';
+    const ratio = guard => `export function ratio(a: number, b: number): number {\n${guard ? '  if (b === 0) return 0;\n' : ''}  return a / b; // \u001b]52;c;b3duZWQ=\u0007\u001b[2J\u009b31m\r\n}\n`;
+    const repo = makeRepo('control-characters', { 'package.json': baseline['package.json'], [hostile]: ratio(true) }, { [hostile]: ratio(false) });
+    const plan = cli('preview-control-json', ['preview', '--json'], { cwd: repo });
+    expect(plan.code === 0 && json(plan.stdout).sources.some(source => source.path === hostile && source.role === 'changed'), 'preview --json does not report the file under its exact name');
+    const preview = cli('preview-control', ['preview'], { cwd: repo });
+    const review = cli('review-control', ['review'], { cwd: repo });
+    const outputs = { 'preview Markdown': preview.stdout, 'review Markdown': review.stdout, 'review stderr': review.stderr };
+    const raw = Object.entries(outputs).filter(([, text]) => CONTROL.test(text)).map(([name, text]) => `${name} has ${visible(text.match(CONTROL)[0])}`);
+    expect(!raw.length, raw.join('; '));
+    if (!live) expect(review.stdout.includes('zero-divisor'), 'the review Markdown has no finding, so the quoted source was not printed');
+    return 'no raw control characters in preview or review Markdown; preview --json keeps the exact name';
+  }, 54);
+
+  await step(OUTCOME, 'a repository-local core.fsmonitor command never runs', async () => {
+    const repo = makeRepo('fsmonitor', baseline, { 'src/lib/money.ts': change['src/lib/money.ts'] });
+    const marker = join(scratch, 'fsmonitor-ran');
+    const hook = join(scratch, 'fsmonitor-hook.sh');
+    writeFileSync(hook, `#!/bin/sh\ntouch '${marker}'\n`, { mode: 0o755 });
+    gitIn(repo, 'config', 'core.fsmonitor', hook);
+    const ran = [];
+    const observe = async (name, action) => {
+      rmSync(marker, { force: true });
+      await action();
+      if (existsSync(marker)) ran.push(name);
+    };
+    await observe('preview', () => cli('preview-fsmonitor', ['preview', '--json'], { cwd: repo }));
+    await observe('review', () => cli('review-fsmonitor', ['review', '--json', '--quiet'], { cwd: repo }));
+    await observe('MCP preview', () => mcpSession('fsmonitor', boundServer(repo), call => call('tracecheck_preview', {})));
+    expect(!ran.length, `the fsmonitor command ran during ${ran.join(', ')}`);
+    return 'no marker after preview, review, or MCP preview';
+  }, 55);
+
+  await step(OUTCOME, 'a project settings file cannot widen collection, raise limits, or move the base', async () => {
+    const { '.tracecheck.json': _settings, ...files } = baseline;
+    const repo = makeRepo('settings-file', files);
+    const older = gitIn(repo, 'rev-parse', 'HEAD').stdout.trim();
+    writeFilesIn(repo, { 'src/routes/refund.ts': `${baseline['src/routes/refund.ts']}\nexport const REFUND_WINDOW_DAYS = 30;\n` });
+    commitAll(repo, 'Add a refund window');
+    writeFilesIn(repo, { 'src/lib/money.ts': change['src/lib/money.ts'], 'src/local-only.ts': 'export const localOnly = true;\n' });
+    const raises = {
+      includeUntracked: { includeUntracked: true },
+      base: { base: older },
+      requestConcurrency: { requestConcurrency: 16 },
+      reviewTimeoutMs: { reviewTimeoutMs: 3_600_000 },
+      'collection.collectionTimeoutMs': { collection: { collectionTimeoutMs: 3_600_000 } },
+      maxRequests: { maxRequests: 100 },
+    };
+    const accepted = [];
+    for (const [key, settings] of Object.entries(raises)) {
+      writeFileSync(join(repo, '.tracecheck.json'), JSON.stringify(settings));
+      const run = cli(`preview-settings-${key}`, ['preview', '--json'], { cwd: repo });
+      if (run.code === 2 && run.stderr.includes(`"${key}"`) && /may (?:not exceed|only be) the default/.test(run.stderr)) continue;
+      accepted.push(`${key} (exit ${run.code}${run.code === 0 ? ', applied' : `: ${lastLine(run.stderr)}`})`);
+    }
+    expect(!accepted.length, `not refused: ${accepted.join('; ')}`);
+    writeFileSync(join(repo, '.tracecheck.json'), JSON.stringify({ requestConcurrency: 2, maxRequests: 10, task: 'Refunds must never divide by zero payers.' }));
+    const tightened = cli('preview-settings-tightened', ['preview'], { cwd: repo });
+    expect(tightened.code === 0, `lower limits were refused: ${lastLine(tightened.stderr)}`);
+    expect(tightened.stdout.includes('Task from the repository settings file .tracecheck.json:'), 'preview does not show the task that came from the settings file');
+    return `refused ${Object.keys(raises).join(', ')}; lower limits accepted and the file's task shown`;
+  }, 57);
+
+  await step(OUTCOME, 'a review over the request budget is refused before any provider request', async () => {
+    const ratios = guard => Object.fromEntries(Array.from({ length: 9 }, (_, index) => [`src/ratios/ratio${index}.ts`,
+    `export function ratio${index}(a: number, b: number): number {\n${guard ? "  if (b === 0) throw new RangeError('b must not be zero');\n" : ''}  return a / b;\n}\n`]));
+    const repo = makeRepo('request-budget', { 'package.json': baseline['package.json'], ...ratios(true) }, ratios(false));
+    const preview = cli('preview-budget', ['preview', '--json'], { cwd: repo });
+    exitsIn(preview.code, [0], 'preview');
+    const { estimate, snapshot: budgetSnapshot } = json(preview.stdout);
+    expect(Number.isInteger(estimate?.requests) && estimate.requests >= 2 && estimate.inputBytes > 0, `preview estimate is ${JSON.stringify(estimate)}`);
+    const refusal = `Review would make ${estimate.requests} provider requests, over the budget of 1`;
+    const before = await providerRequests();
+    const run = cli('review-over-budget', ['review', '--json', '--quiet', '--max-requests', '1'], { cwd: repo });
+    expect(run.code === 2 && run.stderr.includes(refusal), `review --max-requests 1 exited ${run.code}: ${lastLine(run.stderr)}`);
+    const mcp = await mcpSession('request-budget', boundServer(repo), async call => {
+      const mcpPreview = await call('tracecheck_preview', {});
+      expect(!mcpPreview.isError && mcpPreview.structuredContent.snapshot === budgetSnapshot, 'MCP preview failed or differs from the CLI preview');
+      return call('tracecheck_review', { snapshot: budgetSnapshot, maxRequests: 1 });
+    });
+    expect(mcp.isError && mcp.text.join(' ').includes(refusal), `MCP review with maxRequests 1 was not refused: ${mcp.text.join(' ').slice(0, 200)}`);
+    const after = await providerRequests();
+    expect(after === before, `the stand-in received ${after - before} request(s)`);
+    return `estimate ${estimate.requests} requests, ${estimate.inputBytes} bytes; CLI and MCP refused${standIn ? '; the stand-in received no request' : ''}`;
+  }, 57);
+
+  await step(KNOWN, 'a --base branch that has moved on compares only the feature branch\'s changes', async () => {
+    const repo = makeRepo('base-branch', baseline);
+    gitIn(repo, 'checkout', '-q', '-b', 'feature');
+    writeFilesIn(repo, { 'src/routes/refund.ts': baseline['src/routes/refund.ts'].replace('return splitTotal(totalCents, payers);', 'return Math.max(0, splitTotal(totalCents, payers));') });
+    commitAll(repo, 'Never refund a negative share');
+    gitIn(repo, 'checkout', '-q', 'main');
+    writeFilesIn(repo, { 'src/lib/audit.ts': 'export const audited = true;\n', 'src/api/parse.ts': baseline['src/api/parse.ts'].replace('  try {', "  if (body.length > 65_536) return { ok: false, status: 400 };\n  try {") });
+    commitAll(repo, 'Harden parsing and add auditing on main');
+    gitIn(repo, 'checkout', '-q', 'feature');
+    const run = cli('preview-base-branch', ['preview', '--base', 'main', '--json'], { cwd: repo });
+    exitsIn(run.code, [0], 'preview --base main');
+    const plan = json(run.stdout);
+    const changed = [...new Set(plan.packets.flatMap(packet => packet.changedPaths))].sort();
+    const mainOnly = plan.limitations.filter(item => item.includes('src/lib/audit.ts'));
+    expect(changed.join(', ') === 'src/routes/refund.ts' && !mainOnly.length, `changed ${changed.join(', ')}${mainOnly.length ? `; ${mainOnly.join(' ')}` : ''}`);
+    return `changed ${changed.join(', ')}`;
+  }, 58);
+
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------
   const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
   const serverLog = [];
-  const transport = new StdioClientTransport({ command: process.execPath, args: [bundle, 'mcp', '--repo', project], env: userEnv(), stderr: 'pipe' });
+  const transport = new StdioClientTransport({ ...boundServer(project), env: userEnv(), stderr: 'pipe' });
   transport.stderr?.on('data', chunk => serverLog.push(String(chunk)));
-  let calls = 0;
-  const call = async (tool, args, options = {}) => {
-    const result = await client.callTool({ name: tool, arguments: args }, { timeout: 600_000, ...options });
-    const record = { tool, arguments: args, isError: Boolean(result.isError), structuredContent: result.structuredContent ?? null, text: result.content?.map(item => item.text) ?? [] };
-    mkdirSync(join(evidence, 'mcp'), { recursive: true });
-    writeFileSync(join(evidence, 'mcp', `${String(++calls).padStart(2, '0')}-${tool}.json`), JSON.stringify(record, null, 2));
-    return record;
-  };
+  const call = (tool, args, options) => callTool(client, 'main', tool, args, options);
   try {
-    await step('MCP server starts and lists four tools', async () => {
+    await step(PLUMBING, 'MCP server starts and lists four tools', async () => {
       await client.connect(transport);
       const names = (await client.listTools()).tools.map(tool => tool.name).sort();
       expect(names.join(',') === 'tracecheck_assess,tracecheck_preview,tracecheck_review,tracecheck_verify', `tools: ${names}`);
       return names.join(', ');
     });
     let mcpSnapshot;
-    await step('MCP preview and review with progress, then a cached repeat', async () => {
+    await step(PLUMBING, 'MCP preview and review with progress, then a cached repeat', async () => {
       const preview = await call('tracecheck_preview', {});
       expect(!preview.isError, preview.text.join(' '));
       mcpSnapshot = preview.structuredContent.snapshot;
@@ -297,14 +603,27 @@ try {
       expect(repeat.structuredContent?.cached === true && repeat.structuredContent.report.id === review.structuredContent.report.id, 'repeat review was not served from the cache');
       return `${progress.length} progress notifications, ${review.structuredContent.report.usage.requests} request(s), repeat cached`;
     });
-    await step('MCP verify and assess', async () => {
+    await step(PLUMBING, 'MCP verify and assess', async () => {
       const verified = await call('tracecheck_verify', { ...evidenceInput, repo: project });
       expect(!verified.isError && verified.structuredContent.provenance === 'local_files_checked', verified.text.join(' ').slice(0, 300));
       const assessed = await call('tracecheck_assess', assessInput);
       expect(!assessed.isError && Object.keys(assessed.structuredContent.metrics).length === 19, assessed.text.join(' ').slice(0, 300));
       return `verify ${verified.structuredContent.report.status}, assess ${assessed.structuredContent.priorities.length} priorities`;
     });
-    await step('MCP review rejects a snapshot after the user edits a file', async () => {
+    await step(OUTCOME, 'MCP review accepts its snapshot after an unrelated untracked file appears', async () => {
+      const preview = await call('tracecheck_preview', {});
+      expect(!preview.isError, preview.text.join(' '));
+      const swap = join(project, 'src/lib/.money.ts.swp');
+      writeFileSync(swap, 'editor swap file\n');
+      try {
+        const review = await call('tracecheck_review', { snapshot: preview.structuredContent.snapshot });
+        expect(!review.isError, `the snapshot was rejected: ${review.text.join(' ').slice(0, 200)}`);
+        return `status ${review.structuredContent.report.status}, cached ${review.structuredContent.cached}`;
+      } finally {
+        rmSync(swap, { force: true });
+      }
+    }, 53);
+    await step(OUTCOME, 'MCP review rejects a snapshot after the user edits a file', async () => {
       const path = join(project, 'src/lib/money.ts');
       writeFileSync(path, readFileSync(path, 'utf8') + '// edited after preview\n');
       const stale = await call('tracecheck_review', { snapshot: mcpSnapshot });
@@ -316,7 +635,28 @@ try {
     writeFileSync(join(evidence, 'mcp-server-stderr.log'), serverLog.join(''));
   }
 
-  await step('no provider key appears in the evidence', async () => {
+  await step(OUTCOME, 'MCP server starts as each plugin manifest launches it and asks for a repository', async () => {
+    const launched = [];
+    for (const manifest of ['.mcp.json', 'mcp.json']) {
+      const server = JSON.parse(readFileSync(join(packageRoot, manifest), 'utf8')).mcpServers.tracecheck;
+      const args = server.args.map(arg => arg.replace(/\$\{\w*PLUGIN_ROOT\}/g, packageRoot));
+      expect(!args.some(arg => arg.includes('${')), `${manifest} has an unresolved variable: ${args.join(' ')}`);
+      // Without a cwd the client starts the server in its own working directory, which for a user is the project.
+      const cwd = server.cwd === undefined ? project : resolve(packageRoot, server.cwd);
+      await mcpSession(manifest.replace(/^\./, 'dot-'), { command: server.command, args, cwd }, async (call, client) => {
+        const tools = (await client.listTools()).tools;
+        expect(tools.length === 4, `${manifest}: ${tools.length} tools`);
+        const bare = await call('tracecheck_preview', {});
+        expect(bare.isError && /Supply repo or launch the server with --repo/.test(bare.text.join(' ')), `${manifest}: preview with no repo returned ${bare.text.join(' ').slice(0, 200)}`);
+        const named = await call('tracecheck_preview', { repo: project });
+        expect(!named.isError && named.structuredContent.packets.length > 0, `${manifest}: preview with repo failed: ${named.text.join(' ').slice(0, 200)}`);
+      });
+      launched.push(`${manifest}: ${server.command} ${args.join(' ').replaceAll(packageRoot, '<package root>')} in ${cwd === project ? 'the project' : '<package root>'}`);
+    }
+    return `${launched.join('; ')}; without repo each asks for one`;
+  });
+
+  await step(OUTCOME, 'no provider key appears in the evidence', async () => {
     if (!secrets.length) return 'stand-in run; no real key used';
     const files = readdirSync(evidence, { recursive: true }).map(String);
     const leaked = files.filter(file => { try { const text = readFileSync(join(evidence, file), 'utf8'); return secrets.some(secret => text.includes(secret)); } catch { return false; } });
@@ -326,12 +666,31 @@ try {
 } finally {
   for (const cleanup of cleanups) cleanup();
   rmSync(scratch, { recursive: true, force: true });
-  const passed = results.filter(result => result.ok).length;
-  writeFileSync(join(evidence, 'summary.json'), JSON.stringify({ provider: values.provider, package: values.package ?? (values.install ? 'packed checkout' : 'dist/plugin.mjs'), passed, total: results.length, results }, null, 2) + '\n');
+  const tally = kind => {
+    const checked = results.filter(result => result.kind === kind && !result.skipped);
+    return { passed: checked.filter(result => result.ok).length, total: checked.length };
+  };
+  const outcome = tally(OUTCOME);
+  const plumbing = tally(PLUMBING);
+  const known = results.filter(result => result.kind === KNOWN).map(result => ({ issue: result.issue, step: result.step, present: !result.ok }));
+  const skipped = results.filter(result => result.skipped).length;
+  const gating = results.filter(result => result.kind !== KNOWN && !result.skipped);
+  const passed = gating.filter(result => result.ok).length;
+  const packageLabel = values.package ?? (values.install ? 'packed checkout, installed offline' : 'checkout dist/plugin.mjs');
+  const knownLine = known.map(item => `#${item.issue} ${item.present ? 'still present' : 'appears fixed'}`).join(', ') || 'none';
+  writeFileSync(join(evidence, 'summary.json'), JSON.stringify({
+    provider: values.provider, package: packageLabel, passed, total: gating.length,
+    outcome, plumbing, knownIssues: known, skipped, results
+  }, null, 2) + '\n');
+  const resultText = result => result.skipped ? 'skipped' : result.kind === KNOWN ? (result.ok ? 'passes; make it an outcome check' : 'still present') : result.ok ? 'pass' : 'FAIL';
   writeFileSync(join(evidence, 'JOURNEY.md'), [`# Tracecheck end-user journey (${values.provider})`, '',
-  `${passed}/${results.length} steps passed. Package: ${values.package ?? (values.install ? 'packed checkout, installed offline' : 'checkout dist/plugin.mjs')}.`, '',
-    '| Step | Result | Detail |', '| --- | --- | --- |',
-  ...results.map(result => `| ${result.step} | ${result.ok ? 'pass' : 'FAIL'} | ${String(result.detail).replaceAll('|', '/').replaceAll('\n', ' ')} |`), ''].join('\n'));
-  console.log(`\n${passed}/${results.length} steps passed. Evidence: ${evidence}`);
-  process.exitCode = passed === results.length && results.length > 0 ? 0 : 1;
+  `Package: ${packageLabel}.`, '',
+  `- Outcome checks: ${outcome.passed}/${outcome.total} passed. Each asserts a result the user acts on: an exit code, a refusal, or a side effect that must not happen.`,
+  `- Plumbing checks: ${plumbing.passed}/${plumbing.total} passed. Each shows that the parts connect and the output has the expected shape.${live ? '' : ' The stand-in provider scripts every judgment, so these say nothing about review quality.'}`,
+  `- Known issues: ${knownLine}. A known-issue check asserts the correct outcome for an open issue; it does not fail the journey.`,
+  ...(skipped ? [`- Skipped: ${skipped}.`] : []), '',
+    '| Kind | Step | Result | Detail |', '| --- | --- | --- | --- |',
+  ...results.map(result => `| ${result.kind}${result.issue ? ` (#${result.issue})` : ''} | ${result.step} | ${resultText(result)} | ${visible(String(result.detail)).replaceAll('|', '/').replaceAll('\\x0a', ' ')} |`), ''].join('\n'));
+  console.log(`\nOutcome checks: ${outcome.passed}/${outcome.total} passed. Plumbing checks: ${plumbing.passed}/${plumbing.total} passed. Known issues: ${knownLine}.${skipped ? ` Skipped: ${skipped}.` : ''}\nEvidence: ${evidence}`);
+  process.exitCode = passed === gating.length && gating.length > 0 ? 0 : 1;
 }
