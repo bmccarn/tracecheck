@@ -256,7 +256,7 @@ function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], mod
   notes: string[], usage: Report['usage']): Report {
   usage.elapsedMs = Date.now() - started;
   return { schemaVersion: 1, id: hash([plan.snapshot, Date.now(), decisions]).slice(0, 24), createdAt: new Date().toISOString(),
-    snapshot: plan.snapshot, root: plan.root, base: plan.base, head: plan.head,
+    snapshot: plan.snapshot, root: plan.root, base: plan.base, ...(plan.baseRef ? { baseRef: plan.baseRef } : {}), head: plan.head,
     checkVersion: CHECK_VERSION, policyVersion: POLICY_VERSION, models: [...models], status: reportStatus(decisions, limitations), decisions, limitations, notes, usage };
 }
 
@@ -469,7 +469,7 @@ export function render(report: Report): string {
   const packetSummary = packetCount === undefined ? '' : ` · ${packetCount} packet${packetCount === 1 ? '' : 's'}`;
   const lines = [`# Tracecheck`, '', ...(isStale(report) ? ['**Stale:** the reviewed evidence changed during the review. Run review again.', ''] : []),
     `**${report.status.replaceAll('_', ' ')}**${packetSummary} · ${report.decisions.length} checks · ${report.usage.requests} Jev request(s)`, '',
-    `Snapshot: ${report.snapshot.slice(0, 12)} · Models: ${report.models.map(markdownText).join(', ') || 'not called'}`, '',
+    `Snapshot: ${report.snapshot.slice(0, 12)}${report.baseRef ? ` · Base: ${report.base.slice(0, 12)} (from ${markdownText(report.baseRef)})` : ''} · Models: ${report.models.map(markdownText).join(', ') || 'not called'}`, '',
     `${report.quality || report.packetQualities ? 'Broad review: all 19 quality dimensions per packet. ' : ''}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`, ''];
   if (report.quality) lines.push(renderQuality(report.quality), '', '## Source-anchored findings', '');
   if (report.packetQualities) {

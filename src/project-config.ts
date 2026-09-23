@@ -1,11 +1,9 @@
-import { realpath } from 'node:fs/promises';
-import { resolve } from 'node:path';
 import { z } from 'zod';
 import {
   DEFAULT_BASE, DEFAULT_COLLECTION_TIMEOUT_MS, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, DEFAULT_REVIEW_TIMEOUT_MS,
   maxRequestsSchema, reviewScopeFields, reviewTimeoutSchema, type CollectionOptions,
 } from './collection-options.js';
-import { gitOutput } from './git-context.js';
+import { gitRoot } from './git-context.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS, modelSchema, requestConcurrencySchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
 import { hasSecret, readSource } from './safety.js';
 
@@ -110,7 +108,7 @@ export function parseProjectConfig(text: string): ProjectConfig {
 
 /** Finds the Git top level for `repo` and reads its configuration file, if one exists. */
 export async function loadProjectConfig(repo: string, signal?: AbortSignal): Promise<{ root: string; config?: ProjectConfig }> {
-  const root = await realpath((await gitOutput(resolve(repo), ['rev-parse', '--show-toplevel'], { timeout: 10_000, signal })).trim());
+  const root = await gitRoot(repo, { timeout: 10_000, signal });
   let text: string;
   try {
     text = await readSource(root, CONFIG_FILE, signal, MAX_CONFIG_BYTES);

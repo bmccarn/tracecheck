@@ -11,6 +11,8 @@ export const candidateSchema = z.object({
 });
 export const reportSchema = z.object({
   schemaVersion: z.literal(1), id: z.string(), createdAt: z.string(), snapshot: z.string(), root: z.string(), base: z.string(), head: z.string(),
+  // The ref the review was asked to compare against; `base` is its merge base with HEAD. Reports saved by 0.3.x have none.
+  baseRef: z.string().optional(),
   checkVersion: z.string(), policyVersion: z.string(), models: z.array(z.string()),
   status: z.enum(['needs_attention', 'inconclusive', 'no_findings']),
   decisions: z.array(candidateSchema.extend({

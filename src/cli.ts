@@ -187,7 +187,8 @@ ${Object.values(USAGE).map(usage => `  ${usage}`).join('\n')}
 Options:
   --repo PATH                 Git repository to collect; defaults to the current directory. verify
                               matches excerpts against it; mcp uses it when a call names none.
-  --base REF                  Git baseline (default: HEAD).
+  --base REF                  Git ref to review changes against (default: HEAD). The working
+                              tree is compared against the merge base of REF and HEAD.
   --include-untracked         Include supported, non-ignored untracked files.
   --no-include-untracked      Exclude untracked files (the default).
   --task TEXT                 Requested behavior or acceptance criteria.
@@ -316,7 +317,7 @@ cannot hold credentials or the endpoint.`);
     const packets = plan.packets.map(packet => `${packet.id}: ${packet.changedPaths.map(terminalText).join(', ')}`).join('\n');
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : '';
-    console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${[...plan.notes, ...notes].map(item => `Note: ${terminalText(item)}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
+    console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)\n${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}\n` : ''}Snapshot: ${plan.snapshot}\nBase: ${plan.base.slice(0, 12)} (from ${terminalText(plan.baseRef ?? 'HEAD')})\n${plan.packets.length} change packets · ${plan.sources.length} files · ${plan.candidates.length} candidates\nReview estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.\n${packets}\n${plan.sources.map(source => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ''}`).join('\n')}\n${[...plan.notes, ...notes].map(item => `Note: ${terminalText(item)}`).join('\n')}\n${plan.limitations.map(item => `Coverage gap: ${terminalText(item)}`).join('\n')}`);
     return;
   }
   const reviewSignal = AbortSignal.any([interrupt.signal,

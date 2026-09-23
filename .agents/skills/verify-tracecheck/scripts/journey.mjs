@@ -624,22 +624,61 @@ try {
     return `estimate ${estimate.requests} requests, ${estimate.inputBytes} bytes; CLI and MCP refused${standIn ? '; the stand-in received no request' : ''}`;
   }, 57);
 
-  await step(KNOWN, 'a --base branch that has moved on compares only the feature branch\'s changes', async () => {
+  // A feature branch whose base branch, main, has moved on: main hardened parse.ts and added audit.ts after the branch.
+  let baseBranch;
+  const baseBranchRepo = () => baseBranch ??= (() => {
     const repo = makeRepo('base-branch', baseline);
     gitIn(repo, 'checkout', '-q', '-b', 'feature');
     writeFilesIn(repo, { 'src/routes/refund.ts': baseline['src/routes/refund.ts'].replace('return splitTotal(totalCents, payers);', 'return Math.max(0, splitTotal(totalCents, payers));') });
     commitAll(repo, 'Never refund a negative share');
+    const branchPoint = gitIn(repo, 'rev-parse', 'main').stdout.trim();
     gitIn(repo, 'checkout', '-q', 'main');
     writeFilesIn(repo, { 'src/lib/audit.ts': 'export const audited = true;\n', 'src/api/parse.ts': baseline['src/api/parse.ts'].replace('  try {', "  if (body.length > 65_536) return { ok: false, status: 400 };\n  try {") });
     commitAll(repo, 'Harden parsing and add auditing on main');
     gitIn(repo, 'checkout', '-q', 'feature');
+    return { repo, branchPoint };
+  })();
+
+  await step(OUTCOME, 'a --base branch that has moved on compares only the feature branch\'s changes', async () => {
+    const { repo, branchPoint } = baseBranchRepo();
     const run = cli('preview-base-branch', ['preview', '--base', 'main', '--json'], { cwd: repo });
     exitsIn(run.code, [0], 'preview --base main');
     const plan = json(run.stdout);
     const changed = [...new Set(plan.packets.flatMap(packet => packet.changedPaths))].sort();
     const mainOnly = plan.limitations.filter(item => item.includes('src/lib/audit.ts'));
     expect(changed.join(', ') === 'src/routes/refund.ts' && !mainOnly.length, `changed ${changed.join(', ')}${mainOnly.length ? `; ${mainOnly.join(' ')}` : ''}`);
-    return `changed ${changed.join(', ')}`;
+    expect(plan.base === branchPoint && plan.baseRef === 'main', `CLI preview compared ${plan.baseRef} at ${plan.base}, expected main at the merge base ${branchPoint}`);
+    const human = cli('preview-base-branch-text', ['preview', '--base', 'main'], { cwd: repo });
+    exitsIn(human.code, [0], 'preview --base main');
+    expect(human.stdout.includes(`Base: ${branchPoint.slice(0, 12)} (from main)`), 'the human preview does not name the compared commit');
+    const mcp = await mcpSession('base-branch', boundServer(repo), call => call('tracecheck_preview', { base: 'main' }));
+    const mcpChanged = mcp.isError ? [] : [...new Set(mcp.structuredContent.packets.flatMap(packet => packet.changedPaths))].sort();
+    expect(!mcp.isError && mcpChanged.join(', ') === 'src/routes/refund.ts' && mcp.structuredContent.base === branchPoint && mcp.structuredContent.snapshot === plan.snapshot,
+      `MCP preview with base main: ${mcp.isError ? mcp.text.join(' ').slice(0, 200) : `changed ${mcpChanged.join(', ')} at ${mcp.structuredContent.base}`}`);
+    const review = cli('review-base-branch', ['review', '--base', 'main', '--json', '--quiet'], { cwd: repo });
+    exitsIn(review.code, [0, 1, 3], 'review --base main');
+    const report = json(review.stdout);
+    expect(report.base === branchPoint && report.baseRef === 'main' && report.snapshot === plan.snapshot, `the review report compared ${report.baseRef} at ${report.base}`);
+    return `CLI preview, MCP preview, and CLI review changed ${changed.join(', ')}, compared at merge base ${branchPoint.slice(0, 12)}`;
+  }, 58);
+
+  await step(OUTCOME, 'an unknown or unfetched --base is refused with advice, not a Git command line', async () => {
+    const { repo } = baseBranchRepo();
+    const rawGit = /Command failed|rev-parse|fatal:/;
+    const bogus = cli('preview-bogus-base', ['preview', '--base', 'no-such-branch'], { cwd: repo });
+    expect(bogus.code === 2 && bogus.stderr.includes('Base no-such-branch was not found') && bogus.stderr.includes('git fetch') && !rawGit.test(bogus.stderr),
+      `preview --base no-such-branch exited ${bogus.code}: ${lastLine(bogus.stderr)}`);
+    const mcp = await mcpSession('bogus-base', boundServer(repo), call => call('tracecheck_preview', { base: 'no-such-branch' }));
+    const mcpText = mcp.text.join(' ');
+    expect(mcp.isError && mcpText.includes('Base no-such-branch was not found') && !rawGit.test(mcpText), `MCP preview with an unknown base: ${mcpText.slice(0, 200)}`);
+    // A CI-style checkout: one commit deep and only the feature branch, so origin/main was never fetched.
+    const shallow = join(scratch, 'base-branch-shallow');
+    const cloned = spawnSync('git', ['clone', '-q', '--depth', '1', '--branch', 'feature', `file://${repo}`, shallow], { encoding: 'utf8', env: gitEnv });
+    expect(cloned.status === 0, `git clone --depth 1 failed: ${cloned.stderr.trim()}`);
+    const unfetched = cli('preview-shallow-base', ['preview', '--base', 'origin/main'], { cwd: shallow });
+    expect(unfetched.code === 2 && unfetched.stderr.includes('git fetch origin main') && unfetched.stderr.includes('fetch-depth: 0') && !rawGit.test(unfetched.stderr),
+      `preview --base origin/main in a shallow clone exited ${unfetched.code}: ${lastLine(unfetched.stderr)}`);
+    return 'CLI and MCP name the ref; the shallow clone is told to fetch origin main with fetch-depth: 0';
   }, 58);
 
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------

@@ -1,9 +1,8 @@
-import { realpath } from 'node:fs/promises';
-import { posix, resolve } from 'node:path';
+import { posix } from 'node:path';
 import { findCandidates, parseErrorCategory } from './checks.js';
 import { collectionSettingsSchema, type CollectionOptions } from './collection-options.js';
 import { hash, type DiscoveryScope, type Range, type ReviewPacket, type ReviewPlan, type Source } from './domain.js';
-import { gitOutput, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
+import { gitOutput, gitRoot, readGitChangeContext, readGitRecords, type GitChange } from './git-context.js';
 import { definedSymbols, FileTally, focusSource, isSource, isTest, symbolRanges } from './evidence.js';
 import { buildImportIndex } from './import-index.js';
 import { failureReason, hasSecret, readSource } from './safety.js';
@@ -32,6 +31,50 @@ type Loaded = { source: Source; names?: string[] };
 const sourceChars = (source: Source) => source.content.length + (source.before?.length ?? 0);
 const sourceBytes = (source: Source) => Buffer.byteLength(JSON.stringify(source));
 
+type Git = (root: string, args: string[]) => Promise<string>;
+
+/** Git exits 1 when a lookup finds nothing; any other failure is unexpected and propagates. */
+async function lookup(git: Git, root: string, args: string[]): Promise<string | undefined> {
+  try {
+    return (await git(root, args)).trim() || undefined;
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 1) return undefined;
+    throw error;
+  }
+}
+
+/**
+ * Resolves the commit the working tree is compared against: the merge base of `ref` and HEAD. When `ref` is HEAD or
+ * one of its ancestors, that is the commit `ref` names. When `ref` is a branch that has moved on, commits made only on
+ * that branch are left out, so the review sees only the changes made since HEAD's history left it.
+ */
+async function resolveBase(git: Git, root: string, ref: string): Promise<{ base: string; head: string; movedOn: boolean }> {
+  const revParse = (name: string) => lookup(git, root, ['rev-parse', '--verify', '--quiet', '--end-of-options', name]);
+  const head = await revParse('HEAD^{commit}');
+  if (!head) throw new Error('The current branch has no commits yet, so there is nothing to compare against. Commit a baseline, then run Tracecheck again.');
+  const tip = await revParse(`${ref}^{commit}`);
+  if (!tip) {
+    if (await revParse(ref)) throw new Error(`Base ${ref} does not name a commit.`);
+    const remotes = (await git(root, ['remote'])).split('\n').filter(Boolean);
+    // A CI checkout has origin/main but no local main, so a bare branch name is a common near miss.
+    for (const remote of remotes) {
+      if (await revParse(`refs/remotes/${remote}/${ref}^{commit}`)) throw new Error(`Base ${ref} was not found in this repository, but ${remote}/${ref} was. Use ${remote}/${ref} as the base.`);
+    }
+    const remote = remotes.find(name => ref.startsWith(`${name}/`));
+    const fetch = remote ? `, for example with git fetch ${remote} ${ref.slice(remote.length + 1)},` : ' with git fetch';
+    const shallow = (await git(root, ['rev-parse', '--is-shallow-repository'])).trim() === 'true';
+    throw new Error(`Base ${ref} was not found in this repository. Check the name, or fetch it first${fetch} and run Tracecheck again.${shallow
+      ? ' This is a shallow clone, which fetches only the checked-out branch unless told otherwise; fetch-depth: 0 on actions/checkout fetches every branch and its history.' : ''}`);
+  }
+  if (tip === head) return { base: head, head, movedOn: false };
+  const base = await lookup(git, root, ['merge-base', tip, head]);
+  if (base) return { base, head, movedOn: base !== tip };
+  if ((await git(root, ['rev-parse', '--is-shallow-repository'])).trim() === 'true') {
+    throw new Error(`Cannot find the commit where HEAD's history meets ${ref}: this is a shallow clone, and its history stops before that commit. Fetch more history, for example with fetch-depth: 0 on actions/checkout or git fetch --unshallow, and run Tracecheck again.`);
+  }
+  throw new Error(`HEAD and ${ref} share no history, so there is no commit to compare against. Pass a base that HEAD's history contains.`);
+}
+
 export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...(options.signal ? [options.signal] : [])]);
@@ -40,9 +83,10 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
     signal.throwIfAborted();
     return gitOutput(root, args, { signal });
   };
-  const root = await realpath((await git(resolve(options.repo), ['rev-parse', '--show-toplevel'])).trim());
-  const base = (await git(root, ['rev-parse', '--verify', '--end-of-options', `${options.base ?? 'HEAD'}^{commit}`])).trim();
-  const head = (await git(root, ['rev-parse', 'HEAD'])).trim();
+  signal.throwIfAborted();
+  const root = await gitRoot(options.repo, { signal });
+  const baseRef = options.base ?? 'HEAD';
+  const { base, head, movedOn } = await resolveBase(git, root, baseRef);
   // Rename detection runs once here; readGitChangeContext diffs each detected pair with the same default threshold.
   const changed: string[] = [];
   const renames = new Map<string, string>();
@@ -66,7 +110,8 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   // Notes stay out of the snapshot, so untracked files that are not reviewed, such as editor swap files or test
   // output, can come and go without invalidating a preview or a review.
   const notes: string[] = [];
-  if (!changePaths.length) notes.push(`No changes against ${options.base ?? 'HEAD'}; nothing to review.`);
+  if (movedOn) notes.push(`${baseRef} has commits that HEAD does not; the review compares against their merge base ${base.slice(0, 12)}, so changes made only on ${baseRef} are left out.`);
+  if (!changePaths.length) notes.push(`No changes against ${baseRef}; nothing to review.`);
   else notes.push('Import/caller discovery is heuristic; path aliases resolve only through repository tsconfig.json or jsconfig.json files, and unresolved imports, dynamic imports, and external contracts may be missing.');
   if (!options.includeUntracked && untracked.length) notes.push(`${untracked.length} untracked file(s) excluded; use --include-untracked to include supported source files.`);
 
@@ -345,6 +390,6 @@ export async function collect(options: CollectOptions): Promise<ReviewPlan> {
   if ((await git(root, ['rev-parse', 'HEAD'])).trim() !== head) throw new Error('Repository HEAD changed during collection; retry the preview.');
   const sources = [...sourceByPath.values()].sort((a, b) => a.path.localeCompare(b.path));
   const context = { task: options.task, repositoryContext: options.repositoryContext };
-  const snapshot = hash({ root, base, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...(options.projectConfig ? { projectConfig: options.projectConfig } : {}) });
-  return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
+  const snapshot = hash({ root, base, baseRef, head, settings, discovery: index.discovery, sources: sources.map(source => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...(options.projectConfig ? { projectConfig: options.projectConfig } : {}) });
+  return { schemaVersion: 1, root, base, baseRef, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }

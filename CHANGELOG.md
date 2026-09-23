@@ -46,6 +46,8 @@
 - Every Git command sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, and the README documents which repository-local settings, such as clean filters, can still run commands in a checkout that was not freshly cloned.
 - The end-user journey now separates outcome checks from plumbing checks. It covers clean exits, untracked-file churn, stale reports, terminal control characters, repository fsmonitor settings, settings-file limits, the request budget, the installed bin shim and `npx`, and launching the MCP server as the plugin manifests do. The stand-in provider accepts `--verdict REGEX=STATUS`.
 - `verify` and `tracecheck_verify` with a bound repository report a missing, symlinked, out-of-repository, directory, oversized, or unreadable evidence file by its evidence ID and repository-relative path, before inference and without an absolute path or system error text.
+- `--base` and the MCP `base` argument now compare against the merge base of the named ref and `HEAD`, so a base branch that has moved on no longer shows its newer work as your changes. Reports record the requested ref in `baseRef`.
+- Unknown refs, shallow clones without enough history, repositories with no commits, and directories that are not Git working trees give plain errors instead of raw Git command lines.
 
 ## 0.3.0 — 2026-09-18
 
