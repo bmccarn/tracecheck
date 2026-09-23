@@ -471,6 +471,22 @@ Repository discovery is separate from model-input size. A bounded in-process cac
 
 Partial discovery reports successfully indexed versus eligible file counts and bounded omission summaries. Raise discovery deadlines for a large repository without increasing model packet sizes. CLI flags above correspond to MCP's nested `collection` fields `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; use identical collection arguments for preview and review. MCP review accepts `reviewTimeoutMs` separately. Timeouts accept positive integer milliseconds up to one hour. More packets mean more provider requests; preview exposes packet membership before transmission.
 
+## Security model
+
+Tracecheck reads a repository. It never runs the repository's code, tests, or build. Two parts of a review still depend on what the checkout contains: the Git commands that collection runs, and the text that Tracecheck prints.
+
+### Untrusted checkouts
+
+Collection runs `git rev-parse`, `diff`, `ls-files`, `ls-tree`, and `cat-file` in the checkout, and Git reads the checkout's own `.git/config`, which can name commands for Git to run. Its diff commands pass `--no-ext-diff` and `--no-textconv`, so external diff and textconv drivers never run. Not in 0.3.0: every Git command also sets `core.fsmonitor=false` and `core.hooksPath=/dev/null`, so a file system monitor or a hook, such as `post-index-change` when `git diff` refreshes the index, does not run either. The same settings reach the Git commands that check submodules.
+
+Clean filters still run. To compare a working-tree file with the baseline, `git diff` passes it through the filter that `.gitattributes` or `.git/info/attributes` selects, through `filter.<driver>.clean` or `filter.<driver>.process`, as `git status` does. This happens for each changed file and for each file whose timestamps no longer match the index. Tracecheck cannot turn filters off without changing the comparison: files stored through a filter, such as Git LFS or git-crypt files, would no longer match their stored form and would appear changed.
+
+A fresh clone is not exposed to this. `git clone` does not copy `.git/config`, `.git/info/attributes`, or hooks, so the only filter commands that can run are the ones your own global or system Git configuration defines. A checkout that arrives as a directory or an archive, or one that another user can write to, keeps its `.git` directory. Reviewing it is as risky as running `git status` in it. Check `git config --list --show-origin` for `filter.` entries that come from the checkout before you review it, or review a fresh clone instead.
+
+### Terminal output
+
+Not in 0.3.0. Human-readable output prints control characters from file paths, source excerpts, provider responses, and error messages as visible escapes such as `\x1b`. A reviewed file therefore cannot send terminal escape sequences that clear the screen, set the window title, or write to the clipboard. Source excerpts keep tabs and line breaks. Markdown output also backslash-escapes Markdown-significant characters in the text it quotes, such as paths, symbols, and coverage gaps. JSON and SARIF output keep the original strings, so a program that prints their fields to a terminal must escape them itself.
+
 ## Coverage and validation
 
 The broad assessment accepts code in any language, but that is not a claim of equal accuracy across languages. Automatic collection supports common source, configuration, and documentation extensions. Exact parser-derived findings currently cover **JS/TS division or remainder boundaries, swallowed failures, and JSON parsing boundaries**. A matching syntax pattern is a hypothesis for Jev to assess, not an automatic bug report.

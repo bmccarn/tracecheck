@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { hash, type Question, type TypedEvaluator, type TypedResponse } from './domain.js';
 import { dimensions } from './quality/dimensions.js';
+import { markdownText } from './terminal.js';
 
 export const RUBRIC_VERSION = '2';
 const metricSchema = z.object({
@@ -162,10 +163,10 @@ export function renderQuality(evaluation: QualityEvaluation): string {
     const metric = evaluation.metrics[dimension.key]!;
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? '—'} | ${metric.confidence?.toFixed(2) ?? '—'} | ${metric.status} |`);
   }
-  if (evaluation.priorities.length) lines.push('', '### Quality priorities', '', ...evaluation.priorities.map(priority => `- **${priority.metric}:** ${priority.reason} ${priority.suggestion}`));
-  if (evaluation.improvements.length) lines.push('', 'Improvements:', ...evaluation.improvements.map(value => `- ${value}`));
-  if (evaluation.regressions.length) lines.push('', 'Regressions:', ...evaluation.regressions.map(value => `- ${value}`));
-  if (evaluation.unresolvedWeaknesses.length) lines.push('', `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.join(', ')}`);
-  lines.push('', ...evaluation.warnings.map(value => `Comparison note: ${value}`), '', 'Scores are independent quality signals; they are not an overall grade or proof of correctness.');
+  if (evaluation.priorities.length) lines.push('', '### Quality priorities', '', ...evaluation.priorities.map(priority => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
+  if (evaluation.improvements.length) lines.push('', 'Improvements:', ...evaluation.improvements.map(value => `- ${markdownText(value)}`));
+  if (evaluation.regressions.length) lines.push('', 'Regressions:', ...evaluation.regressions.map(value => `- ${markdownText(value)}`));
+  if (evaluation.unresolvedWeaknesses.length) lines.push('', `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.map(markdownText).join(', ')}`);
+  lines.push('', ...evaluation.warnings.map(value => `Comparison note: ${markdownText(value)}`), '', 'Scores are independent quality signals; they are not an overall grade or proof of correctness.');
   return lines.join('\n');
 }

@@ -20834,6 +20834,27 @@ var init_dimensions = __esm({
   }
 });
 
+// src/terminal.ts
+function terminalText(text) {
+  return text.replace(CONTROL, visible);
+}
+function terminalLines(text) {
+  return text.replace(/\r\n/g, "\n").replace(CONTROL_EXCEPT_LINE_BREAK_AND_TAB, visible);
+}
+function markdownText(text) {
+  return terminalText(text.replace(MARKDOWN, "\\$&"));
+}
+var CONTROL, CONTROL_EXCEPT_LINE_BREAK_AND_TAB, MARKDOWN, visible;
+var init_terminal = __esm({
+  "src/terminal.ts"() {
+    "use strict";
+    CONTROL = /[\x00-\x1f\x7f-\x9f]/g;
+    CONTROL_EXCEPT_LINE_BREAK_AND_TAB = /[\x00-\x08\x0b-\x1f\x7f-\x9f]/g;
+    MARKDOWN = /[\\`*[\]<|~]|(?<![\p{L}\p{N}])_|_(?![\p{L}\p{N}])/gu;
+    visible = (character) => `\\x${character.charCodeAt(0).toString(16).padStart(2, "0")}`;
+  }
+});
+
 // src/quality.ts
 function qualityQuestions() {
   const questions = {};
@@ -20967,11 +20988,11 @@ function renderQuality(evaluation) {
     const metric = evaluation.metrics[dimension.key];
     lines.push(`| ${dimension.label} | ${metric.score?.toFixed(1) ?? "\u2014"} | ${metric.confidence?.toFixed(2) ?? "\u2014"} | ${metric.status} |`);
   }
-  if (evaluation.priorities.length) lines.push("", "### Quality priorities", "", ...evaluation.priorities.map((priority) => `- **${priority.metric}:** ${priority.reason} ${priority.suggestion}`));
-  if (evaluation.improvements.length) lines.push("", "Improvements:", ...evaluation.improvements.map((value) => `- ${value}`));
-  if (evaluation.regressions.length) lines.push("", "Regressions:", ...evaluation.regressions.map((value) => `- ${value}`));
-  if (evaluation.unresolvedWeaknesses.length) lines.push("", `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.join(", ")}`);
-  lines.push("", ...evaluation.warnings.map((value) => `Comparison note: ${value}`), "", "Scores are independent quality signals; they are not an overall grade or proof of correctness.");
+  if (evaluation.priorities.length) lines.push("", "### Quality priorities", "", ...evaluation.priorities.map((priority) => `- **${markdownText(priority.metric)}:** ${markdownText(priority.reason)} ${markdownText(priority.suggestion)}`));
+  if (evaluation.improvements.length) lines.push("", "Improvements:", ...evaluation.improvements.map((value) => `- ${markdownText(value)}`));
+  if (evaluation.regressions.length) lines.push("", "Regressions:", ...evaluation.regressions.map((value) => `- ${markdownText(value)}`));
+  if (evaluation.unresolvedWeaknesses.length) lines.push("", `Unresolved quality concerns: ${evaluation.unresolvedWeaknesses.map(markdownText).join(", ")}`);
+  lines.push("", ...evaluation.warnings.map((value) => `Comparison note: ${markdownText(value)}`), "", "Scores are independent quality signals; they are not an overall grade or proof of correctness.");
   return lines.join("\n");
 }
 var RUBRIC_VERSION, metricSchema, prioritySchema, qualityEvaluationSchema, previousEvaluationSchema, ASSESS_TIMEOUT_MS, qualityInputSchema, levels;
@@ -20981,6 +21002,7 @@ var init_quality = __esm({
     init_zod();
     init_domain();
     init_dimensions();
+    init_terminal();
     RUBRIC_VERSION = "2";
     metricSchema = external_exports.object({
       applicable: external_exports.boolean(),
@@ -21482,7 +21504,7 @@ function render(report) {
     ...isStale(report) ? ["**Stale:** the reviewed evidence changed during the review. Run review again.", ""] : [],
     `**${report.status.replaceAll("_", " ")}**${packetSummary} \xB7 ${report.decisions.length} checks \xB7 ${report.usage.requests} Jev request(s)`,
     "",
-    `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.join(", ") || "not called"}`,
+    `Snapshot: ${report.snapshot.slice(0, 12)} \xB7 Models: ${report.models.map(markdownText).join(", ") || "not called"}`,
     "",
     `${report.quality || report.packetQualities ? "Broad review: all 19 quality dimensions per packet. " : ""}Source checks: zero divisors, swallowed failures, and JSON parsing boundaries in changed JavaScript/TypeScript functions. Findings are model assessments, not executed reproductions.`,
     ""
@@ -21492,9 +21514,9 @@ function render(report) {
     lines.push("## Packet broad reviews", "");
     for (const packet of report.packetQualities) {
       lines.push(
-        `### Packet ${packet.packetId}`,
+        `### Packet ${markdownText(packet.packetId)}`,
         "",
-        `Changed paths: ${packet.changedPaths.join(", ") || "none recorded"}`,
+        `Changed paths: ${packet.changedPaths.map(markdownText).join(", ") || "none recorded"}`,
         "",
         renderQuality(packet.evaluation),
         ""
@@ -21504,25 +21526,25 @@ function render(report) {
   }
   for (const finding of findings) {
     lines.push(
-      `## ${finding.check} \u2014 ${finding.status}`,
+      `## ${markdownText(finding.check)} \u2014 ${finding.status}`,
       "",
-      `**${finding.path}:${finding.range.start}-${finding.range.end}** \xB7 ${finding.symbol} \xB7 impact: ${finding.impact}`,
+      `**${markdownText(finding.path)}:${finding.range.start}-${finding.range.end}** \xB7 ${markdownText(finding.symbol)} \xB7 impact: ${finding.impact}`,
       "",
-      `Hypothesis: ${finding.hypothesis}`,
+      `Hypothesis: ${markdownText(finding.hypothesis)}`,
       "",
       "Evidence:",
       "",
-      ...finding.quote.split("\n").map((line) => `    ${line}`),
+      ...terminalLines(finding.quote).split("\n").map((line) => `    ${line}`),
       "",
-      `Verify: ${finding.verification}`,
+      `Verify: ${markdownText(finding.verification)}`,
       "",
       `Decision confidence: ${finding.confidence.toFixed(2)} \xB7 selected probability: ${finding.probability.toFixed(2)}`,
       ""
     );
   }
   if (!findings.length) lines.push("No findings from the checks performed. This is not a repository-wide correctness verdict.", "");
-  if (report.notes.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${item}`), "");
-  if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${item}`), "");
+  if (report.notes.length) lines.push("## Notes", "", ...report.notes.map((item) => `- ${markdownText(item)}`), "");
+  if (report.limitations.length) lines.push("## Coverage gaps", "", ...report.limitations.map((item) => `- ${markdownText(item)}`), "");
   return lines.join("\n");
 }
 var MAX_PROVIDER_REQUEST_BYTES, MAX_CANDIDATES_PER_REQUEST, INCOMPLETE, STALE, nonWhitespace, jsonBytes, NONE2, plus, member, requestBytes, estimateOf;
@@ -21532,6 +21554,7 @@ var init_review = __esm({
     init_domain();
     init_jev();
     init_quality();
+    init_terminal();
     MAX_PROVIDER_REQUEST_BYTES = 16e4;
     MAX_CANDIDATES_PER_REQUEST = 10;
     INCOMPLETE = "Review incomplete for packet";
@@ -36055,8 +36078,9 @@ var init_collection_options = __esm({
 });
 
 // src/git-context.ts
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { StringDecoder } from "node:string_decoder";
+import { promisify } from "node:util";
 function patchRange(start, count) {
   const first = Math.max(1, Number(start));
   return { start: first, end: first + Math.max(1, Number(count ?? 1)) - 1 };
@@ -36081,10 +36105,13 @@ function pathBatches(groups) {
 function gitEnvironment() {
   return Object.fromEntries(Object.entries(process.env).filter(([name]) => !REPOSITORY_ENVIRONMENT.has(name)));
 }
+async function gitOutput(root, args, options = {}) {
+  return (await execGit("git", [...SAFE_CONFIGURATION, "-C", root, ...args], { ...options, env: gitEnvironment() })).stdout;
+}
 async function streamGit(root, args, signal, onData, input2, failure2 = "Git context command failed") {
   signal.throwIfAborted();
   await new Promise((resolve6, reject) => {
-    const child = spawn("git", ["--literal-pathspecs", "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
+    const child = spawn("git", ["--literal-pathspecs", ...SAFE_CONFIGURATION, "-C", root, ...args], { stdio: ["pipe", "pipe", "pipe"], env: gitEnvironment() });
     let settled = false;
     let output2 = Promise.resolve();
     const finish = (error62) => {
@@ -36330,7 +36357,7 @@ async function readGitChangeContext({ root, base, paths, renames = /* @__PURE__ 
   for (const path of context.keys()) if (!delivered.has(path)) await deliver(path);
   return context;
 }
-var MAX_BASELINE_BYTES, REPOSITORY_ENVIRONMENT, WORKING_TREE_CHANGED;
+var MAX_BASELINE_BYTES, REPOSITORY_ENVIRONMENT, WORKING_TREE_CHANGED, SAFE_CONFIGURATION, execGit;
 var init_git_context = __esm({
   "src/git-context.ts"() {
     "use strict";
@@ -36350,6 +36377,8 @@ var init_git_context = __esm({
       "GIT_SHALLOW_FILE"
     ]);
     WORKING_TREE_CHANGED = "Working tree changed during collection; retry the preview.";
+    SAFE_CONFIGURATION = ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"];
+    execGit = promisify(execFile);
   }
 });
 
@@ -36894,16 +36923,14 @@ var init_import_index = __esm({
 });
 
 // src/collector.ts
-import { execFile } from "node:child_process";
 import { realpath as realpath4 } from "node:fs/promises";
 import { posix as posix4, resolve as resolve3 } from "node:path";
-import { promisify } from "node:util";
 async function collect(options) {
   const settings = collectionSettingsSchema.parse(options.collection ?? {});
   const signal = AbortSignal.any([AbortSignal.timeout(settings.collectionTimeoutMs), ...options.signal ? [options.signal] : []]);
   const git = async (root2, args) => {
     signal.throwIfAborted();
-    return (await exec("git", ["-C", root2, ...args], { signal, env: gitEnvironment() })).stdout;
+    return gitOutput(root2, args, { signal });
   };
   const root = await realpath4((await git(resolve3(options.repo), ["rev-parse", "--show-toplevel"])).trim());
   const base = (await git(root, ["rev-parse", "--verify", "--end-of-options", `${options.base ?? "HEAD"}^{commit}`])).trim();
@@ -37231,7 +37258,7 @@ async function collect(options) {
   const snapshot = hash2({ root, base, head, settings, discovery: index.discovery, sources: sources.map((source) => ({ path: source.path, previousPath: source.previousPath, role: source.role, evidence: source.evidence })), candidates, packets, limitations, ...context, ...options.projectConfig ? { projectConfig: options.projectConfig } : {} });
   return { schemaVersion: 1, root, base, head, sources, candidates, packets, limitations, notes, discovery: index.discovery, ...context, snapshot };
 }
-var exec, MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
+var MAX_PACKET_CHARS, MAX_PACKET_BYTES, MAX_PACKET_FILES, MAX_PACKET_CHANGED, SOURCE_EXCERPT_CHARS, hasParser, PRIMARY_TARGET_CHARS, PRIMARY_TARGET_BYTES, isImportable, sourceChars, sourceBytes;
 var init_collector = __esm({
   "src/collector.ts"() {
     "use strict";
@@ -37242,7 +37269,6 @@ var init_collector = __esm({
     init_evidence();
     init_import_index();
     init_safety();
-    exec = promisify(execFile);
     MAX_PACKET_CHARS = 6e4;
     MAX_PACKET_BYTES = 8e4;
     MAX_PACKET_FILES = 16;
@@ -37267,10 +37293,8 @@ var init_version = __esm({
 });
 
 // src/project-config.ts
-import { execFile as execFile2 } from "node:child_process";
 import { realpath as realpath5 } from "node:fs/promises";
 import { resolve as resolve4 } from "node:path";
-import { promisify as promisify2 } from "node:util";
 function beyondDefaults(config2) {
   return FILE_LIMITS.flatMap(({ path, limit, raise }) => {
     const value = path.reduce((item, key) => item?.[key], config2);
@@ -37304,8 +37328,7 @@ function parseProjectConfig(text) {
   throw new Error(`${CONFIG_FILE}: ${problems.join("; ")}.`);
 }
 async function loadProjectConfig(repo, signal) {
-  const { stdout } = await exec2("git", ["-C", resolve4(repo), "rev-parse", "--show-toplevel"], { timeout: 1e4, signal, env: gitEnvironment() });
-  const root = await realpath5(stdout.trim());
+  const root = await realpath5((await gitOutput(resolve4(repo), ["rev-parse", "--show-toplevel"], { timeout: 1e4, signal })).trim());
   let text;
   try {
     text = await readSource(root, CONFIG_FILE, signal, MAX_CONFIG_BYTES2);
@@ -37336,7 +37359,7 @@ async function resolveSettings(repo, explicit, signal) {
     provider: { model: file2.model, timeoutMs: file2.requestTimeoutMs, concurrency: file2.requestConcurrency }
   };
 }
-var exec2, CONFIG_FILE, MAX_CONFIG_BYTES2, CREDENTIAL_WORDS, words, isCredentialKey, projectConfigSchema, FILE_LIMITS, where, defined;
+var CONFIG_FILE, MAX_CONFIG_BYTES2, CREDENTIAL_WORDS, words, isCredentialKey, projectConfigSchema, FILE_LIMITS, where, defined;
 var init_project_config = __esm({
   "src/project-config.ts"() {
     "use strict";
@@ -37345,7 +37368,6 @@ var init_project_config = __esm({
     init_git_context();
     init_jev();
     init_safety();
-    exec2 = promisify2(execFile2);
     CONFIG_FILE = ".tracecheck.json";
     MAX_CONFIG_BYTES2 = 64e3;
     CREDENTIAL_WORDS = /* @__PURE__ */ new Set(["key", "apikey", "token", "secret", "password", "passwd", "passphrase", "credential", "credentials", "bearer", "auth", "authorization"]);
@@ -51783,6 +51805,7 @@ function toSarif(report) {
 init_collection_options();
 init_project_config();
 init_progress();
+init_terminal();
 var EXIT_CODES = { needs_attention: 1, inconclusive: 3, no_findings: 0 };
 var STALE_EXIT_CODE = 4;
 function positiveSafeInteger(value, flag) {
@@ -51969,10 +51992,10 @@ cannot hold credentials or the endpoint.`);
     maxRequests: positiveSafeInteger(values["max-requests"], "--max-requests")
   }, controller.signal);
   const { reviewTimeoutMs, maxRequests, settingsFileNotes: notes, request: collectionRequest } = settings;
-  const progress = command === "review" && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${update.message}`)) : void 0;
+  const progress = command === "review" && !values.quiet ? new ReviewProgress((update) => console.error(`Tracecheck progress: ${terminalText(update.message)}`)) : void 0;
   const plan = await collect({ repo: settings.root, ...collectionRequest, signal: controller.signal, onPhase: progress?.phase });
   if (command === "preview") {
-    const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.join(", ")}`).join("\n");
+    const packets = plan.packets.map((packet) => `${packet.id}: ${packet.changedPaths.map(terminalText).join(", ")}`).join("\n");
     const estimate = estimateReview(plan);
     const refused = estimate.requests > maxRequests ? `; review will be refused unless --max-requests is at least ${estimate.requests}` : "";
     console.log(values.json ? JSON.stringify({ ...plan, notes: [...plan.notes, ...notes], estimate }, null, 2) : `Tracecheck preview (local only)
@@ -51981,9 +52004,9 @@ ${collectionRequest.projectConfig ? `Settings: ${CONFIG_FILE}
 ${plan.packets.length} change packets \xB7 ${plan.sources.length} files \xB7 ${plan.candidates.length} candidates
 Review estimate: ${estimate.requests} provider request(s) carrying ${estimate.inputBytes} bytes of evidence and questions (budget: ${maxRequests}${refused}). Empty-evidence packets are not sent.
 ${packets}
-${plan.sources.map((source) => `${source.role}: ${source.path}${source.previousPath ? ` (renamed from ${source.previousPath})` : ""}`).join("\n")}
-${[...plan.notes, ...notes].map((item) => `Note: ${item}`).join("\n")}
-${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
+${plan.sources.map((source) => `${source.role}: ${terminalText(source.path)}${source.previousPath ? ` (renamed from ${terminalText(source.previousPath)})` : ""}`).join("\n")}
+${[...plan.notes, ...notes].map((item) => `Note: ${terminalText(item)}`).join("\n")}
+${plan.limitations.map((item) => `Coverage gap: ${terminalText(item)}`).join("\n")}`);
     return;
   }
   const reviewSignal = AbortSignal.any([
@@ -52011,7 +52034,7 @@ ${plan.limitations.map((item) => `Coverage gap: ${item}`).join("\n")}`);
   process.exitCode = stale ? STALE_EXIT_CODE : EXIT_CODES[report.status];
 }
 main().catch((error62) => {
-  console.error(`Tracecheck: ${error62 instanceof Error ? error62.message : "Unexpected failure"}`);
+  console.error(`Tracecheck: ${error62 instanceof Error ? terminalLines(error62.message) : "Unexpected failure"}`);
   process.exitCode = 2;
 });
 /*! Bundled license information:
