@@ -36,6 +36,10 @@ This checks source/tests/builds, distribution metadata, synchronized versions, t
 
 Include the rebuilt tracked `dist/plugin.mjs` in the release PR. Keep generated `release/` archives out of Git. Merge only after CI passes. The workflow rejects a release tag whose version differs from the package or whose commit is not reachable from `origin/main`.
 
+## Dependency updates
+
+Dependabot pull requests change bundled dependencies without rebuilding `dist/plugin.mjs`, so CI fails the bundle check on them. Rebuild the bundle on the update branch, compare `preview --json` output from the old and new bundles across the verification skill's fixture scenarios, and commit the rebuilt bundle. A release PR can also absorb the update, as 0.4.0-rc.1 did.
+
 ## One-time publishing setup
 
 ### GitHub

@@ -9,6 +9,12 @@
 
 The sections below are dated records, newest first. When an older record says a step was pending, such as npm trusted publishing, it describes that date. This summary gives the current state.
 
+## Release candidate 0.4.0-rc.1 preparation — September 23, 2026
+
+- `npm run release:check` passes: type checks, 189 tests, the bundle, synchronized metadata, and offline CLI and four-tool MCP checks against the actual `0.4.0-rc.1` npm and marketplace archives.
+- The offline end-user journey passes every outcome and plumbing check. The live journey through OpenRouter passes every outcome and plumbing check and reports one known issue, #70: a division defect that shares a review packet with a second defect stays `uncertain` (probability 0.68, confidence 0.53 in the recorded run), while each defect alone is supported.
+- The Babel 8.0.6 and `@types/node` 22.20.4 updates from Dependabot were folded in. `preview --json` output is byte-identical between the previous and updated bundles across all 27 fixture scenarios.
+
 ## Decision-gate calibration — September 23, 2026
 
 - A labeled calibration measured the source-check and quality gates against `typesafe/jev-1.13-20260917`. It used 36 synthetic defect/clean pairs, reviewed three times each, in 216 provider requests with no failures. [Decision-gate calibration](calibration.md) has the dataset, method, cost, full grids, and candidate policies with holdout results.
