@@ -1,6 +1,8 @@
 # Changelog
 
-## Unreleased
+## 0.4.1 — 2026-09-23
+
+Maintenance release. The CLI, MCP tools, and review results behave the same as in 0.4.0.
 
 - Both in-repo marketplace catalogs use an HTTPS Git URL, so adding `bmccarn/tracecheck` as a marketplace installs without GitHub SSH keys. The release gates now reject a catalog source that clients may clone over SSH.
 - Removed maintainer-only benchmark and smoke scripts and the live examples; `npm run journey` and `npm run calibrate` cover what they checked. The documentation is shorter: the accuracy and parity pages are gone, and the calibration and validation pages keep only their summaries.

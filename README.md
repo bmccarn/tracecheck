@@ -18,7 +18,7 @@ Tracecheck helps your coding agent challenge suspected defects against source ev
 
 Run it as a **local MCP server** or use the **CLI** directly. Live assessments send code context, using your API key, to the configured provider: TypeSafe or OpenRouter. Tracecheck has no hosted application backend and does not edit or execute the code being reviewed.
 
-> **Status:** Version 0.4.0 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.4.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
+> **Status:** Version 0.4.1 is the current release. This README describes the `main` branch. Changes listed under *Unreleased* in the [changelog](CHANGELOG.md) ship in the next release, and this README marks the options and settings they add as "Not in 0.4.0". Real-project accuracy calibration, broader source checks, and executable fix verification are in progress or planned. See [validation evidence](docs/validation.md) for what has actually been tested.
 
 ## What you get
 
@@ -56,7 +56,7 @@ The division of work is deliberate: code extracts locations and computes compari
 
 ### Install
 
-Version 0.4.0 is published to npm as `@bmccarn/tracecheck` and to the `bmccarn/tracecheck-plugins` plugin marketplace. Choose one of these installation paths. Each one needs a provider key in the environment that launches Tracecheck; see [set a provider key](#set-a-provider-key).
+Version 0.4.1 is published to npm as `@bmccarn/tracecheck` and to the `bmccarn/tracecheck-plugins` plugin marketplace. Choose one of these installation paths. Each one needs a provider key in the environment that launches Tracecheck; see [set a provider key](#set-a-provider-key).
 
 #### Install the agent plugin
 
@@ -80,19 +80,19 @@ codex plugin add tracecheck@tracecheck-plugins
 
 Start a new task and ask to use the Tracecheck skill.
 
-You can also add `bmccarn/tracecheck` itself as a marketplace. Its in-repo catalogs pin the latest stable release tag, currently `v0.4.0`, and never a release candidate. If you added this marketplace while its catalogs pinned `v0.2.0`, refresh the marketplace and update or reinstall the plugin to get 0.4.0.
+You can also add `bmccarn/tracecheck` itself as a marketplace. Its in-repo catalogs pin the latest stable release tag, currently `v0.4.1`, and never a release candidate. If you added this marketplace while its catalogs pinned `v0.2.0`, refresh the marketplace and update or reinstall the plugin to get 0.4.0.
 
 #### Run the CLI from npm
 
 ```sh
-npx --yes @bmccarn/tracecheck@0.4.0 --help
+npx --yes @bmccarn/tracecheck@0.4.1 --help
 ```
 
 The package contains the bundled runtime and the complete skill directory, `skills/tracecheck/`. Installing it registers neither the MCP server nor the skill with any client. To connect another MCP client, follow [MCP and agent setup](#mcp-and-agent-setup).
 
 #### Build from source
 
-Build a checkout to use changes on `main` that are not in 0.4.0:
+Build a checkout to use changes on `main` that are not in 0.4.1:
 
 ```sh
 git clone https://github.com/bmccarn/tracecheck.git
@@ -115,7 +115,7 @@ export TYPESAFE_API_KEY="your-key"
 
 ### Run a first review
 
-The examples in this README run the source checkout's `node dist/plugin.mjs`. With the npm package, run `npx --yes @bmccarn/tracecheck@0.4.0` in its place.
+The examples in this README run the source checkout's `node dist/plugin.mjs`. With the npm package, run `npx --yes @bmccarn/tracecheck@0.4.1` in its place.
 
 Try the scripted example without an API call. It runs from a source checkout:
 
@@ -312,7 +312,7 @@ Configure your MCP client with one of these launch commands:
 | Setting | npm package | Source checkout |
 | --- | --- | --- |
 | Command | `npx` | `node` |
-| Arguments | `--yes`, `@bmccarn/tracecheck@0.4.0`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
+| Arguments | `--yes`, `@bmccarn/tracecheck@0.4.1`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
 
 Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. The server also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`.
 
