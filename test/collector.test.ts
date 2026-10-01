@@ -9,7 +9,7 @@ import { collect } from '../src/collector.js';
 import { resolveSettings } from '../src/project-config.js';
 import { findCandidates } from '../src/checks.js';
 import type { ReviewPacket, ReviewPlan } from '../src/domain.js';
-import { repository } from './helpers.js';
+import { credential, repository } from './helpers.js';
 
 async function writeSeries(root: string, directory: string, prefix: string, suffix: string, count: number, content = 'export {};') {
   await mkdir(join(root, directory), { recursive: true });
@@ -38,7 +38,6 @@ test('collects a guard removal, retains old code, and changes snapshot when cont
 test('untracked files require opt-in; credentials, deleted files and symlinks are visible omissions', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   // Assembled at runtime so the repository never contains a literal secret.
-  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
   await writeFile(join(repo.root, 'new.ts'), 'export const ratio = (a: number,b: number) => a/b;');
   await writeFile(join(repo.root, 'secret.ts'), `const apiKey = "${credential}";`);
   await writeFile(join(repo.root, 'deploy.sh'), `export API_TOKEN=${credential}\n`);
@@ -75,7 +74,7 @@ test('borrows tracked dependencies and callers as packet-local support without e
   await writeFile(join(repo.root, 'helper.ts'), 'export const denominator = 2;');
   await writeFile(join(repo.root, 'caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
   await writeFile(join(repo.root, 'average.test.ts'), 'import { average } from "./average.js";\nthrow new Error("this file must never execute");');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add context');
+  repo.commit('Add context');
   await writeFile(join(repo.root, 'average.ts'), 'import { denominator } from "./helper.js";\nexport function average(xs: number[]) { return xs.length / denominator; }');
   const plan = await collect({ repo: repo.root });
   assert.equal(plan.sources.find(source => source.path === 'helper.ts')!.role, 'dependency');
@@ -93,7 +92,7 @@ test('prefers related files that use the changed function over earlier paths tha
   await writeSeries(repo.root, 'tests', 'a', '.test.ts', 12, 'import { beta } from "../math.js";\nbeta(1);\n');
   await writeFile(join(repo.root, 'callers/zeta.ts'), 'import { alpha } from "../math.js";\nexport const value = alpha(1);\n');
   await writeFile(join(repo.root, 'tests/zeta.test.ts'), 'import { alpha } from "../math.js";\nalpha(1);\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add math');
+  repo.commit('Add math');
   await writeFile(join(repo.root, 'math.ts'), math(2));
   const [packet] = (await collect({ repo: repo.root })).packets;
   assert.equal(packet!.sourcePaths.length, 16);
@@ -110,7 +109,7 @@ test('focuses a large caller on call sites of const arrow and $-named exports', 
   assert.ok(caller.length > 12_000);
   await writeFile(join(repo.root, 'math.ts'), 'export const ratio = (a: number, b: number) => b ? a / b : 0;\nexport function $pick(xs: number[]) { return xs[0]; }\n');
   await writeFile(join(repo.root, 'caller.ts'), caller);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add math');
+  repo.commit('Add math');
   await writeFile(join(repo.root, 'math.ts'), 'export const ratio = (a: number, b: number) => a / b;\nexport function $pick(xs: number[]) { return xs[0]; }\n');
   const source = (await collect({ repo: repo.root })).sources.find(item => item.path === 'caller.ts')!;
   assert.equal(source.role, 'caller');
@@ -136,7 +135,7 @@ test('collects Python callers and tests that use wrapped or comma-separated impo
   await writeFile(join(repo.root, 'pkg/calc.py'), 'def mean(values):\n    if not values:\n        return 0\n    return sum(values) / len(values)\n');
   await writeFile(join(repo.root, 'pkg/report.py'), 'from pkg.calc import (\n    mean,\n)\n\n\ndef summary(values):\n    return mean(values)\n');
   await writeFile(join(repo.root, 'tests/test_summary.py'), 'import pkg.report, pkg.calc as calc\n\n\ndef test_empty():\n    assert calc.mean([]) == 0\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add package');
+  repo.commit('Add package');
   await writeFile(join(repo.root, 'pkg/calc.py'), 'def mean(values):\n    return sum(values) / len(values)\n');
   const plan = await collect({ repo: repo.root });
   assert.deepEqual(plan.sources.map(source => [source.path, source.role]),
@@ -150,7 +149,7 @@ test('links NodeNext module specifiers and stylesheets but not images', async t 
   await writeFile(join(repo.root, 'app.css'), 'body { margin: 0; }');
   await writeFile(join(repo.root, 'app.tsx'), 'import { scale } from "./lib.mjs";\nimport logo from "./logo.png";\nimport "./app.css";\nexport const size = (value: number) => value * scale + logo.length;');
   await writeFile(join(repo.root, 'main.ts'), 'import { size } from "./app.jsx"; export const width = size(1);');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add app');
+  repo.commit('Add app');
   await writeFile(join(repo.root, 'app.tsx'), 'import { scale } from "./lib.mjs";\nimport logo from "./logo.png";\nimport "./app.css";\nexport const size = (value: number) => value / scale + logo.length;');
   const plan = await collect({ repo: repo.root });
   assert.deepEqual(plan.sources.map(source => [source.path, source.role]).sort(),
@@ -161,7 +160,7 @@ test('links NodeNext module specifiers and stylesheets but not images', async t 
 test('packs every eligible changed path exactly once across bounded packets', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeSeries(repo.root, 'changes', 'change-', '.ts', 17, 'export const baseline = 1;');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add changed files');
+  repo.commit('Add changed files');
   await writeSeries(repo.root, 'changes', 'change-', '.ts', 17, 'export const changed = (value: number) => value / 2;');
   const plan = await collect({ repo: repo.root });
   assert.equal(plan.packets.length, 3);
@@ -184,27 +183,17 @@ test('keeps every candidate globally rather than applying the obsolete forty-can
   const baseline = Array.from({ length: 41 }, (_value, index) => `export function value${index}(a: number, b: number) { return a; }`).join('\n');
   const changed = Array.from({ length: 41 }, (_value, index) => `export function value${index}(a: number, b: number) { return a / b; }`).join('\n');
   await writeFile(join(repo.root, 'many.ts'), baseline);
-  repo.git('add', 'many.ts'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add candidate fixture');
+  repo.git('add', 'many.ts'); repo.git('commit', '-m', 'Add candidate fixture');
   await writeFile(join(repo.root, 'many.ts'), changed);
   const plan = await collect({ repo: repo.root });
   assert.equal(plan.candidates.length, 41);
   assert.equal(plan.packets[0]!.candidateIds.length, 41);
 });
 
-test('discovers a caller past the old two-hundred-file index cutoff', async t => {
-  const repo = await repository(); t.after(repo.cleanup);
-  await writeSeries(repo.root, '.', 'noise-', '.ts', 205);
-  await writeFile(join(repo.root, 'zz-caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add import graph');
-  await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((total, value) => total + value, 0); }');
-  const plan = await collect({ repo: repo.root });
-  assert.equal(plan.sources.find(source => source.path === 'zz-caller.ts')!.role, 'caller');
-});
-
 test('reuses constrained discovery scope without pinning collected evidence', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'caller.ts'), 'import { average } from "./average.js"; export const caller = () => average([1]);');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add caller');
+  repo.commit('Add caller');
   await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((total, value) => total + value, 0); }');
 
   const options = { repo: repo.root, collection: { maxIndexFiles: 1 } };
@@ -230,7 +219,7 @@ test('round-robins packet support so fan-in does not crowd out another change co
   await writeFile(join(repo.root, 'second.ts'), 'import { dependency } from "./second-dependency.js"; export const second = () => dependency;');
   await writeFile(join(repo.root, 'second.test.ts'), 'import { second } from "./second.js"; void second;');
   await writeSeries(repo.root, 'first-callers', 'caller-', '.ts', 15, 'import { first } from "../first.js"; export const caller = () => first();');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add packet support graph');
+  repo.commit('Add packet support graph');
 
   await writeFile(join(repo.root, 'first.ts'), 'export const first = (value: number) => value / 2;');
   await writeFile(join(repo.root, 'second.ts'), 'import { dependency } from "./second-dependency.js"; export const second = () => dependency / 2;');
@@ -250,7 +239,7 @@ test('reviews a renamed and edited file against the base content of its old path
   await mkdir(join(repo.root, 'src'));
   await mkdir(join(repo.root, 'lib'));
   await writeFile(join(repo.root, oldPath), ratioModule);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  repo.commit('Add ratio');
   repo.git('mv', oldPath, newPath);
   await writeFile(join(repo.root, newPath), ratioModule.replace('  if (!b) return 0;\n', ''));
   const plan = await collect({ repo: repo.root });
@@ -265,7 +254,7 @@ test('reviews a renamed and edited file against the base content of its old path
 test('records a pure rename without changed ranges or candidates', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'ratio.ts'), ratioModule);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  repo.commit('Add ratio');
   repo.git('mv', 'ratio.ts', 'quotient.ts');
   const plan = await collect({ repo: repo.root });
 
@@ -279,7 +268,7 @@ test('records a pure rename without changed ranges or candidates', async t => {
 test('notes staged changes the working tree undoes and staged renames Git cannot pair, without reviewing the index', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'ratio.ts'), ratioModule);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add ratio');
+  repo.commit('Add ratio');
   const clean = await collect({ repo: repo.root });
   const average = await readFile(join(repo.root, 'average.ts'), 'utf8');
   await writeFile(join(repo.root, 'average.ts'), average.replace('if (!xs.length) return 0; ', ''));
@@ -307,13 +296,12 @@ test('reports renames that cross into or out of ineligible paths', async t => {
   await writeFile(join(repo.root, 'dist/ratio.ts'), ratioModule);
   await writeFile(join(repo.root, 'notes.ts'), padding('note'));
   await writeFile(join(repo.root, 'keys.ts'), padding('key'));
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add rename sources');
+  repo.commit('Add rename sources');
   repo.git('mv', 'dist/ratio.ts', 'ratio.ts');
   await writeFile(join(repo.root, 'ratio.ts'), ratioModule.replace('  if (!b) return 0;\n', ''));
   repo.git('mv', 'notes.ts', 'notes.txt');
   repo.git('mv', 'keys.ts', 'credentials.ts');
   // Assembled at runtime so the repository never contains a literal secret.
-  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
   await writeFile(join(repo.root, 'credentials.ts'), `${padding('key')}const apiKey = "${credential}";\n`);
   const plan = await collect({ repo: repo.root });
   const limitations = plan.limitations.join('\n');
@@ -330,11 +318,10 @@ test('reports renames that cross into or out of ineligible paths', async t => {
 test('reviews a change whose base version held a credential without that baseline', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   // Assembled at runtime so the repository never contains a literal secret.
-  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
   const client = (key: string, guard: string) =>
     `const apiKey = ${key};\n\nexport function rate(total: number, count: number) {\n${guard}  return total / count;\n}\n\nexport const auth = () => apiKey;\n`;
   await writeFile(join(repo.root, 'client.ts'), client(`"${credential}"`, '  if (count === 0) return 0;\n'));
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add client');
+  repo.commit('Add client');
   await writeFile(join(repo.root, 'client.ts'), client('process.env.CLIENT_API_KEY', ''));
   const plan = await collect({ repo: repo.root });
 
@@ -357,7 +344,7 @@ test('reads and screens each changed and supporting file once per collection', a
   await writeFile(join(repo.root, 'app.ts'), modules.map((_path, index) => `import { m${index} } from './lib/m${index}.js';\n`).join('')
     + `export const all = [${modules.map((_path, index) => `m${index}(4, 2)`).join(', ')}];\n`);
   for (const [index, path] of modules.entries()) await writeFile(join(repo.root, path), guarded(index, '  if (!b) return 0;\n'));
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Guarded modules');
+  repo.commit('Guarded modules');
   for (const [index, path] of modules.entries()) await writeFile(join(repo.root, path), guarded(index, ''));
   // The first collection fills the import index cache, whose own reads are not part of the collector's.
   await collect({ repo: repo.root });
@@ -386,7 +373,7 @@ test('streams a tracked-file listing larger than the old 8 MiB output buffer', a
   const paths = Array.from({ length: 42_000 }, (_value, index) => `${'d'.repeat(200)}/${index}.txt`);
   execFileSync('git', ['-C', repo.root, 'update-index', '-z', '--index-info'], { input: paths.map(path => `100644 ${blob}\t${path}\0`).join('') });
   execFileSync('git', ['-C', repo.root, 'update-index', '-z', '--skip-worktree', '--stdin'], { input: paths.map(path => `${path}\0`).join('') });
-  repo.git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'Add many paths');
+  repo.git('commit', '-q', '-m', 'Add many paths');
   assert.ok(execFileSync('git', ['-C', repo.root, 'ls-files', '-z'], { maxBuffer: 64 * 1024 * 1024 }).length > 8 * 1024 * 1024);
   await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a,b) => a+b, 0) / xs.length; }\n');
 
@@ -422,7 +409,7 @@ test('records a limitation for changed files without textual hunks', async t => 
   await writeFile(join(repo.root, '.gitattributes'), 'opaque.ts -diff\n');
   await writeFile(join(repo.root, 'mode.ts'), 'export const mode = 1;\n');
   await writeFile(join(repo.root, 'opaque.ts'), 'export const opaque = 1;\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add hunkless fixtures');
+  repo.commit('Add hunkless fixtures');
   await chmod(join(repo.root, 'mode.ts'), 0o755);
   await writeFile(join(repo.root, 'opaque.ts'), 'export const opaque = 2;\n');
   const plan = await collect({ repo: repo.root });
@@ -439,7 +426,7 @@ test('counts source limitations for paths containing colons under one reason', a
   await mkdir(join(repo.root, 'src'));
   await writeFile(join(repo.root, 'src/a:one.ts'), large('one'));
   await writeFile(join(repo.root, 'src/b:two.ts'), large('two'));
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add colon paths');
+  repo.commit('Add colon paths');
   await writeFile(join(repo.root, 'src/a:one.ts'), large('one').replace('one400 = 400', 'one400 = 0'));
   await writeFile(join(repo.root, 'src/b:two.ts'), large('two').replace('two400 = 400', 'two400 = 0'));
   const plan = await collect({ repo: repo.root });

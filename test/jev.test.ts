@@ -2,8 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { Jev, jevSettings, providerEnvironment } from '../src/jev.js';
 import { deadline } from '../src/deadline.js';
+import { qualityQuestions } from '../src/quality.js';
 import { questionsFor } from '../src/review.js';
-import { fixtureEvaluator, planFor } from './helpers.js';
+import { fixtureEvaluator, planFor, typedFixture } from './helpers.js';
 
 test('sends a single typed batch and validates responses', async () => {
   const plan = planFor(); const questions = questionsFor(plan.candidates[0]!);
@@ -39,8 +40,6 @@ test('honors bounded Retry-After and rejects unknown selected options', async ()
 });
 
 test('validates native Noul and Score responses and catches out-of-rubric scores', async () => {
-  const { qualityQuestions } = await import('../src/quality.js');
-  const { typedFixture } = await import('./helpers.js');
   const questions = qualityQuestions();
   const data = await typedFixture(questions);
   const client = new Jev({ apiKey: 'fixture-key', fetch: async () => Response.json(data) });

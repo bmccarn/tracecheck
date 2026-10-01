@@ -1,9 +1,14 @@
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import type { Choice, Evaluator, ReviewPlan } from '../src/domain.js';
+import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
+import type { Choice, Evaluator, Question, ReviewPlan, TypedAnswer, TypedEvaluator, TypedResponse } from '../src/domain.js';
 import { findCandidates } from '../src/checks.js';
+import type { createServer } from '../src/mcp.js';
+
+/** A credential-shaped value assembled at runtime so the repository never holds a literal secret. */
+export const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
 
 export async function repository() {
   const root = await mkdtemp(join(tmpdir(), 'tracecheck-test-'));
@@ -12,10 +17,17 @@ export async function repository() {
   git('config', 'user.email', 'test@example.invalid');
   git('config', 'user.name', 'Tracecheck test');
   git('config', 'core.hooksPath', '/dev/null');
+  git('config', 'commit.gpgsign', 'false');
   await writeFile(join(root, 'average.ts'), 'export function average(xs: number[]) { if (!xs.length) return 0; return xs.reduce((a,b) => a+b, 0) / xs.length; }\n');
-  git('add', '.');
-  git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Fixture baseline');
-  return { root, git, cleanup: () => rm(root, { recursive: true, force: true }) };
+  const commit = (message: string) => { git('add', '.'); git('commit', '-q', '-m', message); };
+  commit('Fixture baseline');
+  return { root, git, commit, cleanup: () => rm(root, { recursive: true, force: true }) };
+}
+
+/** Writes nine one-line modules under changes/, each exporting its index plus `offset`. */
+export async function writeChanges(root: string, offset: number) {
+  await mkdir(join(root, 'changes'), { recursive: true });
+  for (let index = 0; index < 9; index++) await writeFile(join(root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + offset};\n`);
 }
 
 export function planFor(content = 'export function ratio(a: number, b: number) { return a / b; }'): ReviewPlan {
@@ -38,8 +50,8 @@ export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evalu
   } };
 }
 
-export async function typedFixture(questions: Record<string, import('../src/domain.js').Question>): Promise<import('../src/domain.js').TypedResponse> {
-  const answers: Record<string, import('../src/domain.js').TypedAnswer> = {};
+export async function typedFixture(questions: Record<string, Question>): Promise<TypedResponse> {
+  const answers: Record<string, TypedAnswer> = {};
   for (const [id, question] of Object.entries(questions)) {
     if (question.type === 'noul') { answers[id] = { type: 'noul', noul: 0.95 }; continue; }
     if (question.type === 'score') {
@@ -55,8 +67,20 @@ export async function typedFixture(questions: Record<string, import('../src/doma
   return { model: 'fixture-v1', answers, usage: { input_tokens: 100, output_tokens: 50 } };
 }
 
+/** Answers every question with `typedFixture`. */
+export const typedEvaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+
+/** Connects an in-memory MCP client to `server`; both close after the test. */
+export async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+  const client = new Client({ name: 'tracecheck-test', version: '1' });
+  t.after(async () => { await client.close(); await server.close(); });
+  await server.connect(serverTransport); await client.connect(clientTransport);
+  return client;
+}
+
 /** Judges every source-check candidate in `response` not supported, with certainty. */
-export function judgeNotSupported(response: import('../src/domain.js').TypedResponse): void {
+export function judgeNotSupported(response: TypedResponse): void {
   for (const [id, answer] of Object.entries(response.answers)) {
     if (!id.endsWith('_assessment') || answer.type !== 'choice') continue;
     answer.choice = 'not_supported';

@@ -13,7 +13,7 @@ import { promisify } from 'node:util';
 import type { Question, TypedResponse } from '../src/domain.js';
 import { reportSchema } from '../src/schema.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
-import { judgeNotSupported, repository, typedFixture } from './helpers.js';
+import { judgeNotSupported, repository, typedFixture, writeChanges } from './helpers.js';
 
 const checkout = fileURLToPath(new URL('..', import.meta.url));
 // Resolved here so the CLI can run from any working directory.
@@ -112,8 +112,7 @@ test('review writes one SARIF result per supported finding', async t => {
 test('review prints progress to stderr, leaves stdout unchanged, and --quiet silences it', async t => {
   const repo = await repository();
   t.after(repo.cleanup);
-  await mkdir(join(repo.root, 'changes'));
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  await writeChanges(repo.root, 1);
   repo.git('add', '.');
   const jev = await jevServer(t);
   const loud = await cli(['review', '--repo', repo.root], jev.env);
@@ -137,8 +136,7 @@ test('review prints progress to stderr, leaves stdout unchanged, and --quiet sil
 test('preview estimates the review requests, and review refuses a larger plan than its budget before any request', async t => {
   const repo = await repository();
   t.after(repo.cleanup);
-  await mkdir(join(repo.root, 'changes'));
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  await writeChanges(repo.root, 1);
   repo.git('add', '.');
   const jev = await jevServer(t);
   const preview = await cli(['preview', '--repo', repo.root, '--json']);
@@ -228,8 +226,7 @@ test('--previous accepts a review report or an assess evaluation, even for a mul
   assert.equal(rejected.code, 2);
   assert.match(rejected.stderr, /neither a report saved by review --out nor an evaluation saved by assess --out/);
 
-  await mkdir(join(repo.root, 'changes'));
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  await writeChanges(repo.root, 1);
   repo.git('add', '.');
   const before = jev.requests();
   const multi = await cli(['review', '--repo', repo.root, '--json', '--previous', reportPath], jev.env);

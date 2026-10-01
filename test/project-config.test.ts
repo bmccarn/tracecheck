@@ -2,12 +2,11 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { z } from 'zod';
 import { createServer } from '../src/mcp.js';
 import { jevSettings } from '../src/jev.js';
 import { parseProjectConfig, resolveSettings } from '../src/project-config.js';
-import { repository, typedFixture } from './helpers.js';
+import { connect, repository, typedFixture } from './helpers.js';
 
 test('configuration file errors name the offending key without quoting values', () => {
   assert.throws(() => parseProjectConfig('{"collection":{"maxIndexFile":5}}'), /unknown key "collection\.maxIndexFile"/);
@@ -77,15 +76,12 @@ test('MCP preview applies the bound repository configuration, review enforces it
   // Eleven divisions are more candidates than one request carries, so the review needs at least two requests.
   await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { return xs.reduce((a, b) => a + b, 0) / xs.length; }\n'
     + Array.from({ length: 10 }, (_, index) => `export function ratio${index}(a: number, b: number) { return a / b; }\n`).join(''));
-  repo.git('-c', 'commit.gpgsign=false', 'commit', '-am', 'Drop the empty guard');
+  repo.git('commit', '-am', 'Drop the empty guard');
   const config = join(repo.root, '.tracecheck.json');
   await writeFile(config, JSON.stringify({ task: 'Configured task text', collection: { indexTimeoutMs: 10_000 } }));
   const states: unknown[] = [];
   const server = createServer(repo.root, () => ({ async evaluate(state, questions) { states.push(state); return typedFixture(questions); } }));
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'config-test', version: '1' });
-  t.after(async () => { await client.close(); await server.close(); });
-  await server.connect(serverTransport); await client.connect(clientTransport);
+  const client = await connect(t, server);
   const previewSchema = z.object({ snapshot: z.string(), packets: z.array(z.object({ changedPaths: z.array(z.string()) })),
     estimate: z.object({ requests: z.number(), inputBytes: z.number() }) });
 

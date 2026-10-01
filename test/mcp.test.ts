@@ -10,18 +10,7 @@ import { z } from 'zod';
 import { createServer, ExpiringCache } from '../src/mcp.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
 import { reportSchema } from '../src/schema.js';
-import type { TypedEvaluator } from '../src/domain.js';
-import { judgeNotSupported, repository, typedFixture } from './helpers.js';
-
-async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'tracecheck-test', version: '1' });
-  t.after(async () => { await client.close(); await server.close(); });
-  await server.connect(serverTransport); await client.connect(clientTransport);
-  return client;
-}
-
-const fixtureEvaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+import { connect, judgeNotSupported, repository, typedEvaluator, typedFixture, writeChanges } from './helpers.js';
 
 test('MCP v2 stdio handshake, schemas, preview and stale-snapshot rejection', async t => {
   const repo = await repository(); t.after(repo.cleanup);
@@ -49,16 +38,12 @@ test('MCP v2 stdio handshake, schemas, preview and stale-snapshot rejection', as
 
 test('MCP validates bounded collection settings, pins preview discovery, and reviews every change packet', async t => {
   const repo = await repository(); t.after(repo.cleanup);
-  await mkdir(join(repo.root, 'changes'), { recursive: true });
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index};\n`);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Packet fixture');
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  await writeChanges(repo.root, 0);
+  repo.commit('Packet fixture');
+  await writeChanges(repo.root, 1);
   let calls = 0;
   const server = createServer(repo.root, () => ({ async evaluate(_state, questions) { calls++; return typedFixture(questions); } }));
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'packet-test', version: '1' });
-  t.after(async () => { await client.close(); await server.close(); });
-  await server.connect(serverTransport); await client.connect(clientTransport);
+  const client = await connect(t, server);
 
   const invalid = await client.callTool({ name: 'tracecheck_preview', arguments: { collection: { maxIndexFiles: 0 } } });
   assert.equal(invalid.isError, true);
@@ -101,10 +86,9 @@ test('MCP validates bounded collection settings, pins preview discovery, and rev
 
 test('MCP review sends strictly increasing progress only when the client asks for it', async t => {
   const repo = await repository(); t.after(repo.cleanup);
-  await mkdir(join(repo.root, 'changes'), { recursive: true });
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index};\n`);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Packet fixture');
-  for (let index = 0; index < 9; index++) await writeFile(join(repo.root, 'changes', `change-${index}.ts`), `export const value${index} = ${index + 1};\n`);
+  await writeChanges(repo.root, 0);
+  repo.commit('Packet fixture');
+  await writeChanges(repo.root, 1);
   // The second request fails and the first finishes after it, so completions arrive out of plan order.
   let calls = 0;
   let releaseFirst!: () => void;
@@ -260,7 +244,7 @@ test('MCP assess uses the injected evaluator, keeps the JSON text block, and can
   let cancelled!: (reason: unknown) => void;
   const aborted = new Promise<unknown>(done => { cancelled = done; });
   const client = await connect(t, createServer(undefined, signal => ({ async evaluate(state, questions) {
-    if (!hang) return fixtureEvaluator.evaluate(state, questions);
+    if (!hang) return typedEvaluator.evaluate(state, questions);
     evaluating();
     return new Promise<never>((_resolve, reject) => signal.addEventListener('abort', () => { cancelled(signal.reason); reject(signal.reason); }, { once: true }));
   } })));
@@ -283,7 +267,7 @@ test('MCP assess uses the injected evaluator, keeps the JSON text block, and can
 
 test('MCP verify rejects multibyte evidence over the byte budget before inference', async t => {
   let calls = 0;
-  const client = await connect(t, createServer(undefined, () => ({ async evaluate(state, questions) { calls++; return fixtureEvaluator.evaluate(state, questions); } })));
+  const client = await connect(t, createServer(undefined, () => ({ async evaluate(state, questions) { calls++; return typedEvaluator.evaluate(state, questions); } })));
   // 25,000 characters is within the per-excerpt character limit but is 75,000 UTF-8 bytes.
   const content = `const ratio = total / count;\n// ${'界'.repeat(25_000)}`;
   const response = await client.callTool({ name: 'tracecheck_verify', arguments: {
@@ -297,7 +281,7 @@ test('MCP verify rejects multibyte evidence over the byte budget before inferenc
 });
 
 test('previousEvaluation inputs advertise only the fields the comparison reads', async t => {
-  const client = await connect(t, createServer(undefined, () => fixtureEvaluator));
+  const client = await connect(t, createServer(undefined, () => typedEvaluator));
   const { tools } = await client.listTools();
   for (const name of ['tracecheck_assess', 'tracecheck_review']) {
     const schema = z.object({ properties: z.object({ previousEvaluation: z.object({ properties: z.record(z.string(), z.unknown()) }) }) })
@@ -459,7 +443,7 @@ test('a bound MCP server accepts any directory in its repository and rejects ano
   const nested = join(repo.root, 'vendor');
   await mkdir(nested);
   execFileSync('git', ['init', '-q', nested]);
-  const client = await connect(t, createServer(repo.root, () => fixtureEvaluator));
+  const client = await connect(t, createServer(repo.root, () => typedEvaluator));
   const snapshotOf = (result: Awaited<ReturnType<typeof client.callTool>>) => {
     assert.ok(!result.isError, JSON.stringify(result));
     return z.object({ snapshot: z.string() }).parse(result.structuredContent).snapshot;

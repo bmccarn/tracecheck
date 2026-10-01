@@ -24,6 +24,14 @@ async function seed(directory: string, version = '0.2.0', catalogRef = `v${versi
   for (const path of catalogPaths) await writeCatalog(directory, path, catalogRef);
 }
 
+/** A temporary directory, removed after the test, holding seeded release metadata. */
+async function seeded(t: { after: (fn: () => Promise<void>) => void }, version?: string, catalogRef?: string) {
+  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  await seed(directory, version, catalogRef);
+  return directory;
+}
+
 async function writeCatalog(directory: string, path: string, ref: string) {
   await writeJson(directory, path, { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'url', url: 'https://github.com/bmccarn/tracecheck.git', ref }, category: 'Developer Tools' }] });
 }
@@ -49,9 +57,7 @@ async function contents(directory: string) {
 }
 
 test('release preparation rejects malformed versions without changing metadata', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory);
+  const directory = await seeded(t);
   const before = await contents(directory);
 
   const result = await run(directory, prepare, '1.02.3');
@@ -61,9 +67,7 @@ test('release preparation rejects malformed versions without changing metadata',
 });
 
 test('release preparation rejects build metadata without changing metadata', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory);
+  const directory = await seeded(t);
   const before = await contents(directory);
 
   const result = await run(directory, prepare, '1.2.3+hot-fix');
@@ -73,9 +77,7 @@ test('release preparation rejects build metadata without changing metadata', asy
 });
 
 test('release preparation refuses existing version drift before changing metadata', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory);
+  const directory = await seeded(t);
   await writeJson(directory, 'plugin.json', { name: 'tracecheck', version: '0.1.0' });
   const before = await contents(directory);
 
@@ -86,9 +88,7 @@ test('release preparation refuses existing version drift before changing metadat
 });
 
 test('release preparation synchronizes all release metadata including lock package entry', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory);
+  const directory = await seeded(t);
   const catalogsBefore = (await contents(directory)).slice(metadataPaths.length);
 
   assert.equal((await run(directory, prepare, '0.3.0-rc.1')).code, 0);
@@ -101,9 +101,7 @@ test('release preparation synchronizes all release metadata including lock packa
 });
 
 test('stable release preparation points every marketplace catalog at the new release tag', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory);
+  const directory = await seeded(t);
 
   assert.equal((await run(directory, prepare, '0.3.0')).code, 0);
   const catalogs = await Promise.all(catalogPaths.map(async path => JSON.parse(await readFile(join(directory, path), 'utf8'))));
@@ -114,9 +112,7 @@ test('stable release preparation points every marketplace catalog at the new rel
 });
 
 test('release gates reject a marketplace catalog that does not pin the stable release tag', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '1.2.3');
+  const directory = await seeded(t, '1.2.3');
   await initializeRepository(directory, 'v1.2.3');
   await writeCatalog(directory, catalogPaths[1], 'v1.2.2');
 
@@ -125,9 +121,7 @@ test('release gates reject a marketplace catalog that does not pin the stable re
 });
 
 test('release gates reject a marketplace catalog that some clients would clone over SSH', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '1.2.3');
+  const directory = await seeded(t, '1.2.3');
   await writeJson(directory, catalogPaths[1], { name: 'tracecheck-plugins', plugins: [{ name: 'tracecheck', source: { source: 'github', repo: 'bmccarn/tracecheck', ref: 'v1.2.3' } }] });
 
   assert.notEqual((await run(directory, gates)).code, 0);
@@ -136,10 +130,7 @@ test('release gates reject a marketplace catalog that some clients would clone o
 });
 
 test('release gates require prerelease catalogs to pin an earlier stable release tag', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-
-  await seed(directory, '0.4.0-rc.1', 'v0.4.0');
+  const directory = await seeded(t, '0.4.0-rc.1', 'v0.4.0');
   assert.notEqual((await run(directory, gates, 'v0.4.0-rc.1')).code, 0, 'the stable tag does not exist yet');
   await seed(directory, '0.4.0-rc.1', 'v0.4.0-rc.1');
   assert.notEqual((await run(directory, gates, 'v0.4.0-rc.1')).code, 0, 'prereleases never reach the marketplaces');
@@ -148,9 +139,7 @@ test('release gates require prerelease catalogs to pin an earlier stable release
 });
 
 test('release gates require an exact tag and select prerelease or stable channels', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '1.2.3');
+  const directory = await seeded(t, '1.2.3');
   await initializeRepository(directory, 'v1.2.3');
 
   assert.deepEqual((await run(directory, gates, 'v1.2.3')).stdout.trim().split('\n'), ['version=1.2.3', 'channel=latest']);
@@ -160,35 +149,27 @@ test('release gates require an exact tag and select prerelease or stable channel
 });
 
 test('release gates retain local metadata checks without Git when no publication tag is provided', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '1.2.3');
+  const directory = await seeded(t, '1.2.3');
 
   assert.deepEqual((await run(directory, gates)).stdout.trim().split('\n'), ['version=1.2.3', 'channel=latest']);
 });
 
 test('release gates reject stable tags older than an existing stable tag', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '0.2.1');
+  const directory = await seeded(t, '0.2.1');
   await initializeRepository(directory, 'v0.3.0');
 
   assert.notEqual((await run(directory, gates, 'v0.2.1')).code, 0);
 });
 
 test('release gates allow stable tags newer than existing stable tags', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '0.3.1');
+  const directory = await seeded(t, '0.3.1');
   await initializeRepository(directory, 'v0.3.0');
 
   assert.deepEqual((await run(directory, gates, 'v0.3.1')).stdout.trim().split('\n'), ['version=0.3.1', 'channel=latest']);
 });
 
 test('release gates ignore prerelease tags when ordering stable publications', async t => {
-  const directory = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
-  t.after(() => rm(directory, { recursive: true, force: true }));
-  await seed(directory, '0.2.1');
+  const directory = await seeded(t, '0.2.1');
   await initializeRepository(directory, 'v0.3.0-rc.1');
 
   assert.deepEqual((await run(directory, gates, 'v0.2.1')).stdout.trim().split('\n'), ['version=0.2.1', 'channel=latest']);
