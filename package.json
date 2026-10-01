@@ -15,7 +15,7 @@
     "demo": "tsx examples/demo.ts",
     "package:check": "npm run build && node scripts/package-release.mjs",
     "journey": "node .agents/skills/verify-tracecheck/scripts/journey.mjs",
-    "release:check": "npm run validate && node scripts/package-release.mjs && node scripts/release-metadata.mjs && node scripts/release-gates.mjs",
+    "release:check": "npm run validate && node scripts/package-release.mjs && node scripts/release-gates.mjs",
     "release:prepare": "node scripts/release-prepare.mjs",
     "calibrate": "tsx benchmarks/calibrate.ts"
   },

@@ -1,5 +1,6 @@
 import { execFile } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
+import { promisify } from 'node:util';
 
 const versionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*)))*)?$/;
 const catalogPaths = ['.agents/plugins/marketplace.json', '.claude-plugin/marketplace.json'];
@@ -16,12 +17,7 @@ function compareStableVersions(left, right) {
 async function ensureStableVersionIsCurrent(version) {
   let stdout;
   try {
-    stdout = await new Promise((resolve, reject) => {
-      execFile('git', ['tag', '--list', 'v*'], { encoding: 'utf8' }, (error, output) => {
-        if (error) reject(error);
-        else resolve(output);
-      });
-    });
+    ({ stdout } = await promisify(execFile)('git', ['tag', '--list', 'v*'], { encoding: 'utf8' }));
   } catch {
     fail('Cannot list existing release tags.');
   }

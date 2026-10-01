@@ -98,19 +98,16 @@ jobs:
           archive="$(node --input-type=module -e "import manifest from './release/release-manifest.json' with { type: 'json' }; if (manifest.version !== process.env.RELEASE_VERSION || !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$/.test(manifest.npmArchive)) process.exit(1); process.stdout.write(manifest.npmArchive);")"
           npm publish "./release/$archive" --ignore-scripts --provenance --tag "$RELEASE_CHANNEL"
 
-      - name: Create GitHub prerelease
-        if: steps.release.outputs.channel == 'next'
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes --prerelease
-
       - name: Create GitHub release
-        if: steps.release.outputs.channel == 'latest'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes
+        run: |
+          set -euo pipefail
+          prerelease=()
+          [[ "$RELEASE_CHANNEL" == "next" ]] && prerelease=(--prerelease)
+          gh release create "$RELEASE_TAG" release/*.tgz --generate-notes "${prerelease[@]}"
 
       - name: Publish stable marketplace payload
         if: steps.release.outputs.channel == 'latest'
