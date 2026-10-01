@@ -69,27 +69,10 @@ mkdir -p /path/to/project/.cursor/skills/tracecheck
 cp -R /tmp/tracecheck-0.4.0/package/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
 ```
 
-If Cursor runs a source checkout, copy the complete folder from that checkout instead:
-
-```sh
-cp -R /absolute/path/to/tracecheck/skills/tracecheck/. ~/.cursor/skills/tracecheck/
-```
-
-The copied directory must retain `SKILL.md` and `references/tool-usage.md`. This is a manual Cursor integration, not a native Cursor marketplace plugin or an automatic client-configuration change.
+If Cursor runs a source checkout, copy `skills/tracecheck/` from that checkout instead. The copied directory must retain `SKILL.md` and `references/tool-usage.md`. This is a manual Cursor integration, not a native Cursor marketplace plugin or an automatic client-configuration change.
 
 Restart or reload Cursor. In **Customize**, confirm the Tracecheck server is enabled and that all four tools appear: `tracecheck_verify`, `tracecheck_preview`, `tracecheck_review`, and `tracecheck_assess`; confirm the `tracecheck` skill appears under Skills. Then give the agent a real implementation checkpoint and ask it to investigate a concrete concern with Tracecheck, rather than merely asking whether the tools are listed. A successful tool call and a meaningful agent review are separate checks; this documentation does not claim a Cursor UI end-to-end test.
 
 For a connection failure, check Cursor's **Output** panel → **MCP Logs**, then recheck the JSON entry, the launching environment's credential variable, and the copied skill directory. For Tracecheck request shapes or provider-recovery behavior, use the included [tool usage](../skills/tracecheck/references/tool-usage.md#recovery-and-completion).
-
-## Validated boundaries
-
-- Real MCP v2 SDK client/server exchange over stdio, with schemas and stale-snapshot rejection.
-- Real Jev calls through the standalone server, all 19 dimensions, source findings, and a cache hit.
-- Supplied-context Python assessment and previous-evaluation input through MCP.
-- Standalone bundle launch from a directory without dependencies.
-- Portable plugin discovery and strict Claude manifest validation.
-- Codex plugin validator and skill validator pass.
-
-The native Codex, Cursor, Claude, and OpenCode UIs have not all been installed and exercised. Do not infer that packaging validation is an end-to-end client installation test.
 
 Packaging follows the [official OpenAI plugin packaging guidance](https://developers.openai.com/plugins/build/plugins) and the [Agent Plugins specification](https://agent-plugins.org/specification). Local stdio packaging does not publish a public remote plugin.
