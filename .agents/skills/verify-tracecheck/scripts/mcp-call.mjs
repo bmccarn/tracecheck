@@ -17,10 +17,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { Client } from '@modelcontextprotocol/client';
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { PROVIDER_ENVIRONMENT, forwardedEnv, stdioClient, toolRecord } from './mcp-client.mjs';
 
-const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS', 'JEV_CONCURRENCY'];
 const { values } = parseArgs({
   options: {
     out: { type: 'string' }, repo: { type: 'string' }, calls: { type: 'string' },
@@ -34,13 +32,9 @@ if (!values.out || (!values.list && !values.calls)) {
 }
 const out = resolve(values.out);
 mkdirSync(out, { recursive: true });
-const env = { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' };
-for (const name of [...PROVIDER_ENVIRONMENT, ...values.env]) if (process.env[name]) env[name] = process.env[name];
+const env = forwardedEnv([...PROVIDER_ENVIRONMENT, ...values.env]);
 const args = [resolve('dist/plugin.mjs'), 'mcp', ...(values.repo ? ['--repo', resolve(values.repo)] : [])];
-const client = new Client({ name: 'verify-tracecheck', version: '1.0.0' });
-const stderr = [];
-const transport = new StdioClientTransport({ command: process.execPath, args, env, stderr: 'pipe' });
-transport.stderr?.on('data', chunk => stderr.push(String(chunk)));
+const { client, transport, log: stderr } = stdioClient('verify-tracecheck', { command: process.execPath, args, env });
 const timeout = Number(values['timeout-ms']);
 let failed = false;
 try {
@@ -60,11 +54,7 @@ try {
       const progress = [];
       const onprogress = values.progress ? update => progress.push({ ...update, atMs: Date.now() - started }) : undefined;
       const result = await client.callTool({ name: call.tool, arguments: JSON.parse(argumentsJson) }, { timeout, onprogress });
-      const record = {
-        tool: call.tool, arguments: JSON.parse(argumentsJson), elapsedMs: Date.now() - started, isError: Boolean(result.isError),
-        structuredContent: result.structuredContent ?? null, text: result.content?.filter(item => item.type === 'text').map(item => item.text) ?? [],
-        ...(values.progress ? { progress } : {})
-      };
+      const record = { ...toolRecord(call.tool, JSON.parse(argumentsJson), result), elapsedMs: Date.now() - started, ...(values.progress ? { progress } : {}) };
       const file = join(out, `${name}.json`);
       writeFileSync(file, JSON.stringify(record, null, 2) + '\n');
       if (call.tool === 'tracecheck_preview' && !result.isError) snapshot = result.structuredContent?.snapshot;

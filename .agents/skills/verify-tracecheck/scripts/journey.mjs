@@ -4,7 +4,7 @@
 // Usage (from the checkout root, after `npm ci && npm run build`):
 //   node .agents/skills/verify-tracecheck/scripts/journey.mjs [--provider stand-in|live] [--no-install | --package SPEC] [--out DIR]
 // --provider stand-in (default) answers through the loopback stand-in provider: deterministic, no key, no cost.
-// --provider live uses the provider variables already in the environment (see doctor.mjs). Most steps accept any
+// --provider live uses the provider variables already in the environment (PROVIDER_ENVIRONMENT in mcp-client.mjs). Most steps accept any
 //   judgment there, because model judgments vary; the live outcome steps assert the planted defects and scoring.
 // --no-install drives dist/plugin.mjs from the checkout instead of an installed tarball.
 // --package SPEC installs a published version from the registry instead, for example @bmccarn/tracecheck@0.3.0,
@@ -21,10 +21,8 @@ import { tmpdir } from 'node:os';
 import { dirname, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { Client } from '@modelcontextprotocol/client';
-import { StdioClientTransport } from '@modelcontextprotocol/client/stdio';
+import { KEY_VARIABLES, PROVIDER_ENVIRONMENT, forwardedEnv, stdioClient, toolRecord } from './mcp-client.mjs';
 
-const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS', 'JEV_CONCURRENCY'];
 const { values } = parseArgs({
   options: {
     provider: { type: 'string', default: 'stand-in' }, install: { type: 'boolean', default: true }, out: { type: 'string' },
@@ -149,14 +147,14 @@ async function startStandIn(name, args) {
   });
   return { url, stats: async () => (await fetch(`${url}/stats`)).json() };
 }
-const providerEnv = {};
 const secrets = [];
 if (live) {
-  for (const name of PROVIDER_ENVIRONMENT) if (process.env[name]) providerEnv[name] = process.env[name];
-  for (const name of ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY']) if (process.env[name]?.trim()) secrets.push(process.env[name].trim());
+  for (const name of KEY_VARIABLES) if (process.env[name]?.trim()) secrets.push(process.env[name].trim());
   if (!secrets.length) { console.error('--provider live needs JEV_API_KEY, TYPESAFE_API_KEY, or OPENROUTER_API_KEY in the environment.'); process.exit(2); }
 }
-const userEnv = extra => ({ PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '', ...providerEnv, ...extra });
+// The stand-in step adds its placeholder key and URL to providerEnv.
+const providerEnv = {};
+const userEnv = extra => ({ ...forwardedEnv(live ? PROVIDER_ENVIRONMENT : []), ...providerEnv, ...extra });
 // Stand-in providers, set once the project exists: `standIn` answers quickly, `slowStandIn` leaves time to change the
 // repository while a review waits on it. In live mode both stay undefined and the live provider answers.
 let standIn;
@@ -220,17 +218,14 @@ let mcpCalls = 0;
 /** Calls `tool` through `client` and saves the call as mcp/NN-<session>-<tool>.json. */
 async function callTool(client, session, tool, args, options = {}) {
   const result = await client.callTool({ name: tool, arguments: args }, { timeout: 600_000, ...options });
-  const call = { tool, arguments: args, isError: Boolean(result.isError), structuredContent: result.structuredContent ?? null, text: result.content?.map(item => item.text) ?? [] };
+  const call = toolRecord(tool, args, result);
   mkdirSync(join(evidence, 'mcp'), { recursive: true });
   writeFileSync(join(evidence, 'mcp', `${String(++mcpCalls).padStart(2, '0')}-${session}-${tool}.json`), JSON.stringify(call, null, 2));
   return call;
 }
 /** Starts an MCP server over stdio as `launch` describes, passes `use` a call function and the client, then closes it. */
 async function mcpSession(session, launch, use) {
-  const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
-  const log = [];
-  const transport = new StdioClientTransport({ env: userEnv(), stderr: 'pipe', ...launch });
-  transport.stderr?.on('data', chunk => log.push(String(chunk)));
+  const { client, transport, log } = stdioClient('tracecheck-journey', { env: userEnv(), ...launch });
   try {
     await client.connect(transport);
     return await use((tool, args, options) => callTool(client, session, tool, args, options), client);
@@ -854,10 +849,7 @@ try {
   }, 63);
 
   // ---- MCP, the way an agent client connects to the plugin --------------------------------------------------
-  const client = new Client({ name: 'tracecheck-journey', version: '1.0.0' });
-  const serverLog = [];
-  const transport = new StdioClientTransport({ ...boundServer(project), env: userEnv(), stderr: 'pipe' });
-  transport.stderr?.on('data', chunk => serverLog.push(String(chunk)));
+  const { client, transport, log: serverLog } = stdioClient('tracecheck-journey', { ...boundServer(project), env: userEnv() });
   const call = (tool, args, options) => callTool(client, 'main', tool, args, options);
   try {
     await step(PLUMBING, 'MCP server starts and lists four tools', async () => {

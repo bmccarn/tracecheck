@@ -105,10 +105,6 @@ npm exec --yes --package=npm@11.5.1 -- npm publish ./release/bmccarn-tracecheck-
 
 Version 0.2.0 has three tools. Do not pair it with the current skill, which calls `tracecheck_verify`.
 
-## Native marketplace installation
-
-Stable releases install through the marketplace commands in the README's [Install](../README.md#install) section. For Cursor, follow the version-matched [manual setup](integrations.md#cursor-manual-mcp--skill); npm does not register its MCP entry or skill automatically.
-
 ## Test a candidate's marketplace bundle
 
 Use this path to test a release candidate or a local build in a client before a stable release. Stable installations use the marketplace instead. Extract the candidate's `tracecheck-marketplace-<version>.tgz`. It contains both catalogs and `plugins/tracecheck/`, copied from the verified npm payload.
@@ -126,8 +122,6 @@ Codex:
 codex plugin marketplace add /absolute/path/to/tracecheck-marketplace
 codex plugin add tracecheck@tracecheck-plugins
 ```
-
-For Cursor, follow the version-matched [manual setup](integrations.md#cursor-manual-mcp--skill); npm does not register its MCP entry or skill automatically.
 
 In clean client profiles, verify the skill is available, all four MCP tools connect, missing-key guidance is actionable, and one synthetic live hypothesis verification works. Confirm the agent follows the investigate → Jev → follow-up loop. Check upgrading an existing installation as well as a new installation. Use a Jev key in the launching environment; GUI clients may not inherit shell exports. Keep live validation on synthetic input rather than private project source.
 

@@ -142,7 +142,7 @@ Collection compares **the base with the working tree**. The base is HEAD unless 
 
 Preview and review add a note naming each file whose staged change the working tree undoes, and each staged rename whose working-tree file differs too much from its source for Git to pair them. Such a rename is reviewed as a deleted file and a new file without a baseline. To review exactly what you are about to commit, make the working tree match the index first, for example with `git stash --keep-index`.
 
-The working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`. 0.3.0 compared with the tip of REF.
+The working tree is compared with the merge base of `--base` and HEAD, the commit where HEAD's history left REF. When REF is HEAD or one of its ancestors, that is REF itself. When REF is a branch that has moved on, such as `origin/main` after other pull requests merged, its newer commits are left out, so they are not reported as your changes; a note says so. Preview and review report the requested ref as `baseRef` and the compared commit as `base`, and human output prints `Base: <commit> (from <ref>)`.
 
 ## How it works
 
@@ -171,34 +171,7 @@ MCP preview tokens belong to the current server process and expire after five mi
 
 ## Quality dimensions
 
-These 15 dimensions are considered whenever the supplied evidence permits:
-
-| Dimension | Focus |
-| --- | --- |
-| Correctness | Requirements, edge cases, invariants, and regressions. |
-| Cognitive complexity | Control flow, state, and unnecessary indirection. |
-| Readability | Names, intent, expression clarity, and explanation. |
-| Modularity | Cohesive responsibilities and useful boundaries. |
-| Coupling | Dependency direction, hidden inputs, and exposed internals. |
-| Changeability | Scattered decisions and cascading edits. |
-| Abstraction and API design | Useful interfaces and appropriate generality. |
-| Project structure | Discoverability and placement of related behavior. |
-| Duplication and reuse | Repeated knowledge and appropriate sharing. |
-| Maintainability | Effort to understand, diagnose, and modify code. |
-| Testability and test quality | Meaningful assertions, regression protection, and repeatability. |
-| Reliability | Failure handling, cleanup, retries, and concurrency. |
-| Security | Relevant trust boundaries and exposure. |
-| Consistency | Alignment with established project conventions. |
-| Documentation | Contracts, usage, and non-obvious decisions. |
-
-Four additional dimensions depend on the problem's context:
-
-| Dimension | Relevant evidence |
-| --- | --- |
-| Performance | Workload characteristics and cost-sensitive paths. |
-| Scalability | Growth requirements and scaling constraints. |
-| Compatibility | Existing consumers and compatibility contracts. |
-| Observability | Operational needs and diagnostic behavior. |
+Tracecheck considers 19 dimensions, from correctness, readability, and test quality to security and documentation; performance, scalability, compatibility, and observability count only when the context shows they matter. The full list is in `src/quality/dimensions.ts`.
 
 Insufficient evidence can leave a dimension unscored; uncertainty is not a failing grade. Each dimension has a selected concern, and up to five actionable concerns are prioritized. A high score does not hide an independently actionable concern. These broad signals are distinct from findings with exact source locations.
 
@@ -213,7 +186,7 @@ node dist/plugin.mjs verify --input evidence.json --repo /path/to/project \
   --out .tracecheck/verification.json
 ```
 
-The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. `--repo` and the MCP `repo` argument name a directory in a Git working tree, and evidence paths are relative to that directory. A path that does not exist or is outside Git stops verification before inference with an error that names the path as given (0.3.0 showed the system error). Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
+The agent chooses what to investigate. Tracecheck checks exact quotes and original line ranges, optionally matches excerpts to local files before and after inference, and returns a typed decision. When a repository is bound, an evidence file that is missing, a directory, a symlink, outside the repository, unreadable, or over 256,000 bytes stops verification before inference; the error names the evidence ID and its repository-relative path. `--repo` and the MCP `repo` argument name a directory in a Git working tree, and evidence paths are relative to that directory. A path that does not exist or is outside Git stops verification before inference with an error that names the path as given. Supplied-only evidence is explicitly labeled as such. Missing-evidence categories guide further investigation; they do not retrieve files automatically. Verification accepts any language without a parser rule.
 
 ### Compare implementation checkpoints
 
@@ -237,7 +210,7 @@ A single-packet repository review returns `report.quality`. Larger changes retur
 
 Source findings that were supported before can be `still_present`, `no_longer_supported`, `unresolved`, or `not_reassessed`. Findings supported only in the current report are `newly_supported`. None of these means a fix has been executed and verified.
 
-A finding keeps its history when its file is renamed. A candidate ID includes the file path, so the finding gets a new ID at the new path. A decision on a renamed file records the file's path at the base as `previousPath`, and `compare` matches an earlier finding to that decision when both name the same base file, check, symbol, and quoted code, ignoring whitespace. The entry then adds `currentId` and `currentPath`. 0.3.0 reported such a finding as `not_reassessed` and again as `newly_supported`.
+A finding keeps its history when its file is renamed. A candidate ID includes the file path, so the finding gets a new ID at the new path. A decision on a renamed file records the file's path at the base as `previousPath`, and `compare` matches an earlier finding to that decision when both name the same base file, check, symbol, and quoted code, ignoring whitespace. The entry then adds `currentId` and `currentPath`.
 
 ### Supply context directly
 
@@ -298,29 +271,7 @@ Paths are relative to the `SRCROOT` base, which the log maps to the reviewed rep
 
 ### CLI options and exit codes
 
-| Option | Purpose |
-| --- | --- |
-| `--repo PATH` | Git repository to collect; preview and review default to the current directory. verify matches excerpts against it; mcp uses it when a tool call names no repository. |
-| `--base REF` | Git ref to review changes against; defaults to `HEAD`. The working tree is compared with the merge base of REF and HEAD (0.3.0 compared with REF itself). |
-| `--include-untracked` | Include supported, non-ignored untracked files. `--no-include-untracked` states the default explicitly. |
-| `--task TEXT` | Requested behavior or acceptance criteria. |
-| `--context TEXT` | Relevant repository facts, contracts, or observed test results. |
-| `--json` | Emit full JSON for preview, review, or assess. |
-| `--out FILE` | Save a review report, verification result, or quality assessment as JSON. |
-| `--sarif FILE` | Also write review's supported findings as SARIF 2.1.0. |
-| `--previous FILE` | For review and assess, a report saved by `review --out` or an evaluation saved by `assess --out` to compare quality with. For compare, the earlier report. |
-| `--current FILE` | For compare, the later report. |
-| `--input FILE` | Evidence JSON for verify; context JSON for assess. |
-| `--fail-on-priorities` | Make assess exit `1` when the evaluation lists actionable quality priorities. |
-| `--index-max-files N` | Optional local import-index file budget; unset by default. |
-| `--index-max-bytes N` | Optional local import-index byte budget; unset by default. |
-| `--index-timeout-ms N` | Soft discovery deadline; defaults to 20,000 ms and reports partial coverage. |
-| `--collection-timeout-ms N` | Collection deadline; defaults to 120,000 ms. |
-| `--review-timeout-ms N` | Review deadline; defaults to 300,000 ms. |
-| `--max-requests N` | Most provider requests one review may make; defaults to 50. |
-| `-q`, `--quiet` | Do not print review progress to stderr. |
-
-`preview` and `review` also read defaults for most of these options from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
+`node dist/plugin.mjs --help` lists every command, flag, and default. `preview` and `review` also read defaults for most flags from the repository's [configuration file](#project-configuration-file). A flag always overrides the file.
 
 `preview` estimates the review's cost: the human output prints `Review estimate: N provider request(s) carrying B bytes of evidence and questions`, and `preview --json` and `tracecheck_preview` return `estimate.requests` and `estimate.inputBytes`. The estimate comes from the same planner that review uses, so a completed review's `usage.requests` equals `estimate.requests`; retries after a failed request are not counted. `review` refuses a plan with more requests than the budget, exiting `2` with `Review would make N provider requests, over the budget of M` before it sends any request. Raise the budget with `--max-requests N` or the MCP `maxRequests` argument.
 
@@ -363,9 +314,9 @@ Configure your MCP client with one of these launch commands:
 | Command | `npx` | `node` |
 | Arguments | `--yes`, `@bmccarn/tracecheck@0.4.0`, `mcp` | `/absolute/path/to/tracecheck/dist/plugin.mjs`, `mcp` |
 
-Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. The server also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`; 0.3.0 does not.
+Forward `TYPESAFE_API_KEY` or `JEV_API_KEY`, and optionally `JEV_MODEL`, to the server. The server also reads `OPENROUTER_API_KEY`, `TYPESAFE_BASE_URL`, `JEV_TIMEOUT_MS`, and `JEV_CONCURRENCY`.
 
-Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. A bound server accepts a `repo` argument that names its repository or any directory in it (0.3.0 accepted only the exact path) and rejects any other repository, including one nested inside it. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
+Append `--repo`, `/absolute/path/to/reviewed/repo` to bind the server to one repository. Otherwise, collection-tool calls must provide `repo`. A bound server accepts a `repo` argument that names its repository or any directory in it and rejects any other repository, including one nested inside it. GUI applications may not inherit variables exported in `.zshrc`; use your client's environment configuration.
 
 The package includes portable plugin manifests, client compatibility adapters, and a [continuous-review skill](skills/tracecheck/SKILL.md). The skill supplies the review cadence; the MCP server alone only exposes its tools. For a client without a plugin marketplace, load the complete `skills/tracecheck/` directory, not only `SKILL.md`, through the client's skill support. The [Cursor setup](docs/integrations.md#cursor-manual-mcp--skill) shows both steps.
 
@@ -474,23 +425,7 @@ OpenRouter lists a 32,000-token context for Jev. When a request exceeds the prov
 
 ### Collection limits
 
-| Limit | Current value |
-| --- | --- |
-| Collected files per packet | 16 |
-| Current file read limit | 256,000 bytes |
-| Baseline file read limit | 8 MiB |
-| Primary changed files per packet | Up to 8, with evidence capacity reserved for supporting context |
-| Focused source per current/baseline version | Up to 12,000 characters each, reduced further if required to fit |
-| Caller/import discovery | Eligible tracked JS/TS/Python files; optional file/byte caps and a soft deadline |
-| Source context per packet, including baselines | 60,000 characters and 80,000 serialized bytes |
-| Parser-derived source candidates | No global cutoff; evaluated in batches of up to 10 |
-| Serialized review request | 160,000-byte preflight; provider client also enforces 180,000 bytes |
-
-Every safely readable, supported changed file is assigned to a packet; later files are not dropped after the first eight. Large files use bounded excerpts with original line anchors, visible omissions, and full-content digests. This covers changed files, not necessarily every changed line: omitted ranges, unsupported files, secrets, and unreadable or oversized files remain coverage gaps.
-
-Repository discovery is separate from model-input size. A bounded in-process cache retains file identities and import edges, not raw source, and rechecks paths, timestamps, inode/device identity, and the known file set before reuse. Each CLI process starts cold; repeated MCP requests and recollection within a CLI review can reuse the index. One-hop JS/TS and Python import discovery remains heuristic. JS/TS `paths` and `baseUrl` aliases resolve through the nearest `tsconfig.json` or `jsconfig.json` among the collected files, following `extends` only through relative paths inside the repository; package and external `extends` targets are reported, not read. Unresolved imports and dynamic behavior may be missing even when every eligible file was indexed.
-
-Partial discovery reports successfully indexed versus eligible file counts and bounded omission summaries. Raise discovery deadlines for a large repository without increasing model packet sizes. CLI flags above correspond to MCP's nested `collection` fields `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; use identical collection arguments for preview and review. MCP review accepts `reviewTimeoutMs` separately. Timeouts accept positive integer milliseconds up to one hour. More packets mean more provider requests; preview exposes packet membership before transmission.
+Packet sizes, read limits, discovery budgets, and request size checks are described under [budgets and omissions](docs/design.md#budgets-and-omissions). Every safely readable, supported changed file is assigned to a packet; omitted ranges, unsupported files, secrets, and unreadable or oversized files are reported as coverage gaps. The collection flags correspond to MCP's nested `collection` fields `maxIndexFiles`, `maxIndexBytes`, `indexTimeoutMs`, and `collectionTimeoutMs`; use identical collection arguments for preview and review. MCP review accepts `reviewTimeoutMs` separately.
 
 ## Security model
 
@@ -521,15 +456,11 @@ npm run release:check               # validate, package checks, and release meta
 npm run demo                        # Scripted example; no live inference
 npm run journey                     # End-user journey on the packed package; stand-in provider, no key
 npm run journey -- --provider live   # The same journey against the configured provider
-npm run benchmark -- --live          # Six synthetic source-check cases
-npm run smoke -- --live              # Live MCP review and cache verification
-npm run quality-smoke -- --live      # Live supplied-context Python assessments
-npm run accuracy -- --repo /path/to/rapidregs-ingest # Offline real-project label checks; maintainers only
 npm run calibrate -- run            # Offline check of the labeled gate-calibration cases
 npm run calibrate -- run --live     # Live gate calibration; about 216 requests
 ```
 
-Live commands require credentials and consume API usage. The accuracy benchmark measures a repository that is not publicly available, so only maintainers can run it; see [the accuracy benchmark](docs/accuracy.md). The [decision-gate calibration](docs/calibration.md) measures the source-check and quality gates on labeled synthetic pairs and compares candidate thresholds for a maintainer decision. The [validation record](docs/validation.md) documents automated checks, observed live results, and their limits. The small synthetic benchmark is a smoke test, not a general accuracy estimate. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
+Live commands require credentials and consume API usage. The [decision-gate calibration](docs/calibration.md) measures the source-check and quality gates on labeled synthetic pairs. The [validation record](docs/validation.md) states what has been tested and its limits. Tracecheck does not currently run tests, reproduce failures, or verify fixes by execution.
 
 GitHub Actions runs CI on every pull request and on every push to `main`. The workflow tests on Node 22.18.0, the oldest supported 22.x release, and on the latest Node 24.x release. Each run checks that the committed `dist/plugin.mjs` matches a fresh build (`node scripts/build.mjs --check`), runs the offline demo and the end-user journey, and runs `npm run release:check`. A new push to a pull request cancels that pull request's earlier run. The checks need no provider credentials. Commit the rebuilt bundle with any change that affects it.
 
@@ -550,7 +481,7 @@ GitHub Actions runs CI on every pull request and on every push to `main`. The wo
 
 Version 0.4.0 added OpenRouter as a provider, SARIF output, a request budget with a preview estimate, concurrent review requests, and the `.tracecheck.json` project settings file. It also recalibrated the decision gates against the live model. It is the current release; 0.3.0 was the previous one.
 
-The [accuracy baseline](docs/accuracy.md) reports the tradeoffs: smaller fixture packets cut input tokens by 51.9% but lowered defect recall. The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
+The agent-first workflow adds focused hypothesis verification and a [paired evaluation protocol](docs/agent-evaluation.md). Next steps are fresh agent-only versus assisted trials, better evidence selection through the skill, and calibration on independent bug/fix families.
 
 Later work includes broader source checks, incremental reassessment, and isolated reproductions with fix verification. These are planned capabilities, not current features.
 
@@ -565,9 +496,9 @@ Run `npm ci`, `npm run validate`, and `npm run journey` before submitting implem
 | [`src/quality.ts`](src/quality.ts) and [`src/quality/`](src/quality/) | Dimension assessment and quality comparisons. |
 | [`src/review.ts`](src/review.ts) and [`src/history.ts`](src/history.ts) | Review orchestration, rendering, and source-finding history. |
 | [`src/mcp.ts`](src/mcp.ts) and [`src/cli.ts`](src/cli.ts) | MCP tools and command-line entry points. |
-| [`test/`](test/) and [`examples/`](examples/) | Regression tests, demos, and live smoke checks. |
+| [`test/`](test/) and [`examples/`](examples/) | Regression tests and the scripted demo. |
 
-Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Accuracy benchmark](docs/accuracy.md) · [Gate calibration](docs/calibration.md) · [Agent evaluation](docs/agent-evaluation.md) · [Capability coverage](docs/parity.md)
+Further reading: [Design](docs/design.md) · [Integrations](docs/integrations.md) · [Validation](docs/validation.md) · [Gate calibration](docs/calibration.md) · [Agent evaluation](docs/agent-evaluation.md)
 
 ## License
 

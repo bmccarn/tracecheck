@@ -1,36 +1,8 @@
 # Tracecheck verification map
 
-This directory is the maintained source for verifying Tracecheck's user-facing behavior. Read this index, then use the matching feature file as the recipe. Keep a feature file current whenever its commands, inputs, or observable results change.
+Each file here is the recipe for verifying one user-facing feature. Launch, driving conventions, and proof requirements are in the [skill](../SKILL.md); `node dist/plugin.mjs --help` lists every flag and exit code. Keep a feature file current whenever its commands, inputs, or observable results change.
 
-## Baseline preconditions
-
-- The checkout under test is built (`npm ci && npm run build`) and `node .agents/skills/verify-tracecheck/scripts/doctor.mjs` reports `ready: true`.
-- `S=.agents/skills/verify-tracecheck/scripts` and `RUN=.tracecheck/verify/<timestamp>-<feature>` are set, and `$RUN` exists.
-- Repository-backed paths use a fresh fixture from `node $S/fixture-repo.mjs <scenario>`; `ROOT` is its printed `root`.
-- Live paths have a provider key in the environment and `doctor.mjs` reports `live: true`.
-
-## Driving conventions
-
-- Run CLI commands through `$S/capture.sh "$RUN" <name> -- node dist/plugin.mjs ...`.
-- Run MCP tools through `node $S/mcp-call.mjs --out "$RUN/mcp" [--repo "$ROOT"] --calls "$RUN/calls.json"`.
-- Use `--json` on CLI commands whose assertions read fields. The default output is human-readable Markdown.
-- CLI exit codes are part of the contract: `0` no findings or success, `1` needs attention (review findings or quality priorities, a supported verify hypothesis, or assess priorities with `--fail-on-priorities`), `2` error, `3` inconclusive, `4` review report is stale because reviewed files changed during the review, `130` interrupted with Ctrl-C. `node dist/plugin.mjs --help` lists every flag per command.
-- Start each recipe from a fresh fixture. Fixtures are disposable; the evidence in `$RUN` is kept.
-
-## Proof and skip reporting
-
-- CLI proof is the `.cmd`, `.stdout`, `.stderr`, and `.exit` files. MCP proof is the `NN-<tool>.json` records plus `server-stderr.log`.
-- Record the feature ID and entry point in `$RUN/PROOF.md` with the decisive JSON fields quoted.
-- A live path that could not run is reported as unverified, with the attempted command and the reason.
-- A CLI proof does not verify the MCP entry point, and the reverse.
-
-## Feature entry contract
-
-Each feature file starts with an H1 title and one paragraph describing the user-visible behavior, followed by exactly four H2 sections: `Sub-features`, `How to get to it (user POV)`, `Driving it with capture.sh and mcp-call.mjs`, and `Gotchas`.
-
-## Journey coverage
-
-`scripts/journey.mjs` drives one realistic path through preview, review, compare, verify, assess, provider errors, and all four MCP tools, through the installed bin shim, `npx`, and the MCP launch the plugin manifests specify. Separate small repositories check exit codes, refusals, and absent side effects on paths off the main one. Each step is labeled an outcome, plumbing, or known-issue check (see the [skill](../SKILL.md#end-user-journey)). A feature file below is still the recipe for exercising a feature's other entry points and edge cases.
+Each feature file starts with an H1 title and one paragraph describing the user-visible behavior, followed by two H2 sections: `Driving it` and `Gotchas`. The [journey](../SKILL.md#end-user-journey) covers the main path; these recipes cover each feature's other entry points and edge cases.
 
 ## Features
 

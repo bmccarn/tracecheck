@@ -44,31 +44,23 @@ When a change adds or alters a user-visible behavior, extend the journey with a 
 
 ## Launch
 
-1. Install and build the checkout under test: `npm ci && npm run build`. The build writes `dist/plugin.mjs`; source edits have no effect until it runs again.
+1. Install and build the checkout under test, then check the bundle is fresh and runs: `npm ci && npm run build`, then `node scripts/build.mjs --check && node dist/plugin.mjs --help`. The build writes `dist/plugin.mjs`; source edits have no effect until it runs again, and proof from a stale bundle is invalid.
 2. Create the run's evidence directory. Evidence lives under the ignored `.tracecheck/` directory:
    ```sh
    RUN=.tracecheck/verify/$(date +%Y%m%d-%H%M%S)-<feature>
    mkdir -p "$RUN"
    ```
-3. Create a disposable repository for any path that collects from Git: `node .agents/skills/verify-tracecheck/scripts/fixture-repo.mjs <scenario> > "$RUN/fixture.json"`. Run it with `--list` for the scenarios. The printed `root` is the repository to pass as `--repo`. Add a scenario to the script when none reproduces the behavior under test.
+3. Create a disposable repository for any path that collects from Git: `S=.agents/skills/verify-tracecheck/scripts; node $S/fixture-repo.mjs <scenario> > "$RUN/fixture.json"` and `ROOT=$(jq -r .root "$RUN/fixture.json")`. Run it with `--list` for the scenarios. Add a scenario to the script when none reproduces the behavior under test.
 
 There is no long-running service. The CLI exits on its own, and `mcp-call.mjs` starts and closes its server for each run, so concurrent runs never share an instance.
-
-## Doctor
-
-Run `node .agents/skills/verify-tracecheck/scripts/doctor.mjs` first, and again whenever a result looks wrong. It is read-only and prints JSON:
-
-- `ready: true` means the checkout, Node version, dependencies, Git, and a fresh, runnable bundle are all present. A `bundle-fresh: false` check means `npm run build` is needed; proof from a stale bundle is invalid.
-- `live: true` means a provider key is set, so `review`, `verify`, `assess`, and the matching MCP tools can call Jev. It reports which variable names are set, the resolved base URL, and the model, never key values.
 
 ## Drive
 
 Offline paths need no key: `preview`, `compare`, the MCP `tracecheck_preview` tool, and every argument or input error. Live paths need one of `JEV_API_KEY`, `TYPESAFE_API_KEY`, or `OPENROUTER_API_KEY` in the environment. Pass keys only through the environment of the command, never as arguments, and never echo them or dump the environment.
 
-- **CLI**: wrap each command in `capture.sh` so the proof is recorded:
+- **CLI**: redirect each command's output into `$RUN` and record its exit code. Use `--json` when assertions read fields:
   ```sh
-  S=.agents/skills/verify-tracecheck/scripts
-  $S/capture.sh "$RUN" preview -- node dist/plugin.mjs preview --repo "$ROOT" --json
+  node dist/plugin.mjs preview --repo "$ROOT" --json > "$RUN/preview.stdout" 2> "$RUN/preview.stderr"; echo $? > "$RUN/preview.exit"
   ```
 - **MCP**: write the calls as JSON and run them through the real stdio server:
   ```sh
@@ -84,7 +76,7 @@ Drive every entry point the feature map lists for the behavior under test. A CLI
 A proof for one behavior contains:
 
 - the fixture description (`fixture.json`) or the supplied input file,
-- each command's `.cmd`, `.stdout`, `.stderr`, and `.exit` files, or the MCP call records,
+- each command line with its `.stdout`, `.stderr`, and `.exit` files, or the MCP call records (`NN-<tool>.json` and `server-stderr.log`),
 - a short `$RUN/PROOF.md` that names the feature ID, the entry point, the expected observable result, and the observed result, quoting the decisive JSON fields.
 
 Assert on observable output: report fields, exit codes, files written, and provider requests made (`usage.requests`, `models`). For a bug fix, run the same proof on the base commit's bundle and on the fix; the base must show the bug and the fix must not. A path that could not run (no key, provider error, missing capability) is reported as unverified with the attempted command and the reason.
@@ -101,9 +93,7 @@ All helpers live in `.agents/skills/verify-tracecheck/scripts/` and are executab
 | Helper | Invocation | Output |
 | --- | --- | --- |
 | `journey.mjs` | `npm run journey -- [--provider stand-in\|live] [--no-install \| --package SPEC] [--out DIR]` | The end-user journey above; exit 1 when any outcome or plumbing check fails |
-| `doctor.mjs` | `node $S/doctor.mjs` | Readiness JSON; exit 1 when not ready |
 | `fixture-repo.mjs` | `node $S/fixture-repo.mjs <scenario>` or `--list` | JSON with `root`, `description`, and `changed` |
-| `capture.sh` | `$S/capture.sh DIR NAME -- COMMAND...` | `NAME.cmd`, `.stdout`, `.stderr`, `.exit` in `DIR` |
 | `stand-in-provider.mjs` | `node $S/stand-in-provider.mjs [--port N] [--latency-ms N] [--fail-path REGEX] [--fail-times N] [--verdict REGEX=STATUS]...`, started with `hub` | A loopback System One stand-in with fixed latency. A review candidate whose path matches the first matching `--verdict` gets STATUS (`supported`, `not_supported`, `needs_context`, or `uncertain`); others are `supported`. One JSON log line per request with its packet, in-flight count, and verdicts; `GET /stats` returns the request count |
 | `mcp-call.mjs` | `node $S/mcp-call.mjs --out DIR [--repo PATH] [--env NAME]... [--progress] (--calls FILE \| --list)` | One JSON record per call, a summary on stdout, exit 1 if any call errored; `--progress` records each call's progress notifications |
 | `scripts/build.mjs --check` | `node scripts/build.mjs --check` (repository script) | Exit 1 when `dist/plugin.mjs` differs from a fresh build; `dist/` is untouched |
