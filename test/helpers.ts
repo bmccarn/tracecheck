@@ -2,7 +2,7 @@ import { mkdtemp, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import type { Choice, Evaluator, ReviewPlan } from '../src/domain.js';
+import type { Question, ReviewPlan } from '../src/domain.js';
 import { findCandidates } from '../src/checks.js';
 
 export async function repository() {
@@ -26,8 +26,8 @@ export function planFor(content = 'export function ratio(a: number, b: number) {
     limitations: [], notes: [] };
 }
 
-export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evaluator {
-  return { async evaluate(_state: unknown, questions: Record<string, Choice>) {
+export function fixtureEvaluator(choice = 'supported', confidence = 0.95) {
+  return { async evaluate(_state: unknown, questions: Record<string, Question>) {
     return { model: 'offline-fixture-not-jev', usage: { input_tokens: 0, output_tokens: 0 },
       answers: Object.fromEntries(Object.entries(questions).map(([id, question]) => {
         const selected = id.endsWith('_impact') ? 'medium' : choice;
@@ -38,7 +38,7 @@ export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evalu
   } };
 }
 
-export async function typedFixture(questions: Record<string, import('../src/domain.js').Question>): Promise<import('../src/domain.js').TypedResponse> {
+export async function typedFixture(questions: Record<string, import('../src/domain.js').Question>): Promise<import('../src/domain.js').Response> {
   const answers: Record<string, import('../src/domain.js').TypedAnswer> = {};
   for (const [id, question] of Object.entries(questions)) {
     if (question.type === 'noul') { answers[id] = { type: 'noul', noul: 0.95 }; continue; }
@@ -56,7 +56,7 @@ export async function typedFixture(questions: Record<string, import('../src/doma
 }
 
 /** Judges every source-check candidate in `response` not supported, with certainty. */
-export function judgeNotSupported(response: import('../src/domain.js').TypedResponse): void {
+export function judgeNotSupported(response: import('../src/domain.js').Response): void {
   for (const [id, answer] of Object.entries(response.answers)) {
     if (!id.endsWith('_assessment') || answer.type !== 'choice') continue;
     answer.choice = 'not_supported';

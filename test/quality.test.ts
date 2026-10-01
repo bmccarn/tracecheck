@@ -4,7 +4,7 @@ import { assess, qualityQuestions, renderQuality, transformQuality, qualityInput
 import { dimensions } from '../src/quality/dimensions.js';
 import { reviewAll } from '../src/review.js';
 import { typedFixture, planFor } from './helpers.js';
-import type { TypedEvaluator } from '../src/domain.js';
+import type { Evaluator } from '../src/domain.js';
 
 const baseline = async () => typedFixture(qualityQuestions());
 
@@ -62,7 +62,7 @@ test('compares credible scores and tracks unresolved concerns without sending pr
   const changed = response.answers.quality_readability_score;
   assert.equal(changed?.type, 'score'); if (changed?.type !== 'score') throw new Error();
   changed.score = 5;
-  const evaluator: TypedEvaluator = { async evaluate(state) {
+  const evaluator: Evaluator = { async evaluate(state) {
     assert.equal('previousEvaluation' in (state as object), false);
     assert.equal('scope' in (state as object), false);
     return response;
@@ -224,7 +224,7 @@ test('publishes independent packet qualities without inventing an aggregate qual
 });
 
 test('a supplied previous evaluation is compared or leaves a note saying why not', async () => {
-  const evaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+  const evaluator: Evaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
   const previous = (await reviewAll(planFor(), evaluator)).quality!;
   const notCompared = (report: { notes: string[] }) => report.notes.filter(value => value.startsWith('Previous evaluation was not compared'));
 

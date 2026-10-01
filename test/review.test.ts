@@ -6,7 +6,7 @@ import { collect } from '../src/collector.js';
 import { estimateReview, isIncomplete, review, reviewAll, render } from '../src/review.js';
 import { compare } from '../src/history.js';
 import { reportSchema } from '../src/schema.js';
-import type { Report, ReviewPlan, TypedEvaluator } from '../src/domain.js';
+import type { Report, ReviewPlan, Evaluator } from '../src/domain.js';
 import { fixtureEvaluator, planFor, repository, typedFixture } from './helpers.js';
 import { cases, casePlan } from '../examples/cases.js';
 
@@ -241,7 +241,7 @@ test('a review over its request budget is refused before any provider request, a
   const estimate = estimateReview(plan);
   assert.equal(estimate.requests, 4);
   let calls = 0;
-  const counting: TypedEvaluator = { async evaluate(_state, questions) { calls++; return typedFixture(questions); } };
+  const counting: Evaluator = { async evaluate(_state, questions) { calls++; return typedFixture(questions); } };
   await assert.rejects(reviewAll(plan, counting, { maxRequests: estimate.requests - 1 }),
     new RegExp(`^Error: Review would make ${estimate.requests} provider requests, over the budget of ${estimate.requests - 1}`));
   assert.equal(calls, 0);
@@ -253,7 +253,7 @@ test('a review over its request budget is refused before any provider request, a
 test('a concurrent review matches the sequential review apart from timings', async () => {
   const plan = packetPlan(6);
   // Later packets answer first, with distinct usage and verdicts, so completion order differs from plan order.
-  const evaluator: TypedEvaluator = { async evaluate(state, questions) {
+  const evaluator: Evaluator = { async evaluate(state, questions) {
     const packet = packetOf(state);
     await new Promise(resolve => setTimeout(resolve, (6 - packet) * 3));
     const response = await typedFixture(questions);
@@ -273,7 +273,7 @@ test('a concurrent review matches the sequential review apart from timings', asy
 
 test('a failed request leaves an inconclusive report that keeps other decisions and names the unevaluated work', async () => {
   const plan = packetPlan(3);
-  const failing: TypedEvaluator = { async evaluate(state, questions) {
+  const failing: Evaluator = { async evaluate(state, questions) {
     if (packetOf(state) === 1) throw new Error('Jev request failed (HTTP 500); no successful review was recorded.');
     return typedFixture(questions);
   } };

@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
-import type { Question, TypedResponse } from '../src/domain.js';
+import type { Question, Response } from '../src/domain.js';
 import { reportSchema } from '../src/schema.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
 import { judgeNotSupported, repository, typedFixture } from './helpers.js';
@@ -33,7 +33,7 @@ async function cli(args: string[], env: Record<string, string> = {}, cwd = check
 }
 
 /** A loopback Jev endpoint that answers every question with the typed fixture, after an optional adjustment. */
-async function jevServer(t: TestContext, adjust: (response: TypedResponse, questions: Record<string, Question>) => void = () => { }) {
+async function jevServer(t: TestContext, adjust: (response: Response, questions: Record<string, Question>) => void = () => { }) {
   let requests = 0;
   const server = createServer(async (request, response) => {
     let body = '';

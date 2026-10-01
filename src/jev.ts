@@ -1,13 +1,13 @@
 import { z } from 'zod';
 import { assertSafeOutbound } from './safety.js';
 import { deadline } from './deadline.js';
-import type { Choice, Evaluator, Response, Question, TypedResponse, TypedEvaluator } from './domain.js';
+import type { Evaluator, Response, Question } from './domain.js';
 
 export const answerSchema = z.object({
   type: z.literal('choice'), choice: z.string(), confidence: z.number().min(0).max(1),
   probabilities: z.record(z.string(), z.number().min(0).max(1)),
 });
-const responseSchema = z.object({
+export const responseSchema = z.object({
   model: z.string().min(1), answers: z.record(z.string(), z.discriminatedUnion('type', [answerSchema,
     z.object({ type: z.literal('noul'), noul: z.number().min(0).max(1) }),
     z.object({ type: z.literal('score'), score: z.number().nonnegative(), confidence: z.number().min(0).max(1),
@@ -43,8 +43,6 @@ export const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 16;
 const MAX_ATTEMPTS = 3;
 const RETRYABLE_STATUSES = [429, 500, 502, 503, 504, 529];
-/** Environment variables that select the provider, credential, model, request timeout, and request concurrency. */
-export const PROVIDER_ENVIRONMENT = ['JEV_API_KEY', 'TYPESAFE_API_KEY', 'OPENROUTER_API_KEY', 'TYPESAFE_BASE_URL', 'JEV_MODEL', 'JEV_TIMEOUT_MS', 'JEV_CONCURRENCY'] as const;
 
 export type JevSettings = { apiKey: string; baseUrl: string; model: string; timeoutMs: number; concurrency: number };
 /** Model, request timeout, and request concurrency from the project configuration file; the environment overrides each. */
@@ -84,11 +82,6 @@ export function jevFromEnv(signal?: AbortSignal, env: NodeJS.ProcessEnv = proces
   return new Jev({ ...jevSettings(env), signal });
 }
 
-/** The provider variables that are set, for forwarding to a child process. */
-export function providerEnvironment(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  return Object.fromEntries(PROVIDER_ENVIRONMENT.flatMap(name => env[name] ? [[name, env[name]]] : []));
-}
-
 function systemOneEndpoint(baseUrl: string): string {
   let url: URL;
   try { url = new URL(baseUrl); } catch { throw new Error('TYPESAFE_BASE_URL must be an absolute URL.'); }
@@ -103,7 +96,7 @@ function systemOneEndpoint(baseUrl: string): string {
   return `${url.origin}${url.pathname.replace(/\/+$/, '')}/v1/systemone`;
 }
 
-export class Jev implements Evaluator, TypedEvaluator {
+export class Jev implements Evaluator {
   readonly model: string;
   readonly endpoint: string;
   constructor(private options: { apiKey: string; model?: string; baseUrl?: string; fetch?: typeof fetch; signal?: AbortSignal; timeoutMs?: number }) {
@@ -112,10 +105,8 @@ export class Jev implements Evaluator, TypedEvaluator {
     this.endpoint = systemOneEndpoint(options.baseUrl ?? TYPESAFE_BASE_URL);
   }
 
-  async evaluate(state: unknown, questions: Record<string, Choice>, signal?: AbortSignal): Promise<Response>;
-  async evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<TypedResponse>;
   /** Aborting the client's signal or the per-call `request` signal cancels the request, including its retries. */
-  async evaluate(state: unknown, questions: Record<string, Question>, request?: AbortSignal): Promise<TypedResponse> {
+  async evaluate(state: unknown, questions: Record<string, Question>, request?: AbortSignal): Promise<Response> {
     assertSafeOutbound(state);
     const body = JSON.stringify({ model: this.model, state, questions });
     if (Buffer.byteLength(body) > 180_000) throw new Error('Review request exceeds the local 180 KB request budget. Reduce the review scope.');
@@ -134,7 +125,7 @@ export class Jev implements Evaluator, TypedEvaluator {
     }
   }
 
-  private async send(body: string, questions: Record<string, Question>, signal: AbortSignal): Promise<TypedResponse> {
+  private async send(body: string, questions: Record<string, Question>, signal: AbortSignal): Promise<Response> {
     const request = this.options.fetch ?? fetch;
     for (let attempt = 1; ; attempt++) {
       signal.throwIfAborted();

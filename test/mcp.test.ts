@@ -10,7 +10,7 @@ import { z } from 'zod';
 import { createServer, ExpiringCache } from '../src/mcp.js';
 import { qualityEvaluationSchema } from '../src/quality.js';
 import { reportSchema } from '../src/schema.js';
-import type { TypedEvaluator } from '../src/domain.js';
+import type { Evaluator } from '../src/domain.js';
 import { judgeNotSupported, repository, typedFixture } from './helpers.js';
 
 async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
@@ -21,7 +21,7 @@ async function connect(t: { after: (fn: () => Promise<void>) => void }, server: 
   return client;
 }
 
-const fixtureEvaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+const fixtureEvaluator: Evaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
 
 test('MCP v2 stdio handshake, schemas, preview and stale-snapshot rejection', async t => {
   const repo = await repository(); t.after(repo.cleanup);

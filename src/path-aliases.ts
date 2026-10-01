@@ -15,7 +15,7 @@ type Merged = { baseUrl?: Setting<string>; paths?: Setting<Record<string, string
 type Parsed = { extends: string[]; own: Merged };
 
 /** Parses JSON with comments and trailing commas, as tsconfig files allow. Never evaluates code. */
-export function parseJsonc(text: string): unknown {
+function parseJsonc(text: string): unknown {
   let result = '';
   let index = text.charCodeAt(0) === 0xfeff ? 1 : 0;
   const closer = /(?:\s|\/\/[^\n]*|\/\*[\s\S]*?\*\/)*[}\]]/y;
