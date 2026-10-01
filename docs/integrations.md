@@ -27,7 +27,7 @@ Load the complete `skills/tracecheck/` directory through the client's skill supp
 
 Cursor discovers local stdio MCP servers from either project `.cursor/mcp.json` or global `~/.cursor/mcp.json`. Add the `tracecheck` entry inside the existing `mcpServers` object; preserve every other server entry.
 
-Point Cursor at the published 0.4.0 runtime so it matches the included four-tool skill:
+Point Cursor at the published 0.4.1 runtime so it matches the included four-tool skill:
 
 ```json
 {
@@ -35,7 +35,7 @@ Point Cursor at the published 0.4.0 runtime so it matches the included four-tool
     "tracecheck": {
       "type": "stdio",
       "command": "npx",
-      "args": ["--yes", "@bmccarn/tracecheck@0.4.0", "mcp"],
+      "args": ["--yes", "@bmccarn/tracecheck@0.4.1", "mcp"],
       "env": {
         "TYPESAFE_API_KEY": "${env:TYPESAFE_API_KEY}"
       }
@@ -44,7 +44,7 @@ Point Cursor at the published 0.4.0 runtime so it matches the included four-tool
 }
 ```
 
-To run a source checkout instead, for changes on `main` that are not in 0.4.0, replace only `command` and `args`:
+To run a source checkout instead, for changes on `main` that are not in 0.4.1, replace only `command` and `args`:
 
 ```json
 "command": "node",
@@ -53,20 +53,20 @@ To run a source checkout instead, for changes on `main` that are not in 0.4.0, r
 
 Do not pair the four-tool skill with the `0.2.0` runtime, which predates this integration. To use `JEV_API_KEY` instead, replace the environment entry with `"JEV_API_KEY": "${env:JEV_API_KEY}"`. To use Jev through OpenRouter, replace the environment entry with `"OPENROUTER_API_KEY": "${env:OPENROUTER_API_KEY}"`. Set the chosen variable in the environment that launches Cursor; GUI-launched Cursor may not inherit an interactive shell profile. Keep the secret out of `mcp.json`, repository files, and chat. Installing or running the npm package does **not** register either this MCP server or a Cursor skill.
 
-Copy the complete skill directory, not only `SKILL.md`, from the same version as the configured runtime to one discovered Cursor location. For 0.4.0, unpack the npm package and copy its entire skill folder:
+Copy the complete skill directory, not only `SKILL.md`, from the same version as the configured runtime to one discovered Cursor location. For 0.4.1, unpack the npm package and copy its entire skill folder:
 
 ```sh
-npm pack @bmccarn/tracecheck@0.4.0
-mkdir -p /tmp/tracecheck-0.4.0
-tar -xzf bmccarn-tracecheck-0.4.0.tgz -C /tmp/tracecheck-0.4.0
+npm pack @bmccarn/tracecheck@0.4.1
+mkdir -p /tmp/tracecheck-0.4.1
+tar -xzf bmccarn-tracecheck-0.4.1.tgz -C /tmp/tracecheck-0.4.1
 
 # Global on this machine
 mkdir -p ~/.cursor/skills/tracecheck
-cp -R /tmp/tracecheck-0.4.0/package/skills/tracecheck/. ~/.cursor/skills/tracecheck/
+cp -R /tmp/tracecheck-0.4.1/package/skills/tracecheck/. ~/.cursor/skills/tracecheck/
 
 # Or, for this project only
 mkdir -p /path/to/project/.cursor/skills/tracecheck
-cp -R /tmp/tracecheck-0.4.0/package/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
+cp -R /tmp/tracecheck-0.4.1/package/skills/tracecheck/. /path/to/project/.cursor/skills/tracecheck/
 ```
 
 If Cursor runs a source checkout, copy `skills/tracecheck/` from that checkout instead. The copied directory must retain `SKILL.md` and `references/tool-usage.md`. This is a manual Cursor integration, not a native Cursor marketplace plugin or an automatic client-configuration change.
