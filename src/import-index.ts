@@ -6,10 +6,8 @@ import { FileTally, importsFor, isTest } from './evidence.js';
 import { createPathAliasLoader, type PathAliases } from './path-aliases.js';
 import { failureReason, hasSecret, isInside, readSourceFile, type FileIdentity } from './safety.js';
 
-type Fingerprint = FileIdentity;
-
 // `aliases` keys the path alias settings the edges were resolved with.
-type Entry = { fingerprint: Fingerprint; aliases: string; edges: string[] };
+type Entry = { fingerprint: FileIdentity; aliases: string; edges: string[] };
 type Aliases = { key: string; aliases?: PathAliases };
 type RootCache = { identity: string; universe: string; known: string; entries: Map<string, Entry> };
 
@@ -17,12 +15,12 @@ const MAX_CACHE_ROOTS = 8;
 const MAX_CACHE_ENTRIES = 100_000;
 const caches = new Map<string, RootCache>();
 
-function fingerprintMatches(left: Fingerprint, right: Fingerprint): boolean {
+function fingerprintMatches(left: FileIdentity, right: FileIdentity): boolean {
   return left.physical === right.physical && left.dev === right.dev && left.ino === right.ino
     && left.size === right.size && left.mtimeMs === right.mtimeMs && left.ctimeMs === right.ctimeMs;
 }
 
-async function metadata(root: string, path: string, signal?: AbortSignal): Promise<Fingerprint> {
+async function metadata(root: string, path: string, signal?: AbortSignal): Promise<FileIdentity> {
   signal?.throwIfAborted();
   const absolute = resolve(root, path);
   if (!isInside(root, absolute)) throw new Error('External path');
@@ -38,21 +36,15 @@ async function metadata(root: string, path: string, signal?: AbortSignal): Promi
 function interleave(paths: string[], changedPaths: string[]): string[] {
   const changed = new Set(changedPaths);
   const changedDirectories = new Set(changedPaths.map(path => posix.dirname(path)));
-  const changedFirst = paths.filter(path => changed.has(path));
-  const application = [
-    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && !isTest(path)),
-    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && !isTest(path)),
-  ];
-  const tests = [
-    ...paths.filter(path => !changed.has(path) && changedDirectories.has(posix.dirname(path)) && isTest(path)),
-    ...paths.filter(path => !changed.has(path) && !changedDirectories.has(posix.dirname(path)) && isTest(path)),
-  ];
-  const result = [...changedFirst];
+  const near = (path: string) => changedDirectories.has(posix.dirname(path));
+  const unchanged = paths.filter(path => !changed.has(path));
+  const nearFirst = (group: string[]) => [...group.filter(near), ...group.filter(path => !near(path))];
+  const application = nearFirst(unchanged.filter(path => !isTest(path)));
+  const tests = nearFirst(unchanged.filter(path => isTest(path)));
+  const result = paths.filter(path => changed.has(path));
   for (let index = 0; index < Math.max(application.length, tests.length); index++) {
-    const applicationPath = application[index];
-    const test = tests[index];
-    if (applicationPath) result.push(applicationPath);
-    if (test) result.push(test);
+    if (application[index]) result.push(application[index]!);
+    if (tests[index]) result.push(tests[index]!);
   }
   return result;
 }
@@ -64,15 +56,15 @@ function boundedCache(root: string, cache: RootCache): void {
 }
 
 type MetadataResult =
-  | { kind: 'metadata'; fingerprint: Fingerprint; aliases: Aliases }
+  | { kind: 'metadata'; fingerprint: FileIdentity; aliases: Aliases }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
 type Indexed =
   | { kind: 'cached'; edges: string[] }
-  | { kind: 'indexed'; fingerprint: Fingerprint; aliases: string; edges: string[] }
+  | { kind: 'indexed'; fingerprint: FileIdentity; aliases: string; edges: string[] }
   | { kind: 'omitted'; reason: string }
   | { kind: 'interrupted' };
-type Admission = Indexed | { kind: 'read'; fingerprint: Fingerprint; aliases: Aliases };
+type Admission = Indexed | { kind: 'read'; fingerprint: FileIdentity; aliases: Aliases };
 
 const INDEX_IO_CONCURRENCY = 16;
 
@@ -145,7 +137,7 @@ export async function buildImportIndex(options: {
     if (cached && fingerprintMatches(cached.fingerprint, result.fingerprint) && cached.aliases === result.aliases.key) return { kind: 'cached', edges: cached.edges };
     return { kind: 'read', fingerprint: result.fingerprint, aliases: result.aliases };
   };
-  const read = async (path: string, fingerprint: Fingerprint, aliases: Aliases): Promise<Indexed> => {
+  const read = async (path: string, fingerprint: FileIdentity, aliases: Aliases): Promise<Indexed> => {
     try {
       const { content, identity } = await readSourceFile(physicalRoot, path, signal);
       if (content.includes('\0')) throw new Error('Binary file');

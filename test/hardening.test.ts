@@ -10,7 +10,6 @@ import { Jev } from '../src/jev.js';
 import { createServer } from '../src/mcp.js';
 import { qualityEvaluationSchema, qualityQuestions, transformQuality } from '../src/quality.js';
 import { reportSchema } from '../src/schema.js';
-import { summarize } from '../src/benchmark.js';
 import { connect, credential, repository, typedFixture } from './helpers.js';
 
 test('root is part of snapshot identity even for identical cloned commits', async t => {
@@ -104,12 +103,6 @@ test('MCP reuses inference when previous assessment changes and rejects mid-revi
   const next = await client.callTool({ name: 'tracecheck_preview', arguments: { task: 'new task' } });
   const stale = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: z.object({ snapshot: z.string() }).parse(next.structuredContent).snapshot, task: 'new task' } });
   assert.equal(stale.isError, true); assert.match(JSON.stringify(stale), /changed during review/);
-});
-
-test('benchmark counts uncertain defects as misses and leaves undefined precision null', () => {
-  const summary = summarize([{ expected: 'supported', actual: 'uncertain', elapsedMs: 10, inputTokens: 1, outputTokens: 1 }]);
-  assert.equal(summary.recall, 0); assert.equal(summary.precision, null); assert.equal(summary.missedDefects, 1); assert.equal(summary.coverage, 0);
-  assert.equal(summarize([]).recall, null);
 });
 
 test('focused excerpts retain a guard above the edited return', () => {

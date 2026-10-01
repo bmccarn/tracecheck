@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
-import type { Choice, Evaluator, Question, ReviewPlan, TypedAnswer, TypedEvaluator, TypedResponse } from '../src/domain.js';
+import type { Evaluator, Question, Response, ReviewPlan, TypedAnswer } from '../src/domain.js';
 import { findCandidates } from '../src/checks.js';
 import type { createServer } from '../src/mcp.js';
 
@@ -38,8 +38,8 @@ export function planFor(content = 'export function ratio(a: number, b: number) {
     limitations: [], notes: [] };
 }
 
-export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evaluator {
-  return { async evaluate(_state: unknown, questions: Record<string, Choice>) {
+export function fixtureEvaluator(choice = 'supported', confidence = 0.95) {
+  return { async evaluate(_state: unknown, questions: Record<string, Question>) {
     return { model: 'offline-fixture-not-jev', usage: { input_tokens: 0, output_tokens: 0 },
       answers: Object.fromEntries(Object.entries(questions).map(([id, question]) => {
         const selected = id.endsWith('_impact') ? 'medium' : choice;
@@ -50,7 +50,7 @@ export function fixtureEvaluator(choice = 'supported', confidence = 0.95): Evalu
   } };
 }
 
-export async function typedFixture(questions: Record<string, Question>): Promise<TypedResponse> {
+export async function typedFixture(questions: Record<string, Question>): Promise<Response> {
   const answers: Record<string, TypedAnswer> = {};
   for (const [id, question] of Object.entries(questions)) {
     if (question.type === 'noul') { answers[id] = { type: 'noul', noul: 0.95 }; continue; }
@@ -68,7 +68,7 @@ export async function typedFixture(questions: Record<string, Question>): Promise
 }
 
 /** Answers every question with `typedFixture`. */
-export const typedEvaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
+export const typedEvaluator: Evaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
 
 /** Connects an in-memory MCP client to `server`; both close after the test. */
 export async function connect(t: { after: (fn: () => Promise<void>) => void }, server: ReturnType<typeof createServer>) {
@@ -80,7 +80,7 @@ export async function connect(t: { after: (fn: () => Promise<void>) => void }, s
 }
 
 /** Judges every source-check candidate in `response` not supported, with certainty. */
-export function judgeNotSupported(response: TypedResponse): void {
+export function judgeNotSupported(response: Response): void {
   for (const [id, answer] of Object.entries(response.answers)) {
     if (!id.endsWith('_assessment') || answer.type !== 'choice') continue;
     answer.choice = 'not_supported';

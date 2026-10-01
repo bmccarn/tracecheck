@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { z } from 'zod';
-import type { answerSchema } from './jev.js';
+import type { answerSchema, responseSchema } from './jev.js';
 import type { candidateSchema, rangeSchema, reportSchema } from './schema.js';
 
 export const CHECK_VERSION = '1';
@@ -31,17 +31,11 @@ export type Answer = z.infer<typeof answerSchema>;
 export type Noul = { type: 'noul'; instructions: string; criteria: { true: string; false: string } };
 export type Score = { type: 'score'; instructions: string; criteria: string[] };
 export type Question = Choice | Noul | Score;
-export type TypedAnswer = Answer | { type: 'noul'; noul: number }
-  | { type: 'score'; score: number; confidence: number; probabilities: Record<string, number>; legend: Record<string, string> };
-export type Response = {
-  model: string; answers: Record<string, Answer>;
-  usage: { input_tokens: number; output_tokens: number };
-};
+export type Response = z.infer<typeof responseSchema>;
+export type TypedAnswer = Response['answers'][string];
 /** An evaluator rejects promptly when `signal` aborts, so a cancelled review stops every request in flight. */
 export interface Evaluator {
-  evaluate(state: unknown, questions: Record<string, Choice>, signal?: AbortSignal): Promise<Response>;
+  evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<Response>;
 }
-export type TypedResponse = Omit<Response, 'answers'> & { answers: Record<string, TypedAnswer> };
-export interface TypedEvaluator { evaluate(state: unknown, questions: Record<string, Question>, signal?: AbortSignal): Promise<TypedResponse> }
 export type Report = z.infer<typeof reportSchema>;
 export type Decision = Report['decisions'][number];

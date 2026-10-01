@@ -20972,8 +20972,8 @@ var init_jev = __esm({
         assertSafeOutbound(state);
         const body = JSON.stringify({ model: this.model, state, questions });
         if (Buffer.byteLength(body) > 18e4) throw new Error("Review request exceeds the local 180 KB request budget. Reduce the review scope.");
-        const timeoutMs2 = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-        const timeout = deadline(timeoutMs2, `Jev request timed out after ${timeoutMs2} ms. Set JEV_TIMEOUT_MS to allow more time.`);
+        const timeoutMs = this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+        const timeout = deadline(timeoutMs, `Jev request timed out after ${timeoutMs} ms. Set JEV_TIMEOUT_MS to allow more time.`);
         const callers = [this.options.signal, request].filter((value) => value !== void 0);
         const caller = callers.length > 1 ? AbortSignal.any(callers) : callers[0];
         const signal = caller ? AbortSignal.any([caller, timeout]) : timeout;
@@ -21042,7 +21042,7 @@ var init_jev = __esm({
 });
 
 // src/quality/dimensions.ts
-var definitions, dimensions, dimensionKeys;
+var definitions, dimensions;
 var init_dimensions = __esm({
   "src/quality/dimensions.ts"() {
     "use strict";
@@ -21151,7 +21151,6 @@ var init_dimensions = __esm({
       conditional: ["performance", "scalability", "compatibility", "observability"].includes(key),
       concerns: Object.fromEntries(concerns.map(([id, description, action]) => [id, { description, action }]))
     }));
-    dimensionKeys = dimensions.map((dimension) => dimension.key);
   }
 });
 
@@ -36436,23 +36435,23 @@ var init_checks3 = __esm({
 });
 
 // src/collection-options.ts
-var timeoutMs, collectionOptionsSchema, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_COLLECTION_TIMEOUT_MS, collectionSettingsSchema, reviewScopeFields, DEFAULT_BASE, reviewTimeoutSchema, DEFAULT_REVIEW_TIMEOUT_MS, VERIFY_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, maxRequestsSchema;
+var timeoutSchema, collectionOptionsSchema, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_COLLECTION_TIMEOUT_MS, collectionSettingsSchema, reviewScopeFields, DEFAULT_BASE, DEFAULT_REVIEW_TIMEOUT_MS, VERIFY_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, maxRequestsSchema;
 var init_collection_options = __esm({
   "src/collection-options.ts"() {
     "use strict";
     init_zod();
-    timeoutMs = external_exports.number().int().positive().max(36e5);
+    timeoutSchema = external_exports.number().int().positive().max(36e5);
     collectionOptionsSchema = external_exports.object({
       maxIndexFiles: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
       maxIndexBytes: external_exports.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-      indexTimeoutMs: timeoutMs.optional(),
-      collectionTimeoutMs: timeoutMs.optional()
+      indexTimeoutMs: timeoutSchema.optional(),
+      collectionTimeoutMs: timeoutSchema.optional()
     }).strict();
     DEFAULT_INDEX_TIMEOUT_MS = 2e4;
     DEFAULT_COLLECTION_TIMEOUT_MS = 12e4;
     collectionSettingsSchema = collectionOptionsSchema.extend({
-      indexTimeoutMs: timeoutMs.default(DEFAULT_INDEX_TIMEOUT_MS),
-      collectionTimeoutMs: timeoutMs.default(DEFAULT_COLLECTION_TIMEOUT_MS)
+      indexTimeoutMs: timeoutSchema.default(DEFAULT_INDEX_TIMEOUT_MS),
+      collectionTimeoutMs: timeoutSchema.default(DEFAULT_COLLECTION_TIMEOUT_MS)
     });
     reviewScopeFields = {
       base: external_exports.string().min(1),
@@ -36462,7 +36461,6 @@ var init_collection_options = __esm({
       collection: collectionOptionsSchema
     };
     DEFAULT_BASE = "HEAD";
-    reviewTimeoutSchema = timeoutMs;
     DEFAULT_REVIEW_TIMEOUT_MS = 3e5;
     VERIFY_TIMEOUT_MS = 9e4;
     DEFAULT_MAX_REQUESTS = 50;
@@ -36879,21 +36877,15 @@ async function metadata(root, path, signal) {
 function interleave(paths, changedPaths) {
   const changed = new Set(changedPaths);
   const changedDirectories = new Set(changedPaths.map((path) => posix3.dirname(path)));
-  const changedFirst = paths.filter((path) => changed.has(path));
-  const application = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && !isTest(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && !isTest(path))
-  ];
-  const tests = [
-    ...paths.filter((path) => !changed.has(path) && changedDirectories.has(posix3.dirname(path)) && isTest(path)),
-    ...paths.filter((path) => !changed.has(path) && !changedDirectories.has(posix3.dirname(path)) && isTest(path))
-  ];
-  const result = [...changedFirst];
+  const near = (path) => changedDirectories.has(posix3.dirname(path));
+  const unchanged = paths.filter((path) => !changed.has(path));
+  const nearFirst = (group) => [...group.filter(near), ...group.filter((path) => !near(path))];
+  const application = nearFirst(unchanged.filter((path) => !isTest(path)));
+  const tests = nearFirst(unchanged.filter((path) => isTest(path)));
+  const result = paths.filter((path) => changed.has(path));
   for (let index = 0; index < Math.max(application.length, tests.length); index++) {
-    const applicationPath = application[index];
-    const test = tests[index];
-    if (applicationPath) result.push(applicationPath);
-    if (test) result.push(test);
+    if (application[index]) result.push(application[index]);
+    if (tests[index]) result.push(tests[index]);
   }
   return result;
 }
@@ -37582,7 +37574,7 @@ var init_project_config = __esm({
     isCredentialKey = (name) => words(name).some((word) => CREDENTIAL_WORDS.has(word));
     projectConfigSchema = external_exports.object({
       ...reviewScopeFields,
-      reviewTimeoutMs: reviewTimeoutSchema,
+      reviewTimeoutMs: timeoutSchema,
       model: modelSchema,
       requestTimeoutMs: requestTimeoutSchema,
       requestConcurrency: requestConcurrencySchema,
@@ -51816,7 +51808,7 @@ function createServer(repo, evaluatorFactory) {
     description: "Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.",
     inputSchema: external_exports.object({
       ...scope,
-      reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
+      reviewTimeoutMs: timeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
       maxRequests: maxRequestsSchema.optional().describe(`Most provider requests this review may make; a larger review is refused before any request. Defaults to ${CONFIG_FILE}, which may only lower it, then ${DEFAULT_MAX_REQUESTS}. Compare with the preview estimate.`),
       previousEvaluation: previousEvaluationSchema.optional(),
       snapshot: external_exports.string().length(64).describe("Snapshot returned by tracecheck_preview. A changed snapshot is rejected.")
@@ -52117,11 +52109,11 @@ function positiveSafeInteger(value, flag) {
   if (value === void 0) return void 0;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive safe integer.`);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${flag} must be a positive safe integer.`);
   return parsed;
 }
 function timeoutFlag(value, flag) {
-  return validate2(reviewTimeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
+  return validate2(timeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
 }
 function collectionOptions(values) {
   return collectionOptionsSchema.parse({

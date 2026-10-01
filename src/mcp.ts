@@ -8,8 +8,8 @@ import { Jev, jevFromEnv, jevSettings } from './jev.js';
 import { applyPreviousEvaluation, estimateReview, isIncomplete, reviewAll } from './review.js';
 import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema, qualityEvaluationSchema } from './quality.js';
 import { reportSchema } from './schema.js';
-import { type DiscoveryScope, type Report, type TypedEvaluator } from './domain.js';
-import { DEFAULT_MAX_REQUESTS, maxRequestsSchema, reviewScopeFields, reviewTimeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
+import { type DiscoveryScope, type Report, type Evaluator } from './domain.js';
+import { DEFAULT_MAX_REQUESTS, maxRequestsSchema, reviewScopeFields, timeoutSchema, VERIFY_TIMEOUT_MS } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { deadline } from './deadline.js';
 import { ReviewProgress } from './progress.js';
@@ -109,7 +109,7 @@ function progressFor(ctx: ServerContext) {
   return { review: progress, sent: () => sent };
 }
 
-export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSignal) => TypedEvaluator) {
+export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSignal) => Evaluator) {
   const server = new McpServer({ name: 'tracecheck', version: releaseVersion });
   const cache = new ExpiringCache<Report>(CACHE_LIMIT, CACHE_TTL_MS);
   const previewScopes = new ExpiringCache<DiscoveryScope>(CACHE_LIMIT, CACHE_TTL_MS);
@@ -179,7 +179,7 @@ export function createServer(repo?: string, evaluatorFactory?: (signal: AbortSig
   });
   server.registerTool('tracecheck_review', {
     description: 'Review all previewed change packets with bounded evidence and individual packet quality assessments using Jev. Sends collected source and base versions to the configured provider: TypeSafe, OpenRouter, or the endpoint in TYPESAFE_BASE_URL. Optional previousEvaluation is compared only for a single-packet quality result. Never edits or executes code.',
-    inputSchema: z.object({ ...scope, reviewTimeoutMs: reviewTimeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
+    inputSchema: z.object({ ...scope, reviewTimeoutMs: timeoutSchema.optional().describe(`Maximum review duration in milliseconds. Defaults to ${CONFIG_FILE}, then 300000.`),
       maxRequests: maxRequestsSchema.optional().describe(`Most provider requests this review may make; a larger review is refused before any request. Defaults to ${CONFIG_FILE}, which may only lower it, then ${DEFAULT_MAX_REQUESTS}. Compare with the preview estimate.`),
       previousEvaluation: previousEvaluationSchema.optional(), snapshot: z.string().length(64).describe('Snapshot returned by tracecheck_preview. A changed snapshot is rejected.') }),
     outputSchema: z.object({

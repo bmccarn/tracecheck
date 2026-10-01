@@ -1,6 +1,6 @@
 import { CHECK_VERSION, POLICY_VERSION, hash } from './domain.js';
 import { SOURCE_GATES } from './policy.js';
-import type { Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedAnswer, TypedEvaluator, TypedResponse } from './domain.js';
+import type { Candidate, Choice, Decision, Evaluator, Question, Report, ReviewPacket, ReviewPlan, Source, TypedAnswer, Response } from './domain.js';
 import { DEFAULT_CONCURRENCY } from './jev.js';
 import { comparableQuality, compareQuality, qualityQuestions, transformQuality, renderQuality } from './quality.js';
 import type { PreviousEvaluation } from './quality.js';
@@ -264,14 +264,14 @@ function reportFor(plan: ReviewPlan, started: number, decisions: Decision[], mod
     packetCount: plan.packets.length, decisions, limitations, notes, usage };
 }
 
-type Outcome = { response: TypedResponse } | { error: unknown };
+type Outcome = { response: Response } | { error: unknown };
 
 /**
  * Sends requests with at most `limit` in flight and returns their outcomes in plan order. Every call receives `signal`;
  * an abort rejects with the signal's reason and starts no further request. `onProgress` hears the plan, then each
  * finished request in completion order, so its count only rises.
  */
-async function evaluateAll(evaluator: TypedEvaluator, requests: PlannedRequest[], limit: number, signal?: AbortSignal,
+async function evaluateAll(evaluator: Evaluator, requests: PlannedRequest[], limit: number, signal?: AbortSignal,
   onProgress?: ReviewOptions['onProgress']): Promise<Outcome[]> {
   const outcomes: Outcome[] = new Array(requests.length);
   let next = 0;
@@ -311,7 +311,7 @@ export function markStale(report: Report): void {
   if (report.status === 'no_findings') report.status = 'inconclusive';
 }
 
-export function isStale(report: Report): boolean {
+function isStale(report: Report): boolean {
   return report.limitations.includes(STALE);
 }
 
@@ -331,7 +331,7 @@ export type ReviewOptions = {
  * inconclusive report that names the unevaluated work; when every request fails, the first failure is thrown. Aborting
  * `signal` rejects the review and every in-flight request.
  */
-async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: Record<string, Question> | undefined,
+async function orchestrate(plan: ReviewPlan, evaluator: Evaluator, broad: Record<string, Question> | undefined,
   options: ReviewOptions & { previousEvaluation?: PreviousEvaluation }): Promise<Report> {
   const started = Date.now();
   const { signal, concurrency = DEFAULT_CONCURRENCY, onProgress, maxRequests } = options;
@@ -364,7 +364,7 @@ async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: R
   for (const [index, request] of requests.entries()) {
     const outcome = outcomes[index]!;
     const packetId = request.evidence.packet.id;
-    let response: TypedResponse;
+    let response: Response;
     let decided: Decision[];
     const answers: Record<string, TypedAnswer> = {};
     try {
@@ -440,13 +440,13 @@ async function orchestrate(plan: ReviewPlan, evaluator: TypedEvaluator, broad: R
   return report;
 }
 
-/** Source checks only, as used by verification and the accuracy benchmark. */
+/** Source checks only, as used by verification and the demo. */
 export function review(plan: ReviewPlan, evaluator: Evaluator, options: ReviewOptions = {}): Promise<Report> {
   return orchestrate(plan, evaluator, undefined, options);
 }
 
 /** Source checks plus a broad quality review per packet. */
-export function reviewAll(plan: ReviewPlan, evaluator: TypedEvaluator, options: ReviewOptions & { previousEvaluation?: PreviousEvaluation } = {}): Promise<Report> {
+export function reviewAll(plan: ReviewPlan, evaluator: Evaluator, options: ReviewOptions & { previousEvaluation?: PreviousEvaluation } = {}): Promise<Report> {
   return orchestrate(plan, evaluator, qualityQuestions(), options);
 }
 

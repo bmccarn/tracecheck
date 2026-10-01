@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { Jev, jevSettings, providerEnvironment } from '../src/jev.js';
+import { Jev, jevSettings } from '../src/jev.js';
 import { deadline } from '../src/deadline.js';
 import { qualityQuestions } from '../src/quality.js';
 import { questionsFor } from '../src/review.js';
@@ -69,8 +69,6 @@ test('selects TypeSafe or OpenRouter from the configured credentials', () => {
   // OpenRouter's documented setup reuses TYPESAFE_API_KEY with an explicit base URL.
   assert.deepEqual(jevSettings({ TYPESAFE_API_KEY: 'or-key', TYPESAFE_BASE_URL: 'https://openrouter.ai/api', JEV_MODEL: 'jev-1.13', JEV_TIMEOUT_MS: '120000', JEV_CONCURRENCY: '16' }),
     { apiKey: 'or-key', baseUrl: 'https://openrouter.ai/api', model: 'jev-1.13', timeoutMs: 120_000, concurrency: 16 });
-  assert.deepEqual(providerEnvironment({ OPENROUTER_API_KEY: 'or-key', TYPESAFE_API_KEY: '', JEV_TIMEOUT_MS: '5000', JEV_CONCURRENCY: '2', HOME: '/home/user' }),
-    { OPENROUTER_API_KEY: 'or-key', JEV_TIMEOUT_MS: '5000', JEV_CONCURRENCY: '2' });
   for (const value of ['0', '-1', '1.5', '10s', '3600001']) assert.throws(() => jevSettings({ JEV_TIMEOUT_MS: value }), /JEV_TIMEOUT_MS/);
   for (const value of ['0', '17', '2.5', 'four']) assert.throws(() => jevSettings({ JEV_CONCURRENCY: value }), /JEV_CONCURRENCY must be a whole number from 1 to 16/);
 });

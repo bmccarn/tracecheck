@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import {
   DEFAULT_BASE, DEFAULT_COLLECTION_TIMEOUT_MS, DEFAULT_INDEX_TIMEOUT_MS, DEFAULT_MAX_REQUESTS, DEFAULT_REVIEW_TIMEOUT_MS,
-  maxRequestsSchema, reviewScopeFields, reviewTimeoutSchema, type CollectionOptions,
+  maxRequestsSchema, reviewScopeFields, timeoutSchema, type CollectionOptions,
 } from './collection-options.js';
 import { gitRoot } from './git-context.js';
 import { DEFAULT_CONCURRENCY, DEFAULT_TIMEOUT_MS, modelSchema, requestConcurrencySchema, requestTimeoutSchema, type ConfiguredJevSettings } from './jev.js';
@@ -20,7 +20,7 @@ const isCredentialKey = (name: string) => words(name).some(word => CREDENTIAL_WO
 /** Every key is optional. Values use the same schemas as the CLI flags and MCP arguments. */
 export const projectConfigSchema = z.object({
   ...reviewScopeFields,
-  reviewTimeoutMs: reviewTimeoutSchema,
+  reviewTimeoutMs: timeoutSchema,
   model: modelSchema,
   requestTimeoutMs: requestTimeoutSchema,
   requestConcurrency: requestConcurrencySchema,
