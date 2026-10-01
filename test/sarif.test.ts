@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { reviewAll } from '../src/review.js';
 import { toSarif } from '../src/sarif.js';
 import type { Decision, Report } from '../src/domain.js';
-import { planFor, typedFixture } from './helpers.js';
+import { planFor, typedEvaluator } from './helpers.js';
 
 async function supportedReport(): Promise<{ report: Report; decision: Decision }> {
-  const report = await reviewAll(planFor(), { evaluate: async (_state, questions) => typedFixture(questions) });
+  const report = await reviewAll(planFor(), typedEvaluator);
   const [decision] = report.decisions;
   assert.equal(decision?.status, 'supported');
   return { report, decision: decision! };

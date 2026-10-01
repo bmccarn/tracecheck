@@ -22,7 +22,7 @@ test('streams current and base ranges and baseline bytes for additions, deletion
   await writeFile(join(repo.root, 'modified.ts'), 'one\ntwo\nthree\n');
   await writeFile(join(repo.root, 'deleted.ts'), 'gone\nnow\n');
   await writeFile(join(repo.root, 'renamed.ts'), 'old name\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add context fixtures');
+  repo.commit('Add context fixtures');
   const base = repo.git('rev-parse', 'HEAD').trim();
   await writeFile(join(repo.root, 'modified.ts'), 'one\nTWO\nthree\n');
   await writeFile(join(repo.root, 'added.ts'), 'added\n');
@@ -48,7 +48,7 @@ test('streams current and base ranges and baseline bytes for additions, deletion
 test('attributes both patch sections of a type change to the same path', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await symlink('target.ts', join(repo.root, 'changed.ts'));
-  repo.git('add', 'changed.ts'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add symlink');
+  repo.git('add', 'changed.ts'); repo.git('commit', '-m', 'Add symlink');
   const base = repo.git('rev-parse', 'HEAD').trim();
   await rm(join(repo.root, 'changed.ts'));
   await writeFile(join(repo.root, 'changed.ts'), 'export const changed = true;\n');
@@ -70,7 +70,7 @@ test('attributes quoted filenames and header-like added source only to requested
   await writeFile(join(repo.root, plain), 'before\n');
   await writeFile(join(repo.root, literal), 'before\n');
   await writeFile(join(repo.root, 'headers.ts'), 'before\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add quoted names');
+  repo.commit('Add quoted names');
   const base = repo.git('rev-parse', 'HEAD').trim();
   repo.git('config', 'core.quotePath', 'false');
   repo.git('config', 'diff.srcPrefix', 'hostile/');
@@ -97,7 +97,7 @@ test('omits binary and oversized baselines without poisoning other files', async
   await writeFile(join(repo.root, 'oversized.ts'), Buffer.alloc(8 * 1024 * 1024 + 1, 65));
   const fakeHeader = `${'a'.repeat(40)} blob 7\nbefore\n`;
   await writeFile(join(repo.root, 'normal.ts'), fakeHeader);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add baseline limits');
+  repo.commit('Add baseline limits');
   const base = repo.git('rev-parse', 'HEAD').trim();
   await writeFile(join(repo.root, 'binary.ts'), 'current\n');
   await writeFile(join(repo.root, 'oversized.ts'), 'current\n');
@@ -115,7 +115,7 @@ test('omits binary and oversized baselines without poisoning other files', async
 test('reports a working-tree change between the raw and patch diffs as retryable', async t => {
   const repo = await repository(); t.after(repo.cleanup);
   await writeFile(join(repo.root, 'stable.ts'), 'export const stable = 1;\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stable file');
+  repo.commit('Add stable file');
   const base = repo.git('rev-parse', 'HEAD').trim();
   await writeFile(join(repo.root, 'average.ts'), 'export const average = 0;\n');
   // A git wrapper edits stable.ts right after the raw diff, so the patch diff has one more section.
@@ -136,7 +136,7 @@ test('reports a working-tree change between the raw and patch diffs as retryable
 async function staleStatRepository() {
   const repo = await repository();
   await writeFile(join(repo.root, 'stable.ts'), 'export const stable = 1;\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stable file');
+  repo.commit('Add stable file');
   // A modification time the index does not record, with the same content, makes `git diff` rewrite the index.
   const past = new Date(Date.now() - 60_000);
   await utimes(join(repo.root, 'stable.ts'), past, past);

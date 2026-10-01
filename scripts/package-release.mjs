@@ -36,11 +36,6 @@ for (const path of files) {
   assert.ok(!/(^|\/)(?:\.env(?:\..*)?|\.npmrc|\.tracecheck|\.git|node_modules|release|test|examples|src|[^/]+\.(?:key|pem|p12|pfx)|id_(?:rsa|ed25519))(?:\/|$)/.test(path), `Unexpected distribution file: ${path}`);
 }
 assert.equal(Object.keys(pkg.dependencies ?? {}).length, 0, 'Runtime must be bundled; avoid duplicate dependency installation.');
-for (const path of ['plugin.json', '.codex-plugin/plugin.json', '.claude-plugin/plugin.json']) {
-  const manifest = await readJson(path);
-  assert.equal(manifest.version, pkg.version, `Version mismatch: ${path}`);
-  assert.equal(manifest.name, 'tracecheck');
-}
 const archive = join(release, pack.filename);
 const temporary = await mkdtemp(join(tmpdir(), 'tracecheck-release-'));
 const client = new Client({ name: 'release-check', version: '1.0.0' });

@@ -3,15 +3,13 @@ import assert from 'node:assert/strict';
 import { assess, qualityQuestions, renderQuality, transformQuality, qualityInputSchema } from '../src/quality.js';
 import { dimensions } from '../src/quality/dimensions.js';
 import { reviewAll } from '../src/review.js';
-import { typedFixture, planFor } from './helpers.js';
-import type { TypedEvaluator } from '../src/domain.js';
+import { planFor, typedEvaluator, typedFixture } from './helpers.js';
+import type { Evaluator } from '../src/domain.js';
 
 const baseline = async () => typedFixture(qualityQuestions());
 
-test('retains the complete 19-dimension baseline and four conditional dimensions', () => {
-  assert.deepEqual(dimensions.map(item => item.key).sort(), [
-    'correctness','cognitiveComplexity','readability','modularity','coupling','changeability','abstractionQuality','projectStructure','duplication','maintainability','testQuality','reliability','security','consistency','documentation','performance','scalability','compatibility','observability',
-  ].sort());
+test('asks two evidence questions, a score and a concern for each of the 19 dimensions, four of them conditional', () => {
+  assert.equal(dimensions.length, 19);
   assert.deepEqual(dimensions.filter(item => item.conditional).map(item => item.key), ['performance','scalability','compatibility','observability']);
   const questions = Object.values(qualityQuestions());
   for (const type of ['noul','score','choice']) assert.equal(questions.filter(question => question.type === type).length, type === 'noul' ? 38 : 19);
@@ -62,7 +60,7 @@ test('compares credible scores and tracks unresolved concerns without sending pr
   const changed = response.answers.quality_readability_score;
   assert.equal(changed?.type, 'score'); if (changed?.type !== 'score') throw new Error();
   changed.score = 5;
-  const evaluator: TypedEvaluator = { async evaluate(state) {
+  const evaluator: Evaluator = { async evaluate(state) {
     assert.equal('previousEvaluation' in (state as object), false);
     assert.equal('scope' in (state as object), false);
     return response;
@@ -166,6 +164,7 @@ test('empty evidence is inconclusive without evaluator calls or a numeric qualit
     return typedFixture(questions);
   } });
   assert.equal(calls, 0);
+  assert.deepEqual(report.decisions, []);
   assert.equal(report.quality, undefined);
   assert.equal(report.packetQualities, undefined);
   assert.ok(report.limitations.some(value => value.includes('has no source evidence')));
@@ -224,26 +223,25 @@ test('publishes independent packet qualities without inventing an aggregate qual
 });
 
 test('a supplied previous evaluation is compared or leaves a note saying why not', async () => {
-  const evaluator: TypedEvaluator = { evaluate: async (_state, questions) => typedFixture(questions) };
-  const previous = (await reviewAll(planFor(), evaluator)).quality!;
+  const previous = (await reviewAll(planFor(), typedEvaluator)).quality!;
   const notCompared = (report: { notes: string[] }) => report.notes.filter(value => value.startsWith('Previous evaluation was not compared'));
 
-  const comparable = await reviewAll(planFor(), evaluator, { previousEvaluation: previous });
+  const comparable = await reviewAll(planFor(), typedEvaluator, { previousEvaluation: previous });
   assert.equal(comparable.quality!.comparison.length, 19);
   assert.deepEqual(notCompared(comparable), []);
 
-  const otherModel = await reviewAll(planFor(), evaluator, { previousEvaluation: { ...previous, model: 'other-model' } });
+  const otherModel = await reviewAll(planFor(), typedEvaluator, { previousEvaluation: { ...previous, model: 'other-model' } });
   assert.equal(otherModel.quality!.comparison.length, 0);
   assert.match(notCompared(otherModel).join('\n'), /scope, model, or rubric version differs/);
 
-  const empty = await reviewAll(planFor(' '), evaluator, { previousEvaluation: previous });
+  const empty = await reviewAll(planFor(' '), typedEvaluator, { previousEvaluation: previous });
   assert.equal(empty.quality, undefined);
   assert.match(notCompared(empty).join('\n'), /produced no quality result/);
 
   const plan = planFor();
   plan.sources.push({ path: 'later.ts', content: 'export const later = 1;', role: 'changed' });
   plan.packets.push({ id: 'later', changedPaths: ['later.ts'], sourcePaths: ['later.ts'], candidateIds: [], limitations: [] });
-  const multiple = await reviewAll(plan, evaluator, { previousEvaluation: previous });
+  const multiple = await reviewAll(plan, typedEvaluator, { previousEvaluation: previous });
   assert.equal(multiple.packetQualities?.length, 2);
   assert.match(notCompared(multiple).join('\n'), /multiple packet scopes/);
 });

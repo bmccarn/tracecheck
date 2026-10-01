@@ -3,7 +3,6 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdir, writeFile, symlink, cp, rm } from 'node:fs/promises';
 import { join } from 'node:path';
-import { Client, InMemoryTransport } from '@modelcontextprotocol/client';
 import { collect } from '../src/collector.js';
 import { focusSource } from '../src/evidence.js';
 import { readSource } from '../src/safety.js';
@@ -11,8 +10,7 @@ import { Jev } from '../src/jev.js';
 import { createServer } from '../src/mcp.js';
 import { qualityEvaluationSchema, qualityQuestions, transformQuality } from '../src/quality.js';
 import { reportSchema } from '../src/schema.js';
-import { summarize } from '../src/benchmark.js';
-import { repository, typedFixture } from './helpers.js';
+import { connect, credential, repository, typedFixture } from './helpers.js';
 
 test('root is part of snapshot identity even for identical cloned commits', async t => {
   const a = await repository(); const b = await repository(); t.after(a.cleanup); t.after(b.cleanup);
@@ -31,7 +29,7 @@ test('large Python edits retain original line anchors, callers, tests, and old-l
   await writeFile(join(repo.root, 'src/pkg/decode.py'), prefix + 'def decode(text):\n    if not text:\n        return None\n    return text\n');
   await writeFile(join(repo.root, 'src/pkg/caller.py'), 'from pkg.decode import decode\ndef use(text):\n    return decode(text)\n');
   await writeFile(join(repo.root, 'tests/test_decode.py'), 'from pkg.decode import decode\ndef test_empty():\n    assert decode("") is None\n');
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Python fixture');
+  repo.commit('Python fixture');
   await writeFile(join(repo.root, 'src/pkg/decode.py'), prefix + 'def decode(text):\n    return text\n');
   const plan = await collect({ repo: repo.root });
   const source = plan.sources.find(source => source.role === 'changed')!;
@@ -61,7 +59,6 @@ test('secret screening protects manual contexts before any HTTP request', async 
   let calls = 0;
   const client = new Jev({ apiKey: 'fixture', fetch: async () => { calls++; throw new Error('Must not send'); } });
   // Assembled at runtime so the repository never contains a literal secret.
-  const credential = ['q7Rk', '2vXw', '9LmZ', 'p4Tb', 'N8sd'].join('');
   await assert.rejects(client.evaluate({ files: [{ path: 'config.ts', content: `const apiKey = "${credential}";` }] }, {}), /Potential credential in config\.ts/);
   assert.equal(calls, 0);
 });
@@ -90,10 +87,7 @@ test('MCP reuses inference when previous assessment changes and rejects mid-revi
     calls++; if (mutate) await writeFile(join(repo.root, 'average.ts'), 'export const average = () => 5;');
     return typedFixture(questions);
   } }));
-  const [a, b] = InMemoryTransport.createLinkedPair();
-  const client = new Client({ name: 'cache-test', version: '1' });
-  t.after(async () => { await client.close(); await server.close(); });
-  await server.connect(b); await client.connect(a);
+  const client = await connect(t, server);
   const preview = await client.callTool({ name: 'tracecheck_preview', arguments: {} });
   const snapshot = z.object({ snapshot: z.string() }).parse(preview.structuredContent).snapshot;
   const first = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot } });
@@ -109,12 +103,6 @@ test('MCP reuses inference when previous assessment changes and rejects mid-revi
   const next = await client.callTool({ name: 'tracecheck_preview', arguments: { task: 'new task' } });
   const stale = await client.callTool({ name: 'tracecheck_review', arguments: { snapshot: z.object({ snapshot: z.string() }).parse(next.structuredContent).snapshot, task: 'new task' } });
   assert.equal(stale.isError, true); assert.match(JSON.stringify(stale), /changed during review/);
-});
-
-test('benchmark counts uncertain defects as misses and leaves undefined precision null', () => {
-  const summary = summarize([{ expected: 'supported', actual: 'uncertain', elapsedMs: 10, inputTokens: 1, outputTokens: 1 }]);
-  assert.equal(summary.recall, 0); assert.equal(summary.precision, null); assert.equal(summary.missedDefects, 1); assert.equal(summary.coverage, 0);
-  assert.equal(summarize([]).recall, null);
 });
 
 test('focused excerpts retain a guard above the edited return', () => {

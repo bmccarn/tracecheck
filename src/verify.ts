@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { lstat, realpath } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
-import { hash, type TypedEvaluator, type Answer } from './domain.js';
+import { hash, type Evaluator, type Answer } from './domain.js';
 import { gitRoot } from './git-context.js';
 import { reportSchema } from './schema.js';
 import { review } from './review.js';
@@ -66,7 +66,7 @@ async function localRoot(repo: string, signal?: AbortSignal): Promise<string> {
 }
 
 /** The agent chooses the concern and evidence; code checks provenance and freshness. */
-export async function verify(raw: VerificationInput, evaluator: TypedEvaluator, signal?: AbortSignal) {
+export async function verify(raw: VerificationInput, evaluator: Evaluator, signal?: AbortSignal) {
   const input = verificationInputSchema.parse(raw);
   assertSafeOutbound(input);
   const evidenceBytes = input.evidence.reduce((n, item) => n + Buffer.byteLength(item.content), 0);

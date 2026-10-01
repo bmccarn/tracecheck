@@ -13,9 +13,9 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { collect } from '../src/collector.js';
-import type { Candidate, ReviewPlan, TypedAnswer, TypedEvaluator } from '../src/domain.js';
+import type { Candidate, ReviewPlan, TypedAnswer, Evaluator } from '../src/domain.js';
 import { Jev, jevSettings } from '../src/jev.js';
-import { dimensionKeys } from '../src/quality/dimensions.js';
+import { dimensions } from '../src/quality/dimensions.js';
 import { QUALITY_GATES, SOURCE_GATES } from '../src/policy.js';
 import { estimateReview, isIncomplete, reviewAll } from '../src/review.js';
 import { cases, expectedChecks, variantNames, type CalibrationCase, type CheckLabel, type Family, type QualityLabels, type Split, type VariantName } from './calibration/cases.js';
@@ -25,6 +25,7 @@ const CURRENT = { probability: SOURCE_GATES.probability, confidence: SOURCE_GATE
 const INPUT_DOLLARS_PER_MILLION = 0.042;
 const REVIEW_TIMEOUT_MS = 300_000;
 const splits: readonly Split[] = ['development', 'holdout'];
+const dimensionKeys = dimensions.map(dimension => dimension.key);
 
 type ChoiceAnswer = Extract<TypedAnswer, { type: 'choice' }>;
 type Context = { runId: string; caseId: string; variant: VariantName; repeat: number };
@@ -212,7 +213,7 @@ async function run(runArgs: string[]): Promise<void> {
       }
     };
     const jev = new Jev({ ...settings, fetch: counted });
-    const evaluator: TypedEvaluator = {
+    const evaluator: Evaluator = {
       async evaluate(state, questions, signal) {
         const response = await jev.evaluate(state, questions, signal);
         record({

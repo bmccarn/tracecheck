@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-const timeoutMs = z.number().int().positive().max(3_600_000);
+export const timeoutSchema = z.number().int().positive().max(3_600_000);
 
 /**
  * Discovery budgets are local resource policies, independent of provider packet limits.
@@ -9,15 +9,15 @@ const timeoutMs = z.number().int().positive().max(3_600_000);
 export const collectionOptionsSchema = z.object({
   maxIndexFiles: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
   maxIndexBytes: z.number().int().positive().max(Number.MAX_SAFE_INTEGER).optional(),
-  indexTimeoutMs: timeoutMs.optional(),
-  collectionTimeoutMs: timeoutMs.optional(),
+  indexTimeoutMs: timeoutSchema.optional(),
+  collectionTimeoutMs: timeoutSchema.optional(),
 }).strict();
 export const DEFAULT_INDEX_TIMEOUT_MS = 20_000;
 export const DEFAULT_COLLECTION_TIMEOUT_MS = 120_000;
 /** Collection options with their built-in defaults applied. */
 export const collectionSettingsSchema = collectionOptionsSchema.extend({
-  indexTimeoutMs: timeoutMs.default(DEFAULT_INDEX_TIMEOUT_MS),
-  collectionTimeoutMs: timeoutMs.default(DEFAULT_COLLECTION_TIMEOUT_MS),
+  indexTimeoutMs: timeoutSchema.default(DEFAULT_INDEX_TIMEOUT_MS),
+  collectionTimeoutMs: timeoutSchema.default(DEFAULT_COLLECTION_TIMEOUT_MS),
 });
 
 export type CollectionOptions = z.input<typeof collectionOptionsSchema>;
@@ -32,7 +32,6 @@ export const reviewScopeFields = {
   collection: collectionOptionsSchema,
 };
 export const DEFAULT_BASE = 'HEAD';
-export const reviewTimeoutSchema = timeoutMs;
 export const DEFAULT_REVIEW_TIMEOUT_MS = 300_000;
 /** Overall deadline for one verification, shared by the CLI and MCP entry points. */
 export const VERIFY_TIMEOUT_MS = 90_000;

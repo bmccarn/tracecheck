@@ -3,13 +3,12 @@
 ## Unreleased
 
 - Both in-repo marketplace catalogs use an HTTPS Git URL, so adding `bmccarn/tracecheck` as a marketplace installs without GitHub SSH keys. The release gates now reject a catalog source that clients may clone over SSH.
+- Removed maintainer-only benchmark and smoke scripts and the live examples; `npm run journey` and `npm run calibrate` cover what they checked. The documentation is shorter: the accuracy and parity pages are gone, and the calibration and validation pages keep only their summaries.
 
 ## 0.4.0 — 2026-09-23
 
-- Promote 0.4.0-rc.1 to the stable release. The 0.4.0-rc.1 entry below lists every change and its upgrade notes.
 - `npm run journey` now stops when the package fails to install. It reports the install failure, writes its summary, and exits `1` instead of reporting dozens of failures in the steps that need the installed bundle.
-
-## 0.4.0-rc.1 — 2026-09-23
+- Release candidate 0.4.0-rc.1 shipped the same changes on npm `next`.
 
 ### Upgrade notes
 
@@ -78,14 +77,7 @@
 - Promote agent-led verification, four-tool MCP integration, and scalable evidence collection to the stable release.
 - Distribute the matching skill and bundled runtime through the release-only Claude Code and Codex marketplace for native installation.
 - Update CI and release workflows to SHA-pinned Node 24 actions, including supported setup-node cache controls, and pin runners to Ubuntu 24.04.
-
-## 0.3.0-rc.2 — 2026-09-17
-
-- Fix the release workflow's npm archive path: an explicit `./release/` prefix prevents npm 11.5.1 from interpreting the archive as a GitHub repository.
-- Retain the immutable `v0.3.0-rc.1` tag; its release job failed before npm authentication or publication.
-
-## 0.3.0-rc.1 — 2026-09-17
-
+- Fix the release workflow's npm archive path: an explicit `./release/` prefix prevents npm 11.5.1 from interpreting the archive as a GitHub repository. Release candidates 0.3.0-rc.1 (whose release job failed before publication; its tag is retained) and 0.3.0-rc.2 preceded this release.
 - Add agent-led hypothesis verification through `tracecheck_verify` and the `verify` CLI, including anchored evidence, counterevidence, and bounded follow-up.
 - Replace the default fixed import-index cutoff with repository-wide discovery, configurable resource budgets, and a safely revalidated metadata/edge cache.
 - Review all supported, safely readable changed files in bounded evidence packets; remove the global forty-candidate cutoff.

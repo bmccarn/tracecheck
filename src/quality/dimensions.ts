@@ -107,4 +107,3 @@ export const dimensions: readonly Dimension[] = definitions.map(([key, label, cr
   key, label, criterion, importance, conditional: ['performance', 'scalability', 'compatibility', 'observability'].includes(key),
   concerns: Object.fromEntries(concerns.map(([id, description, action]) => [id, { description, action }])),
 }));
-export const dimensionKeys = dimensions.map(dimension => dimension.key);

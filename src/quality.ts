@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { hash, type Question, type TypedEvaluator, type TypedResponse } from './domain.js';
+import { hash, type Question, type Evaluator, type Response } from './domain.js';
 import { dimensions } from './quality/dimensions.js';
 import { markdownText } from './terminal.js';
 import { QUALITY_GATES } from './policy.js';
@@ -81,7 +81,7 @@ export function qualityQuestions(): Record<string, Question> {
   return questions;
 }
 
-export async function assess(raw: QualityInput, evaluator: TypedEvaluator, signal?: AbortSignal): Promise<QualityEvaluation> {
+export async function assess(raw: QualityInput, evaluator: Evaluator, signal?: AbortSignal): Promise<QualityEvaluation> {
   const started = Date.now();
   const input = qualityInputSchema.parse(raw);
   const { previousEvaluation, scope: requestedScope, ...state } = input;
@@ -94,7 +94,7 @@ export async function assess(raw: QualityInput, evaluator: TypedEvaluator, signa
   return result;
 }
 
-export function transformQuality(response: TypedResponse, scope: string, snapshot: string, previous?: PreviousEvaluation): QualityEvaluation {
+export function transformQuality(response: Response, scope: string, snapshot: string, previous?: PreviousEvaluation): QualityEvaluation {
   const metrics: QualityEvaluation['metrics'] = {};
   for (const dimension of dimensions) {
     const relevance = response.answers[`quality_${dimension.key}_relevance`];

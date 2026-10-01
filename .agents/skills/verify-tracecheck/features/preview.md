@@ -2,31 +2,15 @@
 
 Preview collects the working-tree change against a base commit without contacting any provider. It reports the snapshot token, change packets, the sources collected for each (changed files with their baselines, dependencies, callers, and tests), syntax-selected source-check candidates, and coverage gaps.
 
-## Sub-features
-
-- `preview-packets` groups every supported changed file into packets and prints a snapshot.
-- `preview-sources` collects changed files with baselines plus related dependencies, callers, and tests. When a packet's file budget cannot hold every related file, it takes first the tests and callers that mention a name the change touches (the function or binding that encloses or declares a changed line, before or after the change) and the dependencies that declare a name the changed lines use; the rest follow. Within each group, changed files and roles take turns in path order.
-- `preview-candidates` selects division (`/`, `%`, `/=`, `%=`), catch-handler, and `JSON.parse` candidates in changed JS/TS functions, or in the changed top-level statement for module-level code. It skips non-zero literal divisors, catch handlers with a top-level `throw`, and `JSON.parse` inside the protected block of a `try` with a handler.
-- `preview-gaps` reports omitted files, parse failures (by file and parser error code), budget limits, and TypeScript configuration that could not be used for path aliases. Every file omitted for a potential credential is named by path, and the value never appears in the output. A changed file whose base version holds a potential credential keeps its screened current text, loses its baseline, and is named in a limitation. Caveats that are not gaps, such as heuristic discovery and the count of excluded untracked files, are `notes` (human output: `Note: ...`) and are not part of the snapshot.
-- `preview-options` applies `--base`, `--include-untracked`, and the collection limits, over defaults from `.tracecheck.json` (see [project configuration](./project-configuration.md)).
-- `preview-base` compares the working tree with the merge base of `--base` (or MCP `base`) and HEAD, so a base branch that has moved on contributes none of its newer commits. JSON and MCP output carry `baseRef` (the requested ref) and `base` (the compared commit); human output prints `Base: <12-character commit> (from <ref>)`; a moved-on base adds a note naming the merge base. An unknown ref, a clone too shallow for the merge base, unrelated histories, a branch with no commits, and a path outside any Git working tree exit `2` with an error that names the problem and never shows a Git command line.
-- `preview-estimate` reports `estimate.requests` and `estimate.inputBytes` (JSON and MCP) and a `Review estimate: N provider request(s) ...` line (human), counted by the same planner review uses, so a completed review's `usage.requests` equals `estimate.requests`. The human line says when the review would exceed `--max-requests`.
-- `preview-mcp` returns the same scope from `tracecheck_preview` and registers the snapshot for review.
-
-## How to get to it (user POV)
-
-- Run `tracecheck preview --repo PATH [--base REF] [--include-untracked] [--json]`.
-- Call the MCP tool `tracecheck_preview` with optional `repo`, `base`, `includeUntracked`, `task`, `repositoryContext`, and `collection`.
-
-## Driving it with capture.sh and mcp-call.mjs
+## Driving it
 
 Preconditions:
 
-- Baseline preconditions from the index hold. No provider key is needed.
+- The skill's launch steps are done. No provider key is needed.
 - A fixture exists: `node $S/fixture-repo.mjs division > "$RUN/fixture.json"` and `ROOT=$(jq -r .root "$RUN/fixture.json")`.
 
-- **Human output.** Run `$S/capture.sh "$RUN" preview -- node dist/plugin.mjs preview --repo "$ROOT"`. Exit `0`; stdout starts with `Tracecheck preview (local only)` and lists `changed: src/stats.ts`.
-- **Structured output.** Run `$S/capture.sh "$RUN" preview-json -- node dist/plugin.mjs preview --repo "$ROOT" --json`. Then `jq '{snapshot, packets: [.packets[] | .changedPaths], sources: [.sources[] | {path, role, hasBaseline: (.before != null)}], candidates: [.candidates[] | {check, path, symbol}], limitations}' "$RUN/preview-json.stdout"`. Expect `src/stats.ts` as `changed` with a baseline, `src/report.ts` as `caller`, `test/stats.test.ts` as `test`, and one `zero-divisor` candidate in `mean`.
+- **Human output.** Run `node dist/plugin.mjs preview --repo "$ROOT" > "$RUN/preview.stdout" 2> "$RUN/preview.stderr"; echo $?`. Exit `0`; stdout starts with `Tracecheck preview (local only)` and lists `changed: src/stats.ts`.
+- **Structured output.** Run `node dist/plugin.mjs preview --repo "$ROOT" --json > "$RUN/preview-json.stdout" 2> "$RUN/preview-json.stderr"; echo $?`. Then `jq '{snapshot, packets: [.packets[] | .changedPaths], sources: [.sources[] | {path, role, hasBaseline: (.before != null)}], candidates: [.candidates[] | {check, path, symbol}], limitations}' "$RUN/preview-json.stdout"`. Expect `src/stats.ts` as `changed` with a baseline, `src/report.ts` as `caller`, `test/stats.test.ts` as `test`, and one `zero-divisor` candidate in `mean`.
 - **Moved-on base.** Use the `moved-on-base` fixture and `preview --base main --json`. Expect only `src/stats.ts` changed, `baseRef: "main"`, `base` equal to `git -C "$ROOT" merge-base main feature`, and the note `main has commits that HEAD does not; the review compares against their merge base ...`. `src/audit.ts` appears nowhere, and `src/report.ts` is only a `caller`. The MCP preview with `{"base":"main"}` returns the same `base`, `baseRef`, and snapshot. Before the fix, the same preview listed `src/report.ts` as changed and `src/audit.ts` as `Deleted or unreadable file omitted`.
 - **Base errors.** In the `moved-on-base` fixture, `preview --base no-such-branch` exits `2` with `Base no-such-branch was not found in this repository. Check the name, or fetch it first with git fetch ...`. `git clone --depth 1 --branch feature "file://$ROOT" "$SHALLOW"` then `preview --repo "$SHALLOW" --base origin/main` exits `2` naming `git fetch origin main` and `fetch-depth: 0`; with `--no-single-branch` added to the clone, the same preview says `this is a shallow clone, and its history stops before that commit`. A fresh `git init` repository exits `2` with `The current branch has no commits yet`, and a directory outside Git exits `2` with `Cannot open ... as a Git working tree: not a git repository`. No stderr contains `Command failed` or `rev-parse`.
 - **No change.** Use the `clean` fixture. Preview exits `0` and reports no packets, no sources, no candidates, and the note `No changes against HEAD; nothing to review.`, so a review makes no provider request.

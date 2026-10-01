@@ -13,7 +13,7 @@ import { ASSESS_TIMEOUT_MS, assess, previousEvaluationSchema, qualityInputSchema
 import { compare } from './history.js';
 import { reportSchema } from './schema.js';
 import { toSarif } from './sarif.js';
-import { collectionOptionsSchema, DEFAULT_MAX_REQUESTS, reviewTimeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
+import { collectionOptionsSchema, DEFAULT_MAX_REQUESTS, timeoutSchema, VERIFY_TIMEOUT_MS, type CollectionOptions } from './collection-options.js';
 import { CONFIG_FILE, resolveSettings } from './project-config.js';
 import { ReviewProgress } from './progress.js';
 import { terminalLines, terminalText } from './terminal.js';
@@ -48,12 +48,12 @@ function positiveSafeInteger(value: string | undefined, flag: string): number | 
   if (value === undefined) return undefined;
   if (!/^[1-9]\d*$/.test(value)) throw new Error(`${flag} must be a positive safe integer.`);
   const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) throw new Error(`${flag} must be a positive safe integer.`);
+  if (!Number.isSafeInteger(parsed)) throw new Error(`${flag} must be a positive safe integer.`);
   return parsed;
 }
 /** A millisecond flag; errors name the flag and its limit. */
 function timeoutFlag(value: string | undefined, flag: string): number | undefined {
-  return validate(reviewTimeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
+  return validate(timeoutSchema.optional(), positiveSafeInteger(value, flag), `${flag} is out of range`);
 }
 function collectionOptions(values: {
   'index-max-files'?: string;

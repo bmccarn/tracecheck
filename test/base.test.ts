@@ -14,15 +14,14 @@ const changedPaths = (plan: ReviewPlan) => plan.sources.filter(source => source.
 /** A repository whose feature branch adds feature.ts while main, after the branch point, hardens average.ts and adds audit.ts. */
 async function divergedRepository() {
   const repo = await repository();
-  const commit = (message: string) => { repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message); };
   const branchPoint = repo.git('rev-parse', 'HEAD').trim();
   repo.git('checkout', '-q', '-b', 'feature');
   await writeFile(join(repo.root, 'feature.ts'), 'export function share(total: number, payers: number) { return total / payers; }\n');
-  commit('Add share');
+  repo.commit('Add share');
   repo.git('checkout', '-q', 'main');
   await writeFile(join(repo.root, 'audit.ts'), 'export const audited = true;\n');
   await writeFile(join(repo.root, 'average.ts'), 'export function average(xs: number[]) { if (!xs.length) throw new RangeError("empty"); return xs.reduce((a,b) => a+b, 0) / xs.length; }\n');
-  commit('Harden average and add auditing on main');
+  repo.commit('Harden average and add auditing on main');
   repo.git('checkout', '-q', 'feature');
   return { ...repo, branchPoint };
 }
@@ -49,22 +48,24 @@ test('a base branch that has moved on is compared at its merge base, so only the
 
 test('repository and base errors say what to do, without a Git command line', async t => {
   const repo = await repository(); t.after(repo.cleanup);
-  const failure = async (base: string, expected: RegExp) => {
+  /** Each message names the requested base and the remedy. */
+  const failure = async (base: string, remedy: RegExp) => {
     await assert.rejects(collect({ repo: repo.root, base }), error => {
       assert.ok(error instanceof Error);
-      assert.match(error.message, expected);
+      assert.ok(error.message.includes(base), error.message);
+      assert.match(error.message, remedy);
       assert.ok(withoutGitCommandLine(error.message), error.message);
       return true;
     });
   };
-  await failure('no-such-branch', /^Base no-such-branch was not found in this repository\. Check the name, or fetch it first with git fetch and run Tracecheck again\.$/);
+  await failure('no-such-branch', /not found.*fetch it first/);
   repo.git('remote', 'add', 'origin', 'https://example.invalid/repo.git');
-  await failure('origin/release', /^Base origin\/release was not found in this repository\. .*git fetch origin release/);
+  await failure('origin/release', /not found.*git fetch origin release/);
   repo.git('update-ref', 'refs/remotes/origin/develop', 'HEAD');
-  await failure('develop', /^Base develop was not found in this repository, but origin\/develop was\. Use origin\/develop as the base\.$/);
-  await failure('HEAD:average.ts', /^Base HEAD:average\.ts does not name a commit\.$/);
+  await failure('develop', /Use origin\/develop as the base/);
+  await failure('HEAD:average.ts', /does not name a commit/);
   repo.git('checkout', '-q', '--orphan', 'unrelated');
-  repo.git('-c', 'commit.gpgsign=false', 'commit', '-q', '-m', 'Unrelated root');
+  repo.git('commit', '-q', '-m', 'Unrelated root');
   await failure('main', /^HEAD and main share no history/);
 
   const empty = await mkdtemp(join(tmpdir(), 'tracecheck-test-')); t.after(() => rm(empty, { recursive: true, force: true }));

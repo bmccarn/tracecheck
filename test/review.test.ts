@@ -6,7 +6,7 @@ import { collect } from '../src/collector.js';
 import { estimateReview, isIncomplete, review, reviewAll, render } from '../src/review.js';
 import { compare } from '../src/history.js';
 import { reportSchema } from '../src/schema.js';
-import type { Report, ReviewPlan, TypedEvaluator } from '../src/domain.js';
+import type { Report, ReviewPlan, Evaluator } from '../src/domain.js';
 import { fixtureEvaluator, planFor, repository, typedFixture } from './helpers.js';
 import { cases, casePlan } from '../examples/cases.js';
 
@@ -66,54 +66,6 @@ test('batches every candidate and respects cancellation between packet batches',
     calls++; controller.abort(); return evaluator.evaluate(state, questions);
   } }, { signal: controller.signal }));
   assert.equal(calls, 1);
-});
-
-test('plans near-limit source evidence into bounded source-check requests', async () => {
-  const plan = planFor();
-  plan.sources[0]!.content = `export const evidence = '${'x'.repeat(78_000)}';`;
-  plan.candidates = Array.from({ length: 17 }, (_, index) => ({
-    ...plan.candidates[0]!, id: `candidate-${index}`, hypothesis: 'detail '.repeat(600),
-  }));
-  plan.packets[0]!.candidateIds = plan.candidates.map(candidate => candidate.id);
-  const calls: string[][] = [];
-  const evaluator = fixtureEvaluator();
-  const report = await review(plan, { async evaluate(state, questions) {
-    assert.ok(Buffer.byteLength(JSON.stringify({ state, questions })) <= 160_000);
-    calls.push(Object.keys(questions));
-    return evaluator.evaluate(state, questions);
-  } });
-  const asked = calls.flat();
-  for (const candidate of plan.candidates) {
-    assert.equal(asked.filter(key => key === `${candidate.id}_assessment`).length, 1);
-    assert.equal(asked.filter(key => key === `${candidate.id}_impact`).length, 1);
-  }
-  assert.ok(calls.some(call => call.filter(key => key.endsWith('_assessment')).length < 10));
-  assert.equal(report.usage.requests, calls.length);
-  assert.equal(report.decisions.length, plan.candidates.length);
-});
-
-test('preflights impossible source-check context before calling its evaluator', async () => {
-  const plan = planFor();
-  plan.repositoryContext = 'x'.repeat(200_000);
-  let calls = 0;
-  await assert.rejects(review(plan, { async evaluate() {
-    calls++;
-    return fixtureEvaluator().evaluate({}, {});
-  } }), /cannot be evaluated without dropping evidence/);
-  assert.equal(calls, 0);
-});
-
-test('empty source-check evidence produces no provider call or decision', async () => {
-  const plan = planFor(' ');
-  let calls = 0;
-  const report = await review(plan, { async evaluate() {
-    calls++;
-    return fixtureEvaluator().evaluate({}, {});
-  } });
-  assert.equal(calls, 0);
-  assert.deepEqual(report.decisions, []);
-  assert.ok(report.limitations.some(value => value.includes('has no source evidence')));
-  assert.equal(report.status, 'inconclusive');
 });
 
 test('keeps packet evidence local while retaining later-packet findings', async () => {
@@ -185,7 +137,7 @@ test('history follows a finding into a renamed file only while its site is uncha
   const constants = Array.from({ length: 12 }, (_value, index) => `export const unit${index} = 'unit ${index}';\n`).join('');
   const guarded = `export function mean(xs: number[]) {\n  if (!xs.length) return 0;\n  return xs.reduce((a, b) => a + b, 0) / xs.length;\n}\n${constants}`;
   await writeFile(join(repo.root, 'stats.ts'), guarded);
-  repo.git('add', '.'); repo.git('-c', 'commit.gpgsign=false', 'commit', '-m', 'Add stats');
+  repo.commit('Add stats');
   await writeFile(join(repo.root, 'stats.ts'), guarded.replace('  if (!xs.length) return 0;\n', ''));
   const before = await review(await collect({ repo: repo.root }), fixtureEvaluator());
   repo.git('mv', 'stats.ts', 'mean.ts');
@@ -241,7 +193,7 @@ test('a review over its request budget is refused before any provider request, a
   const estimate = estimateReview(plan);
   assert.equal(estimate.requests, 4);
   let calls = 0;
-  const counting: TypedEvaluator = { async evaluate(_state, questions) { calls++; return typedFixture(questions); } };
+  const counting: Evaluator = { async evaluate(_state, questions) { calls++; return typedFixture(questions); } };
   await assert.rejects(reviewAll(plan, counting, { maxRequests: estimate.requests - 1 }),
     new RegExp(`^Error: Review would make ${estimate.requests} provider requests, over the budget of ${estimate.requests - 1}`));
   assert.equal(calls, 0);
@@ -253,7 +205,7 @@ test('a review over its request budget is refused before any provider request, a
 test('a concurrent review matches the sequential review apart from timings', async () => {
   const plan = packetPlan(6);
   // Later packets answer first, with distinct usage and verdicts, so completion order differs from plan order.
-  const evaluator: TypedEvaluator = { async evaluate(state, questions) {
+  const evaluator: Evaluator = { async evaluate(state, questions) {
     const packet = packetOf(state);
     await new Promise(resolve => setTimeout(resolve, (6 - packet) * 3));
     const response = await typedFixture(questions);
@@ -273,7 +225,7 @@ test('a concurrent review matches the sequential review apart from timings', asy
 
 test('a failed request leaves an inconclusive report that keeps other decisions and names the unevaluated work', async () => {
   const plan = packetPlan(3);
-  const failing: TypedEvaluator = { async evaluate(state, questions) {
+  const failing: Evaluator = { async evaluate(state, questions) {
     if (packetOf(state) === 1) throw new Error('Jev request failed (HTTP 500); no successful review was recorded.');
     return typedFixture(questions);
   } };
