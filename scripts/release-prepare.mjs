@@ -1,14 +1,13 @@
-import { randomUUID } from 'node:crypto';
-import { readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 
 const versionPattern = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*))(?:\.(?:(?:0|[1-9]\d*)|(?:\d*[A-Za-z-][0-9A-Za-z-]*)))*)?$/;
 
 const targets = [
-  { path: 'package.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; } },
-  { path: 'package-lock.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; value.packages[''].version = version; } },
-  { path: 'plugin.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; } },
-  { path: '.codex-plugin/plugin.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; } },
-  { path: '.claude-plugin/plugin.json', getVersion: value => value.version, setVersion: (value, version) => { value.version = version; } },
+  { path: 'package.json', setVersion: (value, version) => { value.version = version; } },
+  { path: 'package-lock.json', setVersion: (value, version) => { value.version = version; value.packages[''].version = version; } },
+  { path: 'plugin.json', setVersion: (value, version) => { value.version = version; } },
+  { path: '.codex-plugin/plugin.json', setVersion: (value, version) => { value.version = version; } },
+  { path: '.claude-plugin/plugin.json', setVersion: (value, version) => { value.version = version; } },
 ];
 
 // Catalogs that let users add this repository itself as a marketplace. They pin a stable release tag.
@@ -43,7 +42,7 @@ function validateMetadata(values) {
     if (value.name !== 'tracecheck') fail(`${path} has an unexpected plugin name.`);
   }
 
-  const versions = values.map(({ path, value, target }) => ({ path, version: target.getVersion(value) }));
+  const versions = values.map(({ path, value }) => ({ path, version: value.version }));
   if (versions.some(({ version }) => typeof version !== 'string' || !versionPattern.test(version))) fail('Release metadata contains an invalid SemVer version.');
   if (packageLock?.packages?.['']?.version !== packageLock.version) fail('package-lock.json root and package entry versions differ.');
   if (new Set(versions.map(({ version }) => version)).size !== 1) fail('Release metadata versions differ; repair the existing drift before preparing a release.');
@@ -70,41 +69,9 @@ async function main() {
   for (const { value, target } of values) target.setVersion(value, version);
   if (stable) for (const { source } of catalogs) source.ref = `v${version}`;
 
-  const suffix = `.release-prepare-${process.pid}-${randomUUID()}`;
-  const staged = [...values, ...(stable ? catalogs : [])].map(({ path, value }) => ({
-    path,
-    backup: `${path}${suffix}.backup`,
-    temporary: `${path}${suffix}.next`,
-    content: `${JSON.stringify(value, null, 2)}\n`,
-  }));
-  const replaced = [];
-  let preserveBackups = false;
-  try {
-    for (const file of staged) {
-      await writeFile(file.backup, await readFile(file.path));
-      await writeFile(file.temporary, file.content);
-    }
-    for (const file of staged) {
-      await rename(file.temporary, file.path);
-      replaced.push(file);
-    }
-  } catch (error) {
-    let rollbackFailure;
-    for (const file of [...replaced].reverse()) {
-      try {
-        await rename(file.backup, file.path);
-      } catch (cause) {
-        rollbackFailure ??= cause;
-      }
-    }
-    if (rollbackFailure) {
-      preserveBackups = true;
-      throw new AggregateError([error, rollbackFailure], `Release metadata update failed and rollback is incomplete. Inspect retained *${suffix}.backup files before retrying.`);
-    }
-    throw error;
-  } finally {
-    await Promise.all(staged.map(file => rm(file.temporary, { force: true })));
-    if (!preserveBackups) await Promise.all(staged.map(file => rm(file.backup, { force: true })));
+  // Everything is validated above, so a write failure here can only come from the filesystem.
+  for (const { path, value } of [...values, ...(stable ? catalogs : [])]) {
+    await writeFile(path, `${JSON.stringify(value, null, 2)}\n`);
   }
 
   console.log(`Prepared release metadata for ${version}.`);

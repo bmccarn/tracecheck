@@ -70,11 +70,11 @@ jobs:
           if [[ "$RELEASE_CHANNEL" == "latest" ]]; then
             [[ "$MARKETPLACE_REPOSITORY" == "bmccarn/tracecheck-plugins" ]] || { echo 'MARKETPLACE_REPOSITORY must name the generated marketplace repository.' >&2; exit 1; }
             [[ -n "$MARKETPLACE_DEPLOY_KEY" ]] || { echo 'MARKETPLACE_DEPLOY_KEY is required for stable releases.' >&2; exit 1; }
+            # The publish step reuses this key and host list; the runner deletes RUNNER_TEMP when the job ends.
             umask 077
-            key="$RUNNER_TEMP/marketplace-preflight-key"
+            key="$RUNNER_TEMP/marketplace-deploy-key"
             known_hosts="$RUNNER_TEMP/marketplace-known-hosts"
             printf '%s\n' "$MARKETPLACE_DEPLOY_KEY" > "$key"
-            trap 'rm -f "$key" "$known_hosts"' EXIT
             gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
             [[ -s "$known_hosts" ]] || { echo 'GitHub did not provide SSH host keys.' >&2; exit 1; }
             GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes" git ls-remote "git@github.com:${MARKETPLACE_REPOSITORY}.git" HEAD >/dev/null
@@ -98,36 +98,27 @@ jobs:
           archive="$(node --input-type=module -e "import manifest from './release/release-manifest.json' with { type: 'json' }; if (manifest.version !== process.env.RELEASE_VERSION || !/^[A-Za-z0-9][A-Za-z0-9._-]*\\.tgz$/.test(manifest.npmArchive)) process.exit(1); process.stdout.write(manifest.npmArchive);")"
           npm publish "./release/$archive" --ignore-scripts --provenance --tag "$RELEASE_CHANNEL"
 
-      - name: Create GitHub prerelease
-        if: steps.release.outputs.channel == 'next'
-        env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes --prerelease
-
       - name: Create GitHub release
-        if: steps.release.outputs.channel == 'latest'
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_CHANNEL: ${{ steps.release.outputs.channel }}
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$RELEASE_TAG" release/*.tgz --generate-notes
+        run: |
+          set -euo pipefail
+          prerelease=()
+          [[ "$RELEASE_CHANNEL" == "next" ]] && prerelease=(--prerelease)
+          gh release create "$RELEASE_TAG" release/*.tgz --generate-notes "${prerelease[@]}"
 
       - name: Publish stable marketplace payload
         if: steps.release.outputs.channel == 'latest'
         env:
           MARKETPLACE_REPOSITORY: ${{ vars.MARKETPLACE_REPOSITORY }}
-          MARKETPLACE_DEPLOY_KEY: ${{ secrets.MARKETPLACE_DEPLOY_KEY }}
           RELEASE_VERSION: ${{ steps.release.outputs.version }}
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          umask 077
           key="$RUNNER_TEMP/marketplace-deploy-key"
           known_hosts="$RUNNER_TEMP/marketplace-known-hosts"
-          printf '%s\n' "$MARKETPLACE_DEPLOY_KEY" > "$key"
           trap 'rm -f "$key" "$known_hosts"' EXIT
-          gh api meta --jq '.ssh_keys[] | "github.com " + .' > "$known_hosts"
-          [[ -s "$known_hosts" ]] || { echo 'GitHub did not provide SSH host keys.' >&2; exit 1; }
           export GIT_SSH_COMMAND="ssh -i $key -o IdentitiesOnly=yes -o UserKnownHostsFile=$known_hosts -o StrictHostKeyChecking=yes"
 
           marketplace="$RUNNER_TEMP/marketplace"
